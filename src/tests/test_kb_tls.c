@@ -1,0 +1,129 @@
+/* test_kb_tls.c — loopback mutual-TLS handshake over a socketpair, using certs
+ * issued by the internal CA (kb_pki). Proves: a CA-issued client + server cert
+ * complete a mutual handshake, the server extracts the client's scope from its
+ * cert CN, and a peer holding a FOREIGN-CA cert is rejected on both sides. */
+#include "kb_pki.h"
+#include "kb_tls.h"
+
+#include <openssl/ssl.h>
+
+#include <assert.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+typedef struct
+{
+   SSL_CTX *ctx;
+   int fd;
+   int ok;
+   char peer_cn[128];
+} srv_arg_t;
+
+static void *server_thread(void *a)
+{
+   srv_arg_t *s = (srv_arg_t *)a;
+   SSL *ssl = SSL_new(s->ctx);
+   SSL_set_fd(ssl, s->fd);
+   if (SSL_accept(ssl) == 1)
+   {
+      s->ok = 1;
+      kb_tls_peer_cn(ssl, s->peer_cn, sizeof(s->peer_cn));
+   }
+   SSL_shutdown(ssl);
+   SSL_free(ssl);
+   return NULL;
+}
+
+/* Run a full handshake; returns 1 if BOTH sides succeeded, copying the client's
+ * CN (as seen by the server) into peer_cn_out. */
+static int handshake(SSL_CTX *server_ctx, SSL_CTX *client_ctx, char *peer_cn_out, size_t cap)
+{
+   int sv[2];
+   assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+   srv_arg_t sa;
+   memset(&sa, 0, sizeof(sa));
+   sa.ctx = server_ctx;
+   sa.fd = sv[0];
+   pthread_t th;
+   assert(pthread_create(&th, NULL, server_thread, &sa) == 0);
+
+   SSL *c = SSL_new(client_ctx);
+   SSL_set_fd(c, sv[1]);
+   int client_ok = (SSL_connect(c) == 1);
+   SSL_shutdown(c);
+   SSL_free(c);
+   pthread_join(th, NULL);
+   close(sv[0]);
+   close(sv[1]);
+
+   if (peer_cn_out && cap)
+      snprintf(peer_cn_out, cap, "%s", sa.peer_cn);
+   return client_ok && sa.ok;
+}
+
+int main(void)
+{
+   printf("kb_tls:\n");
+
+   /* Our CA, a server cert, and a client cert scoped "project:alpha". */
+   kb_pki_ca_t ca;
+   assert(kb_pki_ca_generate(&ca) == 0);
+   char scert[KB_PKI_CERT_PEM_MAX], skey[KB_PKI_KEY_PEM_MAX];
+   assert(kb_pki_issue_server_cert(&ca, "kb.local", 3600, scert, sizeof(scert), skey,
+                                   sizeof(skey)) == 0);
+   char ccert[KB_PKI_CERT_PEM_MAX], ckey[KB_PKI_KEY_PEM_MAX];
+   assert(kb_pki_issue_client_cert(&ca, "project:alpha", 3600, ccert, sizeof(ccert), ckey,
+                                   sizeof(ckey)) == 0);
+
+   SSL_CTX *server_ctx = kb_tls_server_ctx(ca.cert_pem, scert, skey);
+   SSL_CTX *client_ctx = kb_tls_client_ctx(ca.cert_pem, ccert, ckey);
+   assert(server_ctx && client_ctx);
+
+   /* 1. Mutual handshake succeeds; the server reads the client's scope. */
+   char cn[128] = "";
+   assert(handshake(server_ctx, client_ctx, cn, sizeof(cn)) == 1);
+   assert(strcmp(cn, "project:alpha") == 0);
+   printf("  mutual_auth: ok\n");
+
+   /* 2. A client whose cert is from a FOREIGN CA is rejected by the server. */
+   {
+      kb_pki_ca_t other;
+      assert(kb_pki_ca_generate(&other) == 0);
+      char ocert[KB_PKI_CERT_PEM_MAX], okey[KB_PKI_KEY_PEM_MAX];
+      assert(kb_pki_issue_client_cert(&other, "project:evil", 3600, ocert, sizeof(ocert), okey,
+                                      sizeof(okey)) == 0);
+      SSL_CTX *evil_client = kb_tls_client_ctx(other.cert_pem, ocert, okey);
+      assert(evil_client);
+      assert(handshake(server_ctx, evil_client, NULL, 0) == 0); /* server rejects */
+      SSL_CTX_free(evil_client);
+      printf("  untrusted_client_rejected: ok\n");
+   }
+
+   /* 3. A client that trusts a DIFFERENT CA rejects our server. */
+   {
+      kb_pki_ca_t other;
+      assert(kb_pki_ca_generate(&other) == 0);
+      char ocert[KB_PKI_CERT_PEM_MAX], okey[KB_PKI_KEY_PEM_MAX];
+      assert(kb_pki_issue_client_cert(&other, "c", 3600, ocert, sizeof(ocert), okey,
+                                      sizeof(okey)) == 0);
+      /* client presents a valid (other-CA) cert but trusts only `other` as the
+       * server anchor, so it rejects our `ca`-signed server cert. */
+      SSL_CTX *wrong_anchor = kb_tls_client_ctx(other.cert_pem, ocert, okey);
+      assert(wrong_anchor);
+      assert(handshake(server_ctx, wrong_anchor, NULL, 0) == 0); /* client rejects */
+      SSL_CTX_free(wrong_anchor);
+      printf("  wrong_server_anchor_rejected: ok\n");
+   }
+
+   /* context builders reject bad PEM. */
+   assert(kb_tls_server_ctx(ca.cert_pem, "garbage", skey) == NULL);
+   assert(kb_tls_client_ctx("garbage", ccert, ckey) == NULL);
+
+   SSL_CTX_free(server_ctx);
+   SSL_CTX_free(client_ctx);
+   printf("All kb_tls tests passed.\n");
+   return 0;
+}

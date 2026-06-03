@@ -1,0 +1,373 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, testing]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'aimee.workspace.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Runner diagnostics
+        run: |
+          echo "::group::Runner environment"
+          echo "ref: $GITHUB_REF  sha: $GITHUB_SHA  runner: $RUNNER_OS $RUNNER_ARCH"
+          uname -a
+          gcc --version 2>/dev/null || true
+          make --version 2>/dev/null | head -1 || true
+          df -h / | tail -1
+          echo "::endgroup::"
+      - name: Install clang-format
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q clang-format-19
+      - name: Check formatting
+        run: cd src && make lint
+      - name: Check 3db tier dependencies
+        run: ./scripts/check_tier_deps.sh
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Runner diagnostics
+        run: |
+          echo "::group::Runner environment"
+          echo "ref: $GITHUB_REF  sha: $GITHUB_SHA  runner: $RUNNER_OS $RUNNER_ARCH"
+          uname -a
+          gcc --version 2>/dev/null || true
+          make --version 2>/dev/null | head -1 || true
+          df -h / | tail -1
+          echo "::endgroup::"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc make \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev \
+            libpq-dev
+      - name: Build
+        run: cd src && make -j$(nproc) all server
+      - name: Skill lint
+        run: |
+          sock=/tmp/aimee-ci-skill-lint.sock
+          rm -f "$sock"
+          AIMEE_BUNDLED_SKILLS_DIR="$PWD/skills" ./aimee-server --socket="$sock" &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 50); do
+            [ -S "$sock" ] && break
+            sleep 0.1
+          done
+          AIMEE_SOCK="$sock" AIMEE_BUNDLED_SKILLS_DIR="$PWD/skills" ./aimee skill lint --all
+      - name: Smoke test
+        run: |
+          ./aimee version
+          ./aimee-server --version
+          ./aimee-kb --version
+          test -x ./aimee-webchat
+
+  build-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Runner diagnostics
+        run: |
+          echo "::group::Runner environment"
+          echo "ref: $GITHUB_REF  sha: $GITHUB_SHA  runner: $RUNNER_OS $RUNNER_ARCH"
+          uname -a
+          gcc --version 2>/dev/null || true
+          make --version 2>/dev/null | head -1 || true
+          df -h / | tail -1
+          echo "::endgroup::"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc make \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev \
+            libpq-dev
+      - name: Build integrity
+        run: cd src && make build-integrity
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    # Live Postgres sidecar so unit-test-aimee-db and unit-test-memory-postgres
+    # exercise the real libpq path (placeholder rewriter, FTS5→tsvector
+    # translation, ON CONFLICT targets, schema apply) instead of skipping
+    # when AIMEE_TEST_PG_URL is unset. pg_trgm is required by the
+    # memories_code_fts trigram index (see src/schema/postgres.sql).
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: aimee
+          POSTGRES_PASSWORD: aimee
+          POSTGRES_DB: aimee_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      AIMEE_TEST_PG_URL: postgres://aimee:aimee@localhost:5432/aimee_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Runner diagnostics
+        run: |
+          echo "::group::Runner environment"
+          echo "ref: $GITHUB_REF  sha: $GITHUB_SHA  runner: $RUNNER_OS $RUNNER_ARCH"
+          uname -a
+          gcc --version 2>/dev/null || true
+          make --version 2>/dev/null | head -1 || true
+          df -h / | tail -1
+          echo "::endgroup::"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc make \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev \
+            libpq-dev postgresql-client
+      - name: Wait for Postgres
+        run: |
+          until pg_isready -h localhost -p 5432 -U aimee; do sleep 1; done
+      - name: Unit tests
+        run: cd src && make -j$(nproc) unit-tests
+
+  init-migrate-service-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Runner diagnostics
+        run: |
+          echo "::group::Runner environment"
+          echo "ref: $GITHUB_REF  sha: $GITHUB_SHA  runner: $RUNNER_OS $RUNNER_ARCH"
+          uname -a
+          gcc --version 2>/dev/null || true
+          make --version 2>/dev/null | head -1 || true
+          df -h / | tail -1
+          echo "::endgroup::"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc make \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev \
+            libpq-dev
+      - name: Init/migrate service routing smoke test
+        run: cd src && make -j$(nproc) init-migrate-service-test
+
+  windows-cmake:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW-w64
+        run: choco install mingw
+
+      - name: Add MinGW to PATH
+        shell: powershell
+        run: echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Download SQLite amalgamation
+        shell: powershell
+        run: |
+          $url = "https://www.sqlite.org/2024/sqlite-amalgamation-3470200.zip"
+          Invoke-WebRequest -Uri $url -OutFile sqlite.zip
+          Expand-Archive sqlite.zip -DestinationPath sqlite-tmp
+          New-Item -ItemType Directory -Force -Path src\vendor\sqlite3
+          Copy-Item sqlite-tmp\sqlite-amalgamation-3470200\sqlite3.c src\vendor\sqlite3\
+          Copy-Item sqlite-tmp\sqlite-amalgamation-3470200\sqlite3.h src\vendor\sqlite3\
+
+      - name: Configure with CMake
+        run: cmake -B build -G "MinGW Makefiles" -DAIMEE_THIN_CLIENT=ON -DWITH_PAM=OFF -DWITH_LIBSECRET=OFF
+
+      # Windows ships only the thin client (aimee.exe). aimee-server, aimee-kb,
+      # aimee-gateway, and aimee-webchat are Linux/Docker components and are not
+      # built here, so the MinGW runner needs no libpq/zstd/OpenSSL.
+      - name: Build the thin client
+        run: cmake --build build --parallel 2 --target aimee
+
+      - name: Smoke test the client
+        shell: powershell
+        run: |
+          .\build\aimee.exe version
+          # The new remote transport must parse on Windows (Winsock path).
+          .\build\aimee.exe --server http://127.0.0.1:9 version
+
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MinGW-w64
+        run: choco install mingw
+      - name: Add MinGW to PATH
+        shell: powershell
+        run: echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Download SQLite amalgamation
+        shell: powershell
+        run: |
+          $url = "https://www.sqlite.org/2024/sqlite-amalgamation-3470200.zip"
+          Invoke-WebRequest -Uri $url -OutFile sqlite.zip
+          Expand-Archive sqlite.zip -DestinationPath sqlite-tmp
+          New-Item -ItemType Directory -Force -Path src\vendor\sqlite3
+          Copy-Item sqlite-tmp\sqlite-amalgamation-3470200\sqlite3.c src\vendor\sqlite3\
+          Copy-Item sqlite-tmp\sqlite-amalgamation-3470200\sqlite3.h src\vendor\sqlite3\
+      - name: Configure with CMake
+        run: cmake -B build -G "MinGW Makefiles" -DAIMEE_THIN_CLIENT=ON -DWITH_PAM=OFF -DWITH_LIBSECRET=OFF -DWITH_UI=OFF
+      # Windows ships only the thin client (aimee.exe); server/kb/gateway/webchat
+      # are Linux/Docker components and are not built here.
+      - name: Build the thin client
+        run: cmake --build build --parallel 2 --target aimee
+      - name: Smoke test the client
+        shell: powershell
+        run: |
+          .\build\aimee.exe version
+          # The new remote transport must parse on Windows (Winsock path).
+          .\build\aimee.exe --server http://127.0.0.1:9 version
+
+  macos-build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # SQLite3 is in the macOS SDK; OpenSSL (for the WITH_TLS https path) comes
+      # from Homebrew. Install both defensively so CMake's find_package succeeds.
+      - name: Install build deps
+        run: brew install sqlite3 openssl@3 || true
+      - name: Configure with CMake
+        run: cmake -B build -DAIMEE_THIN_CLIENT=ON -DWITH_PAM=OFF -DWITH_LIBSECRET=OFF -DWITH_UI=OFF -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+      # macOS ships only the thin client (aimee); server/kb/gateway/webchat are
+      # Linux/Docker components and are not built here.
+      - name: Build the thin client
+        run: cmake --build build --parallel 3 --target aimee
+      - name: Smoke test the client
+        run: |
+          ./build/aimee version
+          # --server must parse and select a remote TCP target on macOS.
+          ./build/aimee --server http://127.0.0.1:9 version
+
+  memory-retrieval-eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Runner diagnostics
+        run: |
+          echo "::group::Runner environment"
+          echo "ref: $GITHUB_REF  sha: $GITHUB_SHA  runner: $RUNNER_OS $RUNNER_ARCH"
+          uname -a
+          gcc --version 2>/dev/null || true
+          make --version 2>/dev/null | head -1 || true
+          df -h / | tail -1
+          echo "::endgroup::"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc make \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev \
+            libpq-dev
+      - name: Memory retrieval eval (corpus + regression check)
+        run: cd src && make -j$(nproc) memory-retrieval-eval-check
+
+  bench-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Runner diagnostics
+        run: |
+          echo "::group::Runner environment"
+          echo "ref: $GITHUB_REF  sha: $GITHUB_SHA  runner: $RUNNER_OS $RUNNER_ARCH"
+          uname -a
+          gcc --version 2>/dev/null || true
+          make --version 2>/dev/null | head -1 || true
+          df -h / | tail -1
+          echo "::endgroup::"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc make \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev \
+            libpq-dev
+      - name: Build PR benchmark binary
+        run: |
+          if cd src && make -j$(nproc) tests/bench-perf; then
+            cp tests/bench-perf /tmp/bench-pr
+          else
+            echo "::warning::PR benchmark binary failed to build; benchmarks are informational."
+            touch /tmp/bench-skip
+          fi
+      - name: Build testing baseline binary
+        run: |
+          if [ -f /tmp/bench-skip ]; then
+            echo "Skipping baseline benchmark build because PR benchmark did not build."
+            exit 0
+          fi
+          BASE_REF="${{ github.base_ref }}"
+          if [ -z "$BASE_REF" ]; then
+            BASE_REF="origin/testing"
+          else
+            BASE_REF="origin/$BASE_REF"
+          fi
+          git worktree add /tmp/bench-baseline-wt "$BASE_REF"
+          cd /tmp/bench-baseline-wt/src
+          if make -j$(nproc) tests/bench-perf; then
+            cp tests/bench-perf /tmp/bench-baseline
+            echo "binary" > /tmp/bench-baseline-mode
+          else
+            echo "::warning::Base benchmark binary failed to build; using committed benchmark baseline."
+            cp "$GITHUB_WORKSPACE/benchmarks/baseline.json" /tmp/baseline.json
+            echo "static" > /tmp/bench-baseline-mode
+          fi
+          git -C /home/runner/work/aimee/aimee worktree remove /tmp/bench-baseline-wt --force
+      - name: Run same-machine regression report
+        run: |
+          if [ -f /tmp/bench-skip ]; then
+            echo "Skipping benchmark report because PR benchmark did not build."
+            exit 0
+          fi
+          if [ "$(cat /tmp/bench-baseline-mode)" = "binary" ]; then
+            if /tmp/bench-baseline --save /tmp/baseline.json; then
+              echo "Baseline measured from base branch on same machine. Running PR check..."
+            else
+              echo "::warning::Base benchmark binary failed at runtime; using committed benchmark baseline."
+              cp benchmarks/baseline.json /tmp/baseline.json
+            fi
+          else
+            echo "Using committed benchmark baseline because the base branch benchmark does not build."
+          fi
+          /tmp/bench-pr --check /tmp/baseline.json || \
+            echo "::warning::Benchmark regression detected; benchmarks are informational and do not gate PRs."
+
+  # End-to-end deploy matrix: build the three images and prove every Docker
+  # topology (kb-only, server+kb split, server standalone, combined server+kb)
+  # boots and serves a usable /v1 surface. See
+  # docs/proposals/pending/aimee-e2e-deploy-matrix.md. GitHub's ubuntu runners
+  # ship Docker + compose, so no port offset is needed (8740/8741 are free).
+  e2e-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Runner diagnostics
+        run: |
+          docker version --format '{{.Server.Version}}'
+          docker compose version
+          df -h / | tail -1
+      - name: Run Docker deploy matrix (T1-T4)
+        run: scripts/e2e-matrix.sh --only T1,T2,T3,T4
+      - name: Stack logs on failure
+        if: failure()
+        run: |
+          for f in compose.yaml compose.server.yaml compose.server-standalone.yaml compose.combined.yaml; do
+            echo "::group::$f"; docker compose -f "$f" logs --tail=80 2>/dev/null || true; echo "::endgroup::"
+          done

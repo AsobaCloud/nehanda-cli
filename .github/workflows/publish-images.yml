@@ -1,0 +1,142 @@
+# Build the three aimee container images on GitHub runners and push them to
+# ghcr.io. Covers the full image set documented in
+# docs/proposals/pending/aimee-e2e-deploy-matrix.md:
+#
+#   aimee-server     (Dockerfile.server)      ghcr.io/<owner>/aimee-server
+#   aimee-kb         (Dockerfile)             ghcr.io/<owner>/aimee-kb
+#   aimee-server-kb  (Dockerfile.combined)    ghcr.io/<owner>/aimee-server-kb
+#
+# Multi-arch (linux/amd64 + linux/arm64) via the canonical build-by-digest then
+# merge-manifest pattern, on native runners (no QEMU emulation of the C build).
+name: Publish images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.server"
+      - "Dockerfile.combined"
+      - "deploy/container/**"
+      - "src/**"
+      - ".github/workflows/publish-images.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Build each image for each arch on a native runner; push by digest only.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - { name: aimee-server,    dockerfile: Dockerfile.server }
+          - { name: aimee-kb,        dockerfile: Dockerfile }
+          - { name: aimee-server-kb, dockerfile: Dockerfile.combined }
+        platform:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.platform.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ghcr image paths must be lowercase, but GitHub owners may be mixed-case
+      # (e.g. "JBailes"). Normalize once and reuse via env.OWNER.
+      - name: Normalize owner to lowercase
+        run: echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.image.dockerfile }}
+          platforms: linux/${{ matrix.platform.arch }}
+          provenance: false
+          outputs: type=image,name=ghcr.io/${{ env.OWNER }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.image.name }}-${{ matrix.platform.arch }}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.image.name }}-${{ matrix.platform.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  # Merge the per-arch digests of each image into one multi-arch manifest and
+  # tag it (sha, branch, semver, latest-on-default-branch).
+  merge:
+    needs: [build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [aimee-server, aimee-kb, aimee-server-kb]
+    steps:
+      - name: Normalize owner to lowercase
+        run: echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Download this image's digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-${{ matrix.image }}-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Image metadata (tags)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ env.OWNER }}/${{ matrix.image }}
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Create + push the multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          # Assemble the list of source digests for this image.
+          srcs=""
+          for f in *; do
+            srcs="$srcs ghcr.io/${OWNER}/${{ matrix.image }}@$(cat "$f")"
+          done
+          # Apply every tag the metadata action produced to the merged manifest.
+          tags=$(jq -r '.tags[] | "-t " + .' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools create $tags $srcs
+
+      - name: Inspect published manifest
+        run: docker buildx imagetools inspect ghcr.io/${OWNER}/${{ matrix.image }}:${{ steps.meta.outputs.version }}

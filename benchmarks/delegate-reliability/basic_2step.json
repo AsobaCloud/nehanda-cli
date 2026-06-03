@@ -1,0 +1,11 @@
+{
+  "name": "basic_2step",
+  "role": "execute",
+  "prompt": "Use tools to print exactly delegate-basic-ok, then respond with delegate-basic-ok.",
+  "success_check": {
+    "type": "contains",
+    "value": "delegate-basic-ok"
+  },
+  "max_turns": 4,
+  "max_latency_ms": 60000
+}

@@ -1,0 +1,55 @@
+[
+  {
+    "conversation": {
+      "session_1_date_time": "2026-01-01",
+      "session_1": [
+        {"dia_id": "d1", "speaker": "Alice", "text": "My favorite color is green."},
+        {"dia_id": "d2", "speaker": "Bob", "text": "We first met at the park."},
+        {"dia_id": "d3", "speaker": "Alice", "text": "I work as a marine biologist."}
+      ],
+      "session_2_date_time": "2026-02-10",
+      "session_2": [
+        {"dia_id": "d4", "speaker": "Bob", "text": "We took the train to Seattle for the conference."},
+        {"dia_id": "d5", "speaker": "Alice", "text": "The conference happened after our park meetup."},
+        {"dia_id": "d6", "speaker": "Bob", "text": "Your favorite color is definitely green, not blue."}
+      ]
+    },
+    "qa": [
+      {
+        "question_id": "locomo-1",
+        "question": "What is Alice's favorite color?",
+        "answer": "green",
+        "evidence": ["d1"],
+        "category": 1
+      },
+      {
+        "question_id": "locomo-2",
+        "question": "Where did Alice and Bob first meet, and what city did they later travel to for the conference?",
+        "answer": "They first met at the park and later traveled to Seattle.",
+        "evidence": ["d2", "d4"],
+        "category": 2
+      },
+      {
+        "question_id": "locomo-3",
+        "question": "Did the conference happen before or after Alice and Bob first met at the park?",
+        "answer": "after",
+        "evidence": ["d2", "d5"],
+        "category": 3
+      },
+      {
+        "question_id": "locomo-4",
+        "question": "What kind of work does Alice do?",
+        "answer": "marine biologist",
+        "evidence": ["d3"],
+        "category": 4
+      },
+      {
+        "question_id": "locomo-5",
+        "question": "Is it true that Alice's favorite color is blue?",
+        "answer": "no",
+        "evidence": ["d1", "d6"],
+        "category": 5
+      }
+    ]
+  }
+]

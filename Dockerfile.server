@@ -1,0 +1,90 @@
+# aimee-server: the agent/memory broker. Owns DB1 (user-scoped SQLite store) and
+# fronts the /v1 HTTP API; it reaches aimee-kb (DB2 + pgvector) over HTTP via
+# AIMEE_KB_API_URL. Without that URL the kb-backed (shared/vector) features are
+# simply unavailable, so this image also runs standalone (DB1-backed endpoints
+# only). The legacy unix-socket kb transport + autostart were retired (#2747).
+FROM debian:bookworm-slim AS build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        libpq-dev \
+        libsqlite3-dev \
+        libssl-dev \
+        libzstd-dev \
+        pkg-config \
+        python3 \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+RUN make -C src ../aimee-server
+
+FROM debian:bookworm-slim
+
+# Runtime shared libs the server links: libsqlite3 (DB1), libssl/libcrypto
+# (crypto), libzstd + zlib (compression). The server reaches Postgres-backed DB2
+# only through aimee-kb, so it does not link libpq itself. curl is for the
+# container HEALTHCHECK.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libsqlite3-0 \
+        libssl3 \
+        libzstd1 \
+        zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV AIMEE_HOME=/var/lib/aimee
+# Serve the /v1 HTTP API on 0.0.0.0 (the binary defaults to loopback) so the
+# published container port reaches it. The bearer token in the baked aimee.yaml
+# is still required on every request.
+ENV AIMEE_SERVER_HTTP_BIND=1
+# Standalone by default: no kb configured. Point AIMEE_KB_API_URL at a running
+# aimee-kb (e.g. http://aimee-kb:8741) to enable the shared/vector features.
+# Mirror tier (workspace-resource-plane §3): the per-workspace bare mirrors +
+# reconstructed worktrees live here instead of under AIMEE_HOME, so they sit on a
+# dedicated durable volume (declared below) and survive container recreation —
+# a detached server keeps its checkouts across restarts. These trees can be large
+# and have a different backup lifecycle than DB1, hence a separate mount.
+ENV AIMEE_WORKSPACES_DIR=/var/lib/aimee-workspaces
+
+RUN useradd --system --home-dir /var/lib/aimee --create-home --shell /usr/sbin/nologin aimee \
+    && mkdir -p /var/lib/aimee-workspaces \
+    && chown aimee:aimee /var/lib/aimee-workspaces
+# Durable mirror-tier state (AIMEE_WORKSPACES_DIR). Declaring it a VOLUME means an
+# anonymous volume persists the checkouts across `docker run` recreations even
+# when no named volume is mounted; operators can bind/name it for backups.
+VOLUME /var/lib/aimee-workspaces
+COPY --from=build /src/aimee-server /usr/local/bin/aimee-server
+
+# Baked default config: enables the inbound /v1 HTTP listener (port + bearer).
+COPY --chown=aimee:aimee deploy/container/aimee-server.yaml /var/lib/aimee/aimee.yaml
+
+USER aimee
+WORKDIR /var/lib/aimee
+EXPOSE 8740
+
+# NOTE: the server's worker threads need a 64 MB stack. A Dockerfile cannot set
+# a runtime ulimit, so callers MUST raise it (the 8 MB container default
+# overflows during startup and the process segfaults):
+#   docker run --ulimit stack=67108864 ...
+#   # or in compose:   ulimits: { stack: 67108864 }
+# This mirrors the systemd unit's LimitSTACK=67108864.
+
+# Health probe: every TCP /v1 request (including /v1/health) is authenticated,
+# so an unauthenticated probe gets 401 — which still proves the listener is up
+# and serving. Treat 200 (e.g. when the baked bearer happens to match) or 401 as
+# healthy; only a connection failure ("000") is unhealthy. This keeps the probe
+# correct even when a deployment overrides the baked bearer token (the previous
+# probe hardcoded "aimee-local-dev" and reported false-unhealthy for any custom
+# token, which the config explicitly tells operators to set).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -s -o /dev/null -w '%{http_code}' \
+        http://127.0.0.1:8740/v1/health | grep -qE '^(200|401)$'
+
+ENTRYPOINT ["aimee-server"]
+CMD ["--socket=/var/lib/aimee/aimee-server.sock"]

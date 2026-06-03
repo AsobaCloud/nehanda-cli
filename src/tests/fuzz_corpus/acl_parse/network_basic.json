@@ -1,0 +1,19 @@
+{
+  "network": {
+    "ssh": "user@gateway.local",
+    "hosts": [
+      {"name": "web1", "ip": "192.168.1.10", "user": "deploy", "port": 22, "desc": "web server"},
+      {"name": "db1", "ip": "10.0.0.5", "user": "root", "port": 5432}
+    ],
+    "networks": [
+      {"name": "office", "cidr": "192.168.1.0/24", "desc": "Office LAN"},
+      {"name": "vpn", "cidr": "10.0.0.0/8", "desc": "VPN range"}
+    ],
+    "tunnels": [
+      {"name": "db-tunnel", "relay_ssh": "jump@relay.example.com", "target_host": "10.0.0.5", "target_port": 5432}
+    ]
+  },
+  "agents": [
+    {"name": "claude", "endpoint": "https://api.anthropic.com/v1", "model": "claude-sonnet-4-20250514", "provider": "anthropic"}
+  ]
+}

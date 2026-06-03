@@ -1,0 +1,9 @@
+event: message
+data: first line
+data: second line
+id: 42
+retry: 1000
+
+event: done
+data: bye
+

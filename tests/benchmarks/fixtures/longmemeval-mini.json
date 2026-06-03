@@ -1,0 +1,32 @@
+[
+  {
+    "question_id": "long-1",
+    "question": "What color does the user prefer?",
+    "answer": "green",
+    "subset": "single-session-preference",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": ["2026-01-01"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I prefer green over blue."},
+        {"role": "assistant", "content": "I'll remember that."}
+      ]
+    ],
+    "answer_session_ids": ["s1"]
+  },
+  {
+    "question_id": "long-2",
+    "question": "When did the user say they prefer green?",
+    "answer": "2026-01-01",
+    "subset": "temporal-reasoning",
+    "haystack_session_ids": ["s1"],
+    "haystack_dates": ["2026-01-01"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I prefer green over blue."},
+        {"role": "assistant", "content": "I'll remember that."}
+      ]
+    ],
+    "answer_session_ids": ["s1"]
+  }
+]

@@ -1,0 +1,2 @@
+GPU telemetry collection reports fan speed, memory pressure, and kernel driver versions.
+

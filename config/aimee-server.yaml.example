@@ -1,0 +1,28 @@
+# aimee-server configuration example (aimee.yaml format).
+#
+# NOTE on format: the owning proposal sketches these examples in TOML for
+# illustration; the actual aimee config loader reads YAML/JSON (aimee.yaml).
+# These examples use the real, loadable schema.
+#
+# ── install-today (default) ──────────────────────────────────────────────
+# aimee-server talks to a LOCAL aimee-kb over the Unix socket. None of the keys
+# below are needed for the single-host default — the local socket is the
+# default transport.
+#
+# ── services-split / full-distributed ────────────────────────────────────
+# To reach a REMOTE aimee-kb, set kb_client_url to the remote kb's ORIGIN
+# (scheme://host:port) and kb_client_bearer_token to a token the remote kb
+# accepts. NOTE: do NOT append "/v1" — the kb_client appends the versioned
+# path (/v1/...) itself; including it yields /v1/v1/... (405). This is the
+# *only* change required to go remote — no code change (charter: aimee-server is
+# the sole kb client). At startup aimee-server exports these into
+# AIMEE_KB_API_URL / AIMEE_KB_API_BEARER_TOKEN, which the kb_client transport
+# honors (https:// → TLS); an explicit env var still overrides config.
+kb_client_url: "https://kb.homelab.internal:8443"
+kb_client_bearer_token: "scope:workspace:homelab:CHANGE_ME"
+
+# Optional: enable aimee-server's own loopback /v1 (OpenAI-compatible) API.
+# aimee:
+#   api:
+#     http_port: 8740
+#     bearer_token: "change-me"

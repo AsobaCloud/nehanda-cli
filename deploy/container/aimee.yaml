@@ -1,0 +1,23 @@
+# Default aimee-kb container configuration (baked into the image at
+# $AIMEE_HOME/.config/aimee/aimee.yaml).
+#
+# Endpoints are supplied by the environment (compose sets AIMEE_EMBEDDER_URL and
+# LLM_ENDPOINT); this file only selects which sidecar commands the kb invokes.
+#
+# Embedding works out of the box: the compose `embedder` service backs
+# embed-remote.py. The LLM-dependent passes (candidate synthesis, curator
+# extraction) are wired but left disabled until you point LLM_ENDPOINT at a
+# model and flip them on — they fail closed (ops marked failed) if no LLM is
+# reachable, so enabling them without an endpoint is harmless but pointless.
+
+# Real semantic embeddings via the persistent embedder service.
+embedding_command: "python3 /opt/aimee/scripts/embed-remote.py"
+
+learning:
+  synthesize:
+    enabled: false
+    command: "python3 /opt/aimee/scripts/learning-synthesize.py"
+
+kb:
+  curator:
+    extract_command: "python3 /opt/aimee/scripts/curator-extract.py"

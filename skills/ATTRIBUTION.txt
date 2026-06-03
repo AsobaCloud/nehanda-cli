@@ -1,0 +1,7 @@
+Bundled skill library attribution
+=================================
+
+The initial methodology skill set is inspired by the public ideas in
+obra/superpowers by Jesse Vincent, which is distributed under the MIT
+license. The bundled aimee skill text in this repository is original
+project-specific guidance written for aimee's skill engine and guardrails.

@@ -1,0 +1,26 @@
+{
+  "name": "example",
+  "version": "0.1.0",
+  "description": "Minimal bundled example plugin — registers one tool, one hook, and one slash command.",
+  "kind": "standalone",
+  "defaultEnabled": true,
+  "capabilities": ["tools", "hooks", "slash_commands"],
+  "tools": [
+    {
+      "name": "example-echo",
+      "description": "Echo the input back. Example plugin tool.",
+      "command": "echo",
+      "permission": "read"
+    }
+  ],
+  "hooks": {
+    "PostToolUse": ["echo 'example plugin: PostToolUse fired'"]
+  },
+  "slash_commands": [
+    {
+      "name": "example-info",
+      "description": "Print example plugin info.",
+      "command": "echo 'example plugin v0.1.0 — bundled example'"
+    }
+  ]
+}

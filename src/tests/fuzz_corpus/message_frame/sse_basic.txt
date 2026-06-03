@@ -1,0 +1,6 @@
+data: {"type":"content_block_delta","delta":{"text":"Hello"}}
+
+data: {"type":"content_block_stop"}
+
+data: [DONE]
+

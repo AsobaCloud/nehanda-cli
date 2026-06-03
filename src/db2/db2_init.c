@@ -1,0 +1,643 @@
+/* db2_init.c: DB2 tier lifecycle. Opens the Postgres connection,
+ * applies the DB2 schema, and holds the connection as module-private
+ * state.
+ *
+ * Thread-safety: a single process-global connection pointer is guarded
+ * by a mutex during init/shutdown. Callers outside src/db2/ never see
+ * the libpq handle; future DB2 subsystems fetch it through db2_conn().
+ */
+
+#include "db2.h"
+#include "db2_internal.h"
+
+#include "db_postgres.h"
+#include "db_schema.h"
+#include "entity_edges.h"
+#include "eval_support.h"
+
+#include <pthread.h>
+#ifdef AIMEE_DISABLE_DB2_SQLITE_SHIM
+typedef struct sqlite3 sqlite3;
+#else
+#include <sqlite3.h>
+#endif
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+
+#if !defined(AIMEE_DISABLE_DB2_SQLITE_SHIM) && (defined(__GNUC__) || defined(__clang__))
+#pragma weak sqlite3_close
+#pragma weak sqlite3_exec
+#pragma weak sqlite3_open
+#endif
+
+void db1_stmt_cache_clear_for_sqlite(sqlite3 *db) __attribute__((weak));
+
+static void db2_maybe_clear_sqlite_cache(sqlite3 *db)
+{
+   if (!db)
+      return;
+   if (db1_stmt_cache_clear_for_sqlite)
+      db1_stmt_cache_clear_for_sqlite(db);
+}
+
+static void *g_conn = NULL;
+static char g_pg_url[512] = "";
+static pthread_mutex_t g_init_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_key_t g_thread_conn_key;
+static pthread_once_t g_thread_conn_key_once = PTHREAD_ONCE_INIT;
+/* The thread that ran db2_init() owns g_conn and uses it directly; every other
+ * thread gets its own libpq connection via db2_conn() (see the comment there). */
+static pthread_t g_init_thread;
+static int g_init_thread_set = 0;
+
+/* Close a thread's per-thread libpq connection when the thread exits. Threads
+ * that call db2_thread_conn_close() explicitly NULL the slot first, so this
+ * only fires for connections opened lazily by db2_conn(). */
+static void thread_conn_destructor(void *conn)
+{
+   if (conn)
+      aimee_pg_close(conn);
+}
+
+static void thread_conn_key_init(void)
+{
+   pthread_key_create(&g_thread_conn_key, thread_conn_destructor);
+}
+/* Test-shim sqlite handle. Set by db2_register_shared_sqlite (tests
+ * and db2_eval_open_temp_store). Does not own the handle; callers are
+ * responsible for lifetime. */
+static sqlite3 *g_shared_sqlite = NULL;
+static int g_shared_ephemeral = 0;
+static pthread_mutex_t g_shared_sqlite_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void db2_register_shared_sqlite(sqlite3 *h)
+{
+   pthread_mutex_lock(&g_shared_sqlite_lock);
+   g_shared_sqlite = h;
+   /* Fresh registration: assume non-ephemeral unless the caller opts in
+    * via db2_set_ephemeral.  Clearing on re-register avoids leaking a
+    * stale flag from a prior test. */
+   g_shared_ephemeral = 0;
+   pthread_mutex_unlock(&g_shared_sqlite_lock);
+}
+
+sqlite3 *db2_shared_sqlite(void)
+{
+   pthread_mutex_lock(&g_shared_sqlite_lock);
+   sqlite3 *h = g_shared_sqlite;
+   pthread_mutex_unlock(&g_shared_sqlite_lock);
+   return h;
+}
+
+void db2_set_ephemeral(int ephemeral)
+{
+   pthread_mutex_lock(&g_shared_sqlite_lock);
+   g_shared_ephemeral = ephemeral ? 1 : 0;
+   pthread_mutex_unlock(&g_shared_sqlite_lock);
+}
+
+int db2_is_ephemeral(void)
+{
+   pthread_mutex_lock(&g_shared_sqlite_lock);
+   int v = g_shared_ephemeral;
+   pthread_mutex_unlock(&g_shared_sqlite_lock);
+   return v;
+}
+
+static int db2_query_flag(const char *sql, const char *param_name, const char *param_value)
+{
+   char errbuf[256] = "";
+   aimee_pg_stmt_t *stmt = aimee_pg_prepare(g_conn, sql, errbuf, sizeof(errbuf));
+   if (!stmt)
+      return -1;
+
+   if (param_name && aimee_pg_bind_text(stmt, param_name, param_value ? param_value : "") != 0)
+   {
+      aimee_pg_finalize(stmt);
+      return -1;
+   }
+
+   aimee_pg_step_t rc = aimee_pg_step(stmt, errbuf, sizeof(errbuf));
+   aimee_pg_finalize(stmt);
+   if (rc == AIMEE_PG_ROW)
+      return 1;
+   if (rc == AIMEE_PG_DONE)
+      return 0;
+   return -1;
+}
+
+void *db2_conn(void)
+{
+   pthread_once(&g_thread_conn_key_once, thread_conn_key_init);
+   void *tconn = pthread_getspecific(g_thread_conn_key);
+   if (tconn)
+      return tconn;
+   /* libpq forbids concurrent use of a single PGconn. The thread that ran
+    * db2_init() owns g_conn; any OTHER thread that touches DB2 (mining,
+    * reflection, maintenance, curator-drain, HTTP listener, ...) must use its
+    * own connection or libpq's internal state corrupts — observed as a
+    * double-free of a PGresult, which glibc surfaces as "realloc(): invalid
+    * next size". Lazily open a per-thread connection on first use; the key
+    * destructor closes it on thread exit. Threads that manage their own
+    * connection explicitly (db2_thread_conn_open/close) hit the fast path
+    * above. */
+   if (g_init_thread_set && !pthread_equal(pthread_self(), g_init_thread))
+   {
+      char errbuf[256] = "";
+      void *conn = db2_thread_conn_open(errbuf, sizeof(errbuf));
+      if (conn)
+         return conn;
+      fprintf(stderr,
+              "aimee: db2_conn: per-thread connection open failed (%s); "
+              "falling back to shared connection\n",
+              errbuf[0] ? errbuf : "unknown");
+   }
+   return g_conn;
+}
+
+void *db2_thread_conn_open(char *errbuf, size_t errlen)
+{
+   pthread_once(&g_thread_conn_key_once, thread_conn_key_init);
+   const char *url = g_pg_url[0] ? g_pg_url : NULL;
+   if (!url)
+   {
+      if (errbuf && errlen)
+         snprintf(errbuf, errlen, "db2 not initialized");
+      return NULL;
+   }
+   void *conn = aimee_pg_open(url, errbuf, errlen);
+   if (conn)
+      pthread_setspecific(g_thread_conn_key, conn);
+   return conn;
+}
+
+void db2_thread_conn_close(void)
+{
+   pthread_once(&g_thread_conn_key_once, thread_conn_key_init);
+   void *conn = pthread_getspecific(g_thread_conn_key);
+   if (conn)
+   {
+      aimee_pg_close(conn);
+      pthread_setspecific(g_thread_conn_key, NULL);
+   }
+}
+
+int db2_is_initialized(void)
+{
+   return g_conn ? 1 : 0;
+}
+
+static const char *db2_postgres_url(void)
+{
+   return g_pg_url[0] ? g_pg_url : NULL;
+}
+
+int db2_fork_conn_url(char *out, size_t cap)
+{
+   if (!out || cap == 0)
+      return 0;
+   out[0] = '\0';
+
+   const char *url = db2_postgres_url();
+   if (!url || !url[0])
+      return 0;
+   snprintf(out, cap, "%s", url);
+   return 1;
+}
+
+int db2_init(const char *libpq_url)
+{
+   char errbuf[256] = "";
+
+   if (!libpq_url || !libpq_url[0])
+      return -1;
+
+   pthread_mutex_lock(&g_init_lock);
+
+   if (g_conn)
+   {
+      int same_url = (strcmp(g_pg_url, libpq_url) == 0);
+      pthread_mutex_unlock(&g_init_lock);
+      return same_url ? 0 : -1;
+   }
+
+   void *conn = aimee_pg_open(libpq_url, errbuf, sizeof(errbuf));
+   if (!conn)
+   {
+      pthread_mutex_unlock(&g_init_lock);
+      return -1;
+   }
+
+   if (db_apply_schema_postgres(conn, errbuf, sizeof(errbuf)) != 0)
+   {
+      /* Surface the postgres error so callers see WHICH statement failed.
+       * Silently returning -1 hid bugs like a stale CREATE INDEX referencing
+       * a table that lives in a different tier's schema. */
+      fprintf(stderr, "aimee: db2_init: schema apply failed: %s\n", errbuf);
+      aimee_pg_close(conn);
+      pthread_mutex_unlock(&g_init_lock);
+      return -1;
+   }
+
+   /* The code-graph projection upserts edges with
+    * ON CONFLICT (source, relation, target), which requires a unique index the
+    * base schema.sql deliberately does NOT declare (legacy instances may hold
+    * duplicate triples, which would make a plain CREATE UNIQUE INDEX in the
+    * schema fail on every startup). db2_entity_edge_build_unique_index() had no
+    * caller, so the index never existed and the projection silently produced
+    * zero edges on every instance — graph-code fusion's whole substrate. Build
+    * it best-effort here: on a clean instance it creates the index (projection
+    * works); if a legacy instance still holds duplicate triples it logs and
+    * continues (no startup regression; dedup is a separate migration). The shim
+    * has no real index machinery, so skip it there. */
+   if (!aimee_pg_is_shim())
+   {
+      int ee_idx_existed = 0;
+      if (db2_entity_edge_build_unique_index(&ee_idx_existed) != 0)
+         fprintf(stderr, "aimee: db2_init: entity_edges unique index not built; code-graph "
+                         "projection ON CONFLICT will no-op until duplicate triples are deduped\n");
+   }
+
+   /* pg_trgm is required: db2/schema.sql creates a GIN index on
+    * memories.memories_code_fts_text using gin_trgm_ops, and the
+    * memory_query path issues % / similarity() against memory text.
+    * The schema CREATE EXTENSION tolerates failure (so a least-privileged
+    * connect can still touch the schema for read-only diagnostics);
+    * here we fail hard at init if the extension didn't end up
+    * installed, since trigram fallback was never a supported path.
+    *
+    * Skip the check under the test shim — the in-memory sqlite shim
+    * has no pg_extension catalog. */
+   if (!aimee_pg_is_shim())
+   {
+      char errcheck[256] = "";
+      aimee_pg_stmt_t *st = aimee_pg_prepare(
+          conn, "SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'", errcheck, sizeof(errcheck));
+      if (!st)
+      {
+         aimee_pg_close(conn);
+         pthread_mutex_unlock(&g_init_lock);
+         return -1;
+      }
+      aimee_pg_step_t step = aimee_pg_step(st, errcheck, sizeof(errcheck));
+      aimee_pg_finalize(st);
+      if (step != AIMEE_PG_ROW)
+      {
+         aimee_pg_close(conn);
+         pthread_mutex_unlock(&g_init_lock);
+         fprintf(stderr, "aimee: db2_init: pg_trgm extension is not installed in this database. "
+                         "Enable it with: CREATE EXTENSION pg_trgm;  (requires a role with the "
+                         "appropriate privileges)\n");
+         return -1;
+      }
+   }
+
+   g_conn = conn;
+   /* Record the owning thread: db2_conn() hands g_conn to this thread and a
+    * private per-thread connection to every other thread. */
+   g_init_thread = pthread_self();
+   g_init_thread_set = 1;
+   snprintf(g_pg_url, sizeof(g_pg_url), "%s", libpq_url);
+   pthread_mutex_unlock(&g_init_lock);
+   return 0;
+}
+
+int db2_health_probe(int *schema_ok, int *have_pg_trgm)
+{
+   char errbuf[256] = "";
+
+   if (schema_ok)
+      *schema_ok = 0;
+   if (have_pg_trgm)
+      *have_pg_trgm = 0;
+
+   if (!g_conn)
+      return -1;
+
+   if (aimee_pg_exec(g_conn, "SELECT 1", errbuf, sizeof(errbuf)) != 0)
+      return -1;
+
+   int schema_present = db2_query_flag("SELECT 1 FROM information_schema.tables "
+                                       "WHERE table_schema = current_schema() AND table_name = :t",
+                                       "t", "memories");
+   if (schema_present < 0)
+      return -1;
+   if (schema_ok)
+      *schema_ok = schema_present;
+
+   /* pg_trgm is required by db2_init; reporting its presence here for
+    * doctor/diagnostics. The shim has no pg_extension catalog, so
+    * report installed=1 unconditionally under the shim (doctor path
+    * never runs against the shim in production but tests can call
+    * health_probe). */
+   int ext_present;
+   if (aimee_pg_is_shim())
+      ext_present = 1;
+   else
+      ext_present =
+          db2_query_flag("SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'", NULL, NULL);
+   if (ext_present < 0)
+      return -1;
+   if (have_pg_trgm)
+      *have_pg_trgm = ext_present;
+
+   return 0;
+}
+
+int db2_kb_health_probe(int *kb_tables_ok)
+{
+   if (kb_tables_ok)
+      *kb_tables_ok = 0;
+   if (!g_conn)
+      return -1;
+   int docs_ok = db2_query_flag("SELECT 1 FROM information_schema.tables "
+                                "WHERE table_schema = current_schema() AND table_name = :t",
+                                "t", "kb_documents");
+   int jobs_ok = db2_query_flag("SELECT 1 FROM information_schema.tables "
+                                "WHERE table_schema = current_schema() AND table_name = :t",
+                                "t", "kb_async_jobs");
+   if (docs_ok < 0 || jobs_ok < 0)
+      return -1;
+   if (kb_tables_ok)
+      *kb_tables_ok = (docs_ok && jobs_ok) ? 1 : 0;
+   return 0;
+}
+
+/* Postgres-native stat snapshot for `aimee doctor` and ops diagnostics.
+ * All outputs are best-effort; missing values are reported as -1 so the
+ * caller can decide whether to surface the gap. Returns 0 if the probe
+ * connection is alive, -1 otherwise. Skipped under the test shim. */
+int db2_pg_stat_summary(int *active_conns, int *max_conns, int *is_replica,
+                        int64_t *replica_lag_bytes)
+{
+   if (active_conns)
+      *active_conns = -1;
+   if (max_conns)
+      *max_conns = -1;
+   if (is_replica)
+      *is_replica = -1;
+   if (replica_lag_bytes)
+      *replica_lag_bytes = -1;
+
+   if (!g_conn)
+      return -1;
+
+   if (aimee_pg_is_shim())
+      return 0;
+
+   char errbuf[256] = "";
+   aimee_pg_stmt_t *st = NULL;
+
+   if (active_conns)
+   {
+      st = aimee_pg_prepare(g_conn,
+                            "SELECT count(*)::int FROM pg_stat_activity "
+                            "WHERE datname = current_database()",
+                            errbuf, sizeof(errbuf));
+      if (st)
+      {
+         if (aimee_pg_step(st, errbuf, sizeof(errbuf)) == AIMEE_PG_ROW)
+            *active_conns = aimee_pg_column_int(st, 0);
+         aimee_pg_finalize(st);
+      }
+   }
+
+   if (max_conns)
+   {
+      st = aimee_pg_prepare(g_conn, "SELECT current_setting('max_connections')::int", errbuf,
+                            sizeof(errbuf));
+      if (st)
+      {
+         if (aimee_pg_step(st, errbuf, sizeof(errbuf)) == AIMEE_PG_ROW)
+            *max_conns = aimee_pg_column_int(st, 0);
+         aimee_pg_finalize(st);
+      }
+   }
+
+   if (is_replica)
+   {
+      st = aimee_pg_prepare(g_conn, "SELECT pg_is_in_recovery()::int", errbuf, sizeof(errbuf));
+      if (st)
+      {
+         if (aimee_pg_step(st, errbuf, sizeof(errbuf)) == AIMEE_PG_ROW)
+            *is_replica = aimee_pg_column_int(st, 0);
+         aimee_pg_finalize(st);
+      }
+   }
+
+   /* Replication lag in WAL bytes, applicable only when this connection
+    * is on a standby. Returns 0 when not in recovery. */
+   if (replica_lag_bytes && is_replica && *is_replica == 1)
+   {
+      st = aimee_pg_prepare(
+          g_conn,
+          "SELECT COALESCE("
+          "  pg_wal_lsn_diff(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn()), 0)::bigint",
+          errbuf, sizeof(errbuf));
+      if (st)
+      {
+         if (aimee_pg_step(st, errbuf, sizeof(errbuf)) == AIMEE_PG_ROW)
+            *replica_lag_bytes = aimee_pg_column_int64(st, 0);
+         aimee_pg_finalize(st);
+      }
+   }
+
+   return 0;
+}
+
+void db2_shutdown(void)
+{
+   pthread_mutex_lock(&g_init_lock);
+   if (g_conn)
+   {
+      aimee_pg_close(g_conn);
+      g_conn = NULL;
+   }
+   g_pg_url[0] = '\0';
+   pthread_mutex_unlock(&g_init_lock);
+}
+
+static sqlite3 *g_eval_temp_store_handle = NULL;
+
+int db2_eval_open_temp_store(void)
+{
+#ifdef AIMEE_DISABLE_DB2_SQLITE_SHIM
+   return -1;
+#else
+   db2_eval_close_temp_store();
+   if (!sqlite3_open || !sqlite3_close || !sqlite3_exec)
+      return -1;
+   sqlite3 *raw = NULL;
+   if (sqlite3_open(":memory:", &raw) != SQLITE_OK || !raw)
+   {
+      if (raw)
+         sqlite3_close(raw);
+      return -1;
+   }
+   /* :memory: ignores disk-oriented pragmas (WAL, sync, mmap); the only
+    * one that matters for the schema's REFERENCES clauses is foreign_keys. */
+   sqlite3_exec(raw, "PRAGMA foreign_keys=ON", NULL, NULL, NULL);
+   char err[512] = {0};
+   if (db2_apply_schema_sqlite_shim(raw, err, sizeof(err)) != 0)
+   {
+      sqlite3_close(raw);
+      return -1;
+   }
+   db2_register_shared_sqlite(raw);
+   db2_set_ephemeral(1);
+   g_eval_temp_store_handle = raw;
+   /* In test builds the aimee_pg_* shim resolves "shim" to the
+    * registered sqlite handle; in production with real libpq this
+    * would attempt a network connection, so skip it there. */
+   if (aimee_pg_is_shim())
+      (void)db2_init("shim");
+   return 0;
+#endif
+}
+
+void db2_eval_close_temp_store(void)
+{
+   if (!g_eval_temp_store_handle)
+      return;
+#ifdef AIMEE_DISABLE_DB2_SQLITE_SHIM
+   db2_maybe_clear_sqlite_cache(g_eval_temp_store_handle);
+   db2_register_shared_sqlite(NULL);
+   g_eval_temp_store_handle = NULL;
+#else
+   if (aimee_pg_is_shim())
+      db2_shutdown();
+   db2_maybe_clear_sqlite_cache(g_eval_temp_store_handle);
+   db2_register_shared_sqlite(NULL);
+   if (sqlite3_close)
+      sqlite3_close(g_eval_temp_store_handle);
+   g_eval_temp_store_handle = NULL;
+#endif
+}
+
+/* --- Generic scalar/exec convenience helpers ------------------------------
+ * See db2_internal.h for contract. These collapse the prepare/bind/step/
+ * finalize boilerplate that recurred verbatim across the per-column getters,
+ * counters, and fire-and-forget setters in the db2 sources. */
+
+#define DB2Q_ERRBUF 256
+
+int db2_scalar_int(const char *sql, int dflt)
+{
+   void *conn = db2_conn();
+   if (!conn)
+      return dflt;
+   char err[DB2Q_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return dflt;
+   int value = dflt;
+   if (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+      value = aimee_pg_column_int(st, 0);
+   aimee_pg_finalize(st);
+   return value;
+}
+
+int db2_scalar_int_text(const char *sql, const char *a1, int dflt)
+{
+   void *conn = db2_conn();
+   if (!conn)
+      return dflt;
+   char err[DB2Q_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return dflt;
+   aimee_pg_bind_text(st, "?1", a1);
+   int value = dflt;
+   if (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+      value = aimee_pg_column_int(st, 0);
+   aimee_pg_finalize(st);
+   return value;
+}
+
+double db2_scalar_double_id(const char *sql, int64_t id, double dflt)
+{
+   void *conn = db2_conn();
+   if (!conn)
+      return dflt;
+   char err[DB2Q_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return dflt;
+   aimee_pg_bind_int64(st, "?1", id);
+   double value = dflt;
+   if (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+      value = aimee_pg_column_double(st, 0);
+   aimee_pg_finalize(st);
+   return value;
+}
+
+void db2_exec_id(const char *sql, int64_t id)
+{
+   void *conn = db2_conn();
+   if (!conn)
+      return;
+   char err[DB2Q_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return;
+   aimee_pg_bind_int64(st, "?1", id);
+   (void)aimee_pg_step(st, err, sizeof(err));
+   aimee_pg_finalize(st);
+}
+
+int db2_exec_conn_int64(void *conn, const char *sql, int64_t arg)
+{
+   if (!conn)
+      return -1;
+   char err[DB2Q_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_int64(st, "?1", arg);
+   int rc = (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_DONE) ? 0 : -1;
+   aimee_pg_finalize(st);
+   return rc;
+}
+
+void db2_exec_text(const char *sql, const char *a1)
+{
+   void *conn = db2_conn();
+   if (!conn)
+      return;
+   char err[DB2Q_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return;
+   aimee_pg_bind_text(st, "?1", a1);
+   (void)aimee_pg_step(st, err, sizeof(err));
+   aimee_pg_finalize(st);
+}
+
+void db2_exec_text_id(const char *sql, const char *a1, int64_t id)
+{
+   void *conn = db2_conn();
+   if (!conn)
+      return;
+   char err[DB2Q_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return;
+   aimee_pg_bind_text(st, "?1", a1);
+   aimee_pg_bind_int64(st, "?2", id);
+   (void)aimee_pg_step(st, err, sizeof(err));
+   aimee_pg_finalize(st);
+}
+
+void db2_copy_text(char *dst, size_t cap, const char *src)
+{
+   if (!dst || cap == 0)
+      return;
+   snprintf(dst, cap, "%s", src ? src : "");
+}
+
+void db2_copy_col_text(char *dst, size_t cap, aimee_pg_stmt_t *st, int col)
+{
+   const char *value = aimee_pg_column_text(st, col);
+   snprintf(dst, cap, "%s", value ? value : "");
+}

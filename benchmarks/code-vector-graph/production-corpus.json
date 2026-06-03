@@ -1,0 +1,667 @@
+{
+  "version": 1,
+  "proposal": "effectiveness-weighted-code-vector-graph",
+  "phase": 7,
+  "description": "Production-gate retrieval corpus (>=100 queries) for baseline-vs-fused evaluation. expected_ids are owner-populated against a live indexed corpus; code_shaped is the deterministic Phase 6 shape expectation and is enforced by test_graph_fusion / corpus validation. Categories cover code/file, memory/recall, config/identity, agent/session, infra/ops, memory quality/learning, code-graph projection, and code-seeded retrieval.",
+  "query_count": 108,
+  "categories": [
+    "agent_session",
+    "code_file",
+    "code_graph",
+    "code_seed",
+    "config_identity",
+    "infra_ops",
+    "memory_quality",
+    "memory_recall"
+  ],
+  "queries": [
+    {
+      "query": "src/memory_graph.c",
+      "category": "code_file",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "where is memory_graph_boost defined",
+      "category": "code_file",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "src/db2/entity_edges.c utility bump",
+      "category": "code_file",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "db2_entity_edge_upsert callers",
+      "category": "code_file",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "memory_core_search.inc fusion",
+      "category": "code_file",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "kb_service_code_embed.c refresh",
+      "category": "code_file",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "what calls pgvec_code_upsert",
+      "category": "code_file",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "headers/memory.h score parts",
+      "category": "code_file",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "entity_nodes.c canonical keys",
+      "category": "code_file",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "code_projection.c generation publish",
+      "category": "code_file",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "Foo::bar symbol resolution",
+      "category": "code_file",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "handler.go route registration",
+      "category": "code_file",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "parser.c:42 bug context",
+      "category": "code_file",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "memory_graph_fusion edge score formula",
+      "category": "code_file",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "schema.sql code_embeddings table",
+      "category": "code_file",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "contextual bandits exploration budget",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "virtual context assembly tool chain",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "guardrails semantic sidecar backoff",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "ACP delegate transport cli_kind",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "minimax tool call argument sanitize",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "how does graph boost work",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "memory recall pivot strategy",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "hybrid lexical semantic fusion",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "cross encoder rerank blend",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "pagerank score candidates",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "memory unit vector search",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "recall fallback when vector unavailable",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "query shape detection routing",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "candidate source fusion bonus",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "two hop graph expansion CTE",
+      "category": "memory_recall",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "working profile injection identity",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "identity snapshot generation",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "config gate enable code projection",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "plugin kind taxonomy registration",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "delegate execution role default",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "utility scoring enabled flag",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "graph code fusion state config",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "shadow delta retention days",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "max neighbors per hop bound",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "utility half life decay config",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "code vectors enabled per project",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "max points per project cap",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "auto sync after index scan",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "embedding command configuration",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "structural weight defaults by relation",
+      "category": "config_identity",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "primary agent max turns ignore",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "session compaction autonomous",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "agent bridge tool budget close",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "delegate nudge suppress primary",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "session key canonical thread",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "delegate worktree output copy",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "agent runtime max turns resolve",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "compute pool dispatch delegate",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "ephemeral pool request handler",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "session restart continuity",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "delegate bash write guard",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "read before write path normalize",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "agent policy intercept tool",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "delegate replay benchmark trace",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "worker no database access",
+      "category": "agent_session",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "gateway delivery target ntfy",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "webhook HMAC verification",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "delivery mirror transcript",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "gateway platform registry adapter",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "session key thread mapping",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "docker image publish ghcr release",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "kb container packaging isolation",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "postgres pgvector extension setup",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "HNSW index vector cosine ops",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "aimee kb service background job",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "update.sh testing force deploy",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "server forward fork per command",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "WAL handle orphan cleanup",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "3db split server kb boundary",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "kb client RPC action request",
+      "category": "infra_ops",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "utility score half life decay",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "memory contradiction detection demotion",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "memory lifecycle state archive",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "effectiveness weighted recall",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "memory graph boost utility",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "path credit distribution feedback",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "shadow mode rank delta record",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "ablation matrix code vectors",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "positive negative feedback signals",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "learned utility replay only",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "structural factor cold start bias",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "observed factor frequency weight",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "relation gravity provisional prior",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "neighbour pruning by priority",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "memory promotion stable facts",
+      "category": "memory_quality",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "code projection generation visible",
+      "category": "code_graph",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "entity edge defines symbol file",
+      "category": "code_graph",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "co_edited bridge canonical alias",
+      "category": "code_graph",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "depends_on resolved import edge",
+      "category": "code_graph",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "projection ledger idempotent sync",
+      "category": "code_graph",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "calls edge symbol to symbol",
+      "category": "code_graph",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "routes edge handler file",
+      "category": "code_graph",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "exports edge public api",
+      "category": "code_graph",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "node origin code_projection filter",
+      "category": "code_graph",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "generation interruption rollback",
+      "category": "code_graph",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "blast radius for src/index.c",
+      "category": "code_seed",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "memory_apply_feedback_path implementation",
+      "category": "code_seed",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "test_graph_fusion.c assertions",
+      "category": "code_seed",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "kb_client_code_embeddings_refresh signature",
+      "category": "code_seed",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "db2_shadow_delta_cleanup retention",
+      "category": "code_seed",
+      "code_shaped": false,
+      "expected_ids": []
+    },
+    {
+      "query": "pgvec_transport.c build_vec_text",
+      "category": "code_seed",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "src/kb/kb_service.c memory collection",
+      "category": "code_seed",
+      "code_shaped": true,
+      "expected_ids": []
+    },
+    {
+      "query": "entity_nodes.h node origin constants",
+      "category": "code_seed",
+      "code_shaped": true,
+      "expected_ids": []
+    }
+  ]
+}

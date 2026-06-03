@@ -1,0 +1,8 @@
+{
+  "command": "./aimee dogfood review --month 2026-04 --limit 0 --json",
+  "month": "2026-04",
+  "records_labelled": 2625,
+  "records_total": 38522,
+  "records_unlabelled": 35897,
+  "reminders_completed": 1
+}

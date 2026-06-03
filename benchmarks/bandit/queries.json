@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "description": "Contextual bandit fixture corpus for Thompson sampling and counterfactual replay.",
+  "fixtures": [
+    {
+      "fixture_kind": "stationary",
+      "description": "Stationary bandit: arm_b has higher true mean; TS must converge within 200 pulls.",
+      "decision_point": "test_stationary",
+      "arms": [
+        {"arm_id": "arm_a", "true_mean": 0.3},
+        {"arm_id": "arm_b", "true_mean": 0.7},
+        {"arm_id": "arm_c", "true_mean": 0.5}
+      ],
+      "n_rounds": 200,
+      "expected_best_arm": "arm_b",
+      "convergence_window": 50,
+      "min_best_arm_fraction": 0.70
+    },
+    {
+      "fixture_kind": "drifting",
+      "description": "Drifting bandit: arm_a starts best, arm_c becomes best at round 100.",
+      "decision_point": "test_drifting",
+      "arms": [
+        {"arm_id": "arm_a", "true_mean_before": 0.8, "true_mean_after": 0.3},
+        {"arm_id": "arm_b", "true_mean_before": 0.4, "true_mean_after": 0.4},
+        {"arm_id": "arm_c", "true_mean_before": 0.2, "true_mean_after": 0.9}
+      ],
+      "drift_round": 100,
+      "n_rounds": 250,
+      "expected_best_arm_before": "arm_a",
+      "expected_best_arm_after": "arm_c",
+      "re_converge_within_rounds": 80
+    },
+    {
+      "fixture_kind": "ipw_replay",
+      "description": "IPW replay: synthetic decisions for arm_b with known propensities; V_IPW must be close to true value.",
+      "decisions": [
+        {"arm_id": "arm_a", "propensity": 0.6, "reward": 0.3, "decided_at": "2026-01-10T10:00:00"},
+        {"arm_id": "arm_b", "propensity": 0.3, "reward": 0.8, "decided_at": "2026-01-10T10:01:00"},
+        {"arm_id": "arm_b", "propensity": 0.3, "reward": 0.7, "decided_at": "2026-01-10T10:02:00"},
+        {"arm_id": "arm_a", "propensity": 0.6, "reward": 0.2, "decided_at": "2026-01-10T10:03:00"},
+        {"arm_id": "arm_b", "propensity": 0.3, "reward": 0.9, "decided_at": "2026-01-10T10:04:00"},
+        {"arm_id": "arm_c", "propensity": 0.1, "reward": 0.5, "decided_at": "2026-01-10T10:05:00"},
+        {"arm_id": "arm_b", "propensity": 0.3, "reward": 0.6, "decided_at": "2026-01-10T10:06:00"},
+        {"arm_id": "arm_a", "propensity": 0.6, "reward": 0.4, "decided_at": "2026-01-10T10:07:00"}
+      ],
+      "target_arm": "arm_b",
+      "weight_cap": 10.0,
+      "expected_v_hat_min": 0.80,
+      "expected_v_hat_max": 2.00,
+      "expected_status": "ok"
+    },
+    {
+      "fixture_kind": "thin_data",
+      "description": "Thin data: arm with only 1 decision should report insufficient_data for IPW.",
+      "decisions": [
+        {"arm_id": "arm_rare", "propensity": 0.05, "reward": 1.0, "decided_at": "2026-01-15T08:00:00"}
+      ],
+      "target_arm": "arm_rare",
+      "weight_cap": 10.0,
+      "expected_status": "insufficient_data"
+    },
+    {
+      "fixture_kind": "synthetic_control",
+      "description": "Synthetic control: known lift after bump_after; estimator must detect positive lift.",
+      "decisions": [
+        {"arm_id": "arm_prompt_v1", "propensity": 0.9, "reward": 0.40, "decided_at": "2026-01-01T10:00:00"},
+        {"arm_id": "arm_prompt_v1", "propensity": 0.9, "reward": 0.42, "decided_at": "2026-01-02T10:00:00"},
+        {"arm_id": "arm_prompt_v1", "propensity": 0.9, "reward": 0.38, "decided_at": "2026-01-03T10:00:00"},
+        {"arm_id": "arm_prompt_v1", "propensity": 0.9, "reward": 0.41, "decided_at": "2026-01-04T10:00:00"},
+        {"arm_id": "arm_prompt_v1", "propensity": 0.9, "reward": 0.39, "decided_at": "2026-01-05T10:00:00"},
+        {"arm_id": "arm_prompt_v1", "propensity": 0.9, "reward": 0.40, "decided_at": "2026-01-06T10:00:00"},
+        {"arm_id": "arm_prompt_v1", "propensity": 0.9, "reward": 0.80, "decided_at": "2026-02-01T10:00:00"},
+        {"arm_id": "arm_prompt_v1", "propensity": 0.9, "reward": 0.82, "decided_at": "2026-02-02T10:00:00"},
+        {"arm_id": "arm_prompt_v1", "propensity": 0.9, "reward": 0.78, "decided_at": "2026-02-03T10:00:00"},
+        {"arm_id": "arm_prompt_v1", "propensity": 0.9, "reward": 0.81, "decided_at": "2026-02-04T10:00:00"},
+        {"arm_id": "arm_prompt_v1", "propensity": 0.9, "reward": 0.79, "decided_at": "2026-02-05T10:00:00"},
+        {"arm_id": "arm_prompt_v1", "propensity": 0.9, "reward": 0.80, "decided_at": "2026-02-06T10:00:00"}
+      ],
+      "bump_before": "2026-01-31T00:00:00",
+      "bump_after": "2026-02-01T00:00:00",
+      "treatment_arm": "arm_prompt_v1",
+      "expected_lift_positive": true,
+      "expected_significant": true,
+      "expected_status": "ok"
+    },
+    {
+      "fixture_kind": "synthetic_control_regression",
+      "description": "Synthetic control: known regression after bump; estimator must detect negative lift.",
+      "decisions": [
+        {"arm_id": "arm_model_v2", "propensity": 0.9, "reward": 0.70, "decided_at": "2026-01-01T10:00:00"},
+        {"arm_id": "arm_model_v2", "propensity": 0.9, "reward": 0.68, "decided_at": "2026-01-02T10:00:00"},
+        {"arm_id": "arm_model_v2", "propensity": 0.9, "reward": 0.72, "decided_at": "2026-01-03T10:00:00"},
+        {"arm_id": "arm_model_v2", "propensity": 0.9, "reward": 0.70, "decided_at": "2026-01-04T10:00:00"},
+        {"arm_id": "arm_model_v2", "propensity": 0.9, "reward": 0.69, "decided_at": "2026-01-05T10:00:00"},
+        {"arm_id": "arm_model_v2", "propensity": 0.9, "reward": 0.71, "decided_at": "2026-01-06T10:00:00"},
+        {"arm_id": "arm_model_v2", "propensity": 0.9, "reward": 0.30, "decided_at": "2026-02-01T10:00:00"},
+        {"arm_id": "arm_model_v2", "propensity": 0.9, "reward": 0.28, "decided_at": "2026-02-02T10:00:00"},
+        {"arm_id": "arm_model_v2", "propensity": 0.9, "reward": 0.32, "decided_at": "2026-02-03T10:00:00"},
+        {"arm_id": "arm_model_v2", "propensity": 0.9, "reward": 0.29, "decided_at": "2026-02-04T10:00:00"},
+        {"arm_id": "arm_model_v2", "propensity": 0.9, "reward": 0.31, "decided_at": "2026-02-05T10:00:00"},
+        {"arm_id": "arm_model_v2", "propensity": 0.9, "reward": 0.30, "decided_at": "2026-02-06T10:00:00"}
+      ],
+      "bump_before": "2026-01-31T00:00:00",
+      "bump_after": "2026-02-01T00:00:00",
+      "treatment_arm": "arm_model_v2",
+      "expected_lift_positive": false,
+      "expected_significant": true,
+      "expected_status": "ok"
+    }
+  ]
+}

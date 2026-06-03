@@ -1,0 +1,102 @@
+/* test_token_tracker.c: unit tests for token usage tracking and cost estimation */
+#include <assert.h>
+#include <math.h>
+#include <stdio.h>
+#include "token_tracker.h"
+
+#define PASS(name) printf("  %s: ok\n", name)
+
+/* Floating-point near-equality with a generous epsilon for cost values */
+static int near_equal(double a, double b)
+{
+   double diff = a - b;
+   if (diff < 0)
+      diff = -diff;
+   return diff < 1e-9;
+}
+
+/* --- Cost estimation tests --- */
+
+static void test_known_anthropic_model(void)
+{
+   /* claude-3-5-sonnet: $3.00 input, $15.00 output per million */
+   token_usage_t u = {.input_tokens = 1000, .output_tokens = 500};
+   double cost = token_estimate_cost("claude-3-5-sonnet-20241022", &u);
+   /* Expected: 1000 * 3.00/1e6 + 500 * 15.00/1e6 = 0.003 + 0.0075 = 0.0105 */
+   assert(near_equal(cost, 0.0105));
+   PASS("cost: claude-3-5-sonnet");
+}
+
+static void test_cache_tokens_anthropic(void)
+{
+   /* claude-3-5-sonnet: cache write $3.75/M, cache read $0.30/M */
+   token_usage_t u = {
+       .input_tokens = 0,
+       .output_tokens = 0,
+       .cache_write_tokens = 1000000,
+       .cache_read_tokens = 1000000,
+   };
+   double cost = token_estimate_cost("claude-3-5-sonnet", &u);
+   /* Expected: 1e6 * 3.75/1e6 + 1e6 * 0.30/1e6 = 3.75 + 0.30 = 4.05 */
+   assert(near_equal(cost, 4.05));
+   PASS("cost: cache tokens");
+}
+
+static void test_openai_model(void)
+{
+   /* gpt-4o: $2.50 input, $10.00 output per million */
+   token_usage_t u = {.input_tokens = 2000, .output_tokens = 1000};
+   double cost = token_estimate_cost("gpt-4o-2024-11-20", &u);
+   /* Expected: 2000 * 2.50/1e6 + 1000 * 10.00/1e6 = 0.005 + 0.01 = 0.015 */
+   assert(near_equal(cost, 0.015));
+   PASS("cost: gpt-4o");
+}
+
+static void test_unknown_model(void)
+{
+   token_usage_t u = {.input_tokens = 1000, .output_tokens = 500};
+   double cost = token_estimate_cost("some-unknown-model-xyz", &u);
+   assert(near_equal(cost, 0.0));
+   PASS("cost: unknown model returns 0");
+}
+
+static void test_null_usage(void)
+{
+   double cost = token_estimate_cost("claude-3-5-sonnet", NULL);
+   assert(near_equal(cost, 0.0));
+   PASS("cost: null usage returns 0");
+}
+
+static void test_null_model(void)
+{
+   token_usage_t u = {.input_tokens = 1000, .output_tokens = 500};
+   double cost = token_estimate_cost(NULL, &u);
+   assert(near_equal(cost, 0.0));
+   PASS("cost: null model returns 0");
+}
+
+static void test_zero_tokens(void)
+{
+   token_usage_t u = {0};
+   double cost = token_estimate_cost("claude-3-5-sonnet", &u);
+   assert(near_equal(cost, 0.0));
+   PASS("cost: zero tokens = zero cost");
+}
+
+/* --- Main --- */
+
+int main(void)
+{
+   printf("token_tracker: unit tests\n");
+
+   test_known_anthropic_model();
+   test_cache_tokens_anthropic();
+   test_openai_model();
+   test_unknown_model();
+   test_null_usage();
+   test_null_model();
+   test_zero_tokens();
+
+   printf("All token_tracker tests passed.\n");
+   return 0;
+}

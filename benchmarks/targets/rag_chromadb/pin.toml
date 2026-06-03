@@ -1,0 +1,18 @@
+# benchmarks/targets/rag_chromadb/pin.toml
+# Runtime pins for the dense/ChromaDB RAG target adapter.
+#
+# Record chromadb and sentence-transformers versions after the first calibration run.
+# embed_model must match what the adapter uses; changing it invalidates prior results.
+
+[target]
+name = "rag_chromadb"
+adapter_version = "1"
+capabilities = ["memory_ingest", "memory_answer"]
+
+[runtime]
+binary = ""
+package = "chromadb"
+package_version = ""
+embed_model = "all-MiniLM-L6-v2"
+config_hash_required = false
+deterministic = true

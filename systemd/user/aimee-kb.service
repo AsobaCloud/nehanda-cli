@@ -1,0 +1,30 @@
+[Unit]
+Description=Aimee KB service (DB2 + pgvector, embeddings, memory search)
+After=network.target
+PartOf=aimee.slice
+
+[Service]
+Type=simple
+Slice=aimee.slice
+# aimee-kb serves the /v1 HTTP API only (the legacy --socket transport was
+# retired, #2747). It binds 127.0.0.1:8741 by default; point the local
+# aimee-server at it with AIMEE_KB_API_URL=http://127.0.0.1:8741.
+ExecStart=%h/.local/bin/aimee-kb --http-port=8741
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+MemoryHigh=2G
+MemoryMax=3G
+TasksMax=128
+LimitNOFILE=65536
+# Without this, systemd leaves RLIMIT_STACK unbounded, so glibc gives worker
+# threads a small default stack and the kb's drain/ingest/watch threads can
+# overflow it — an intermittent SIGSEGV at startup (seen on a distributed
+# Proxmox deploy). 64 MB matches aimee-server.service and the value
+# cli_client.c sets when it fork-execs aimee-kb.
+LimitSTACK=67108864
+
+[Install]
+WantedBy=default.target

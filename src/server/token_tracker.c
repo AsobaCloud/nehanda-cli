@@ -1,0 +1,102 @@
+/* token_tracker.c: token usage normalisation and cost estimation */
+#include "token_tracker.h"
+#include <ctype.h>
+#include <string.h>
+
+/* --- Pricing table (USD per million tokens) --- */
+
+typedef struct
+{
+   const char *model_substr; /* case-insensitive substring match */
+   double input_per_mtok;
+   double output_per_mtok;
+   double cache_write_per_mtok;
+   double cache_read_per_mtok;
+} model_price_t;
+
+static const model_price_t pricing[] = {
+    /* Anthropic claude-4 family */
+    {"claude-opus-4", 15.00, 75.00, 18.75, 1.50},
+    {"claude-sonnet-4", 3.00, 15.00, 3.75, 0.30},
+    {"claude-haiku-4", 0.80, 4.00, 1.00, 0.08},
+
+    /* Anthropic claude-3.7 / 3.5 family */
+    {"claude-3-7-sonnet", 3.00, 15.00, 3.75, 0.30},
+    {"claude-3-5-sonnet", 3.00, 15.00, 3.75, 0.30},
+    {"claude-3-5-haiku", 0.80, 4.00, 1.00, 0.08},
+
+    /* Anthropic claude-3 family */
+    {"claude-3-opus", 15.00, 75.00, 18.75, 1.50},
+    {"claude-3-sonnet", 3.00, 15.00, 3.75, 0.30},
+    {"claude-3-haiku", 0.25, 1.25, 0.30, 0.03},
+
+    /* OpenAI GPT-4o family */
+    {"gpt-4o-mini", 0.15, 0.60, 0.0, 0.0},
+    {"gpt-4o", 2.50, 10.00, 0.0, 0.0},
+
+    /* OpenAI o-series */
+    {"o3-mini", 1.10, 4.40, 0.0, 0.0},
+    {"o3", 10.00, 40.00, 0.0, 0.0},
+    {"o1-mini", 1.10, 4.40, 0.0, 0.0},
+    {"o1", 15.00, 60.00, 0.0, 0.0},
+
+    /* OpenAI GPT-4 classic */
+    {"gpt-4-turbo", 10.00, 30.00, 0.0, 0.0},
+    {"gpt-4", 30.00, 60.00, 0.0, 0.0},
+    {"gpt-3.5-turbo", 0.50, 1.50, 0.0, 0.0},
+};
+
+#define PRICING_COUNT (int)(sizeof(pricing) / sizeof(pricing[0]))
+
+static int token_ascii_eq_ci(char a, char b)
+{
+   return tolower((unsigned char)a) == tolower((unsigned char)b);
+}
+
+static const char *token_strcasestr_local(const char *haystack, const char *needle)
+{
+   if (!haystack || !needle)
+      return NULL;
+   if (!*needle)
+      return haystack;
+
+   size_t needle_len = strlen(needle);
+   for (const char *p = haystack; *p; p++)
+   {
+      size_t i = 0;
+      while (i < needle_len && p[i] && token_ascii_eq_ci(p[i], needle[i]))
+         i++;
+      if (i == needle_len)
+         return p;
+   }
+   return NULL;
+}
+
+static const model_price_t *find_price(const char *model)
+{
+   if (!model || !model[0])
+      return NULL;
+   for (int i = 0; i < PRICING_COUNT; i++)
+   {
+      if (token_strcasestr_local(model, pricing[i].model_substr))
+         return &pricing[i];
+   }
+   return NULL;
+}
+
+/* --- Cost estimation --- */
+
+double token_estimate_cost(const char *model, const token_usage_t *usage)
+{
+   if (!usage)
+      return 0.0;
+   const model_price_t *p = find_price(model);
+   if (!p)
+      return 0.0;
+
+   double cost = (double)usage->input_tokens * p->input_per_mtok / 1e6 +
+                 (double)usage->output_tokens * p->output_per_mtok / 1e6 +
+                 (double)usage->cache_write_tokens * p->cache_write_per_mtok / 1e6 +
+                 (double)usage->cache_read_tokens * p->cache_read_per_mtok / 1e6;
+   return cost;
+}

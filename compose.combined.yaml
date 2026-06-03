@@ -1,0 +1,103 @@
+# Combined aimee-server+kb stack.
+#
+# One container runs BOTH aimee binaries co-located (server fronts /v1 on :8740;
+# the kb runs on loopback :8741 inside the same container and the server reaches
+# it via AIMEE_KB_API_URL=http://127.0.0.1:8741). Postgres (DB2 + pgvector) and
+# the embedder remain separate services — the combined image bundles the two
+# aimee binaries, not a database.
+#
+#   docker compose -f compose.combined.yaml up --build
+#
+# Server /v1 on :8740 (bearer "aimee-local-dev"); the in-container kb /v1 is also
+# published on :8741 for direct inspection.
+#   curl -H "Authorization: Bearer aimee-local-dev" http://localhost:8740/v1/health
+#   curl http://localhost:8741/v1/health?status=1
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: aimee_shared
+      POSTGRES_USER: aimee
+      POSTGRES_PASSWORD: aimee
+    volumes:
+      - aimee-combined-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aimee -d aimee_shared"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  embedder:
+    build:
+      context: .
+      dockerfile: Dockerfile.embedder
+    volumes:
+      - aimee-embedder-models:/opt/models
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  aimee-server-kb:
+    build:
+      context: .
+      dockerfile: Dockerfile.combined
+    image: aimee-server-kb
+    # The server's worker threads need a 64 MB stack (the 8 MB container default
+    # overflows during startup — matches systemd's LimitSTACK=67108864).
+    ulimits:
+      stack: 67108864
+    environment:
+      AIMEE_HOME: /var/lib/aimee
+      AIMEE_DB1_URL: sqlite:///var/lib/aimee/aimee.db
+      AIMEE_DB2_URL: postgresql://aimee:aimee@postgres:5432/aimee_shared
+      AIMEE_EMBEDDER_URL: http://embedder:8080
+      AIMEE_SERVER_HTTP_BIND: "1"
+      AIMEE_KB_HTTP_BIND: "1"
+      AIMEE_KB_API_URL: http://127.0.0.1:8741
+    ports:
+      - "8740:8740"
+      - "8741:8741"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embedder:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL",
+             "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8740/v1/health | grep -qE '^(200|401)$$'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    volumes:
+      - aimee-combined-home:/var/lib/aimee
+      - aimee-combined-workspaces:/var/lib/aimee-workspaces
+
+  # Optional local LLM for the kb synthesis / curator passes. Enable with
+  #   docker compose -f compose.combined.yaml --profile llm up
+  llm:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    profiles: ["llm"]
+    environment:
+      LLAMA_ARG_HF_REPO: ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M
+      LLAMA_ARG_HOST: 0.0.0.0
+      LLAMA_ARG_PORT: "8080"
+      LLAMA_ARG_ENDPOINT_HEALTH: "1"
+    volumes:
+      - aimee-llm-models:/root/.cache/llama.cpp
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  aimee-combined-home:
+  aimee-combined-workspaces:
+  aimee-combined-postgres:
+  aimee-embedder-models:
+  aimee-llm-models:

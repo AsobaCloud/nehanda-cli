@@ -1,0 +1,9 @@
+[target]
+name = "small_agent"
+description = "aimee + small local GGUF model, CPU-only."
+deterministic = false
+capabilities = ["memory_ingest", "memory_answer", "code_complete"]
+
+[gguf]
+path = "~/.local/share/aimee/models/small_agent.gguf"
+hash = ""

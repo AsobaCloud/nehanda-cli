@@ -1,0 +1,146 @@
+{
+  "annotations": { "list": [] },
+  "description": "Aimee virtual-context-assembly health: tool-chain creation, stubbing, bytes saved, compression, raw-recovery, and assembly latency. Metrics are emitted by the session_context_status MCP tool (metrics object).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "schemaVersion": 39,
+  "tags": ["aimee", "virtual-context", "session"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Data source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "",
+  "title": "Aimee — Virtual Context Assembly",
+  "uid": "aimee-virtual-context",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Context Segments (tool-chains)",
+      "description": "session_context_segments_total — tool-chains created for the session.",
+      "datasource": { "type": "datasource", "uid": "${datasource}" },
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 6 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "datasource", "uid": "${datasource}" }, "expr": "session_context_segments_total" }
+      ],
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "decimals": 0, "mappings": [], "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Tool-chains Stubbed",
+      "description": "session_tool_chains_stubbed_total — chains compacted to a deterministic stub.",
+      "datasource": { "type": "datasource", "uid": "${datasource}" },
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 6 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "datasource", "uid": "${datasource}" }, "expr": "session_tool_chains_stubbed_total" }
+      ],
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "decimals": 0, "mappings": [], "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Compression Ratio",
+      "description": "compression_ratio — raw_bytes_total / stub_bytes_total. Gate floor is 1.7x (40% reduction).",
+      "datasource": { "type": "datasource", "uid": "${datasource}" },
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 6 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "datasource", "uid": "${datasource}" }, "expr": "compression_ratio" }
+      ],
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "unit": "none", "decimals": 1, "mappings": [], "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 1.7 }, { "color": "green", "value": 5 } ] } },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Pending Events (un-flushed)",
+      "description": "pending_events — tool events not yet flushed into a chain. Auto-flush threshold is 10.",
+      "datasource": { "type": "datasource", "uid": "${datasource}" },
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 6 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "datasource", "uid": "${datasource}" }, "expr": "aimee_session_context_pending_events" }
+      ],
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "decimals": 0, "mappings": [], "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 200 } ] } },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Context Bytes Saved",
+      "description": "session_context_bytes_saved — raw_bytes_total minus stub_bytes_total.",
+      "datasource": { "type": "datasource", "uid": "${datasource}" },
+      "gridPos": { "x": 0, "y": 6, "w": 8, "h": 8 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "datasource", "uid": "${datasource}" }, "expr": "session_context_bytes_saved" }
+      ],
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 20, "axisLabel": "bytes", "axisPlacement": "auto" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Assembly Latency (p50 / p95)",
+      "description": "session_context_assembly_ms — wall time to assemble a stubbed working set.",
+      "datasource": { "type": "datasource", "uid": "${datasource}" },
+      "gridPos": { "x": 8, "y": 6, "w": 8, "h": 8 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "datasource", "uid": "${datasource}" }, "expr": "histogram_quantile(0.50, sum(rate(session_context_assembly_ms_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "refId": "B", "datasource": { "type": "datasource", "uid": "${datasource}" }, "expr": "histogram_quantile(0.95, sum(rate(session_context_assembly_ms_bucket[5m])) by (le))", "legendFormat": "p95" }
+      ],
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "ms", "custom": { "drawStyle": "line", "fillOpacity": 10, "axisLabel": "ms", "axisPlacement": "auto" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 150 } ] } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Stub Expansions (raw recovery)",
+      "description": "session_context_expand_total by result — lazy recovery of raw turns. Expansion-failure alert fires above 5% error ratio.",
+      "datasource": { "type": "datasource", "uid": "${datasource}" },
+      "gridPos": { "x": 0, "y": 14, "w": 16, "h": 8 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "datasource", "uid": "${datasource}" }, "expr": "sum(rate(session_context_expand_total{result=\"ok\"}[5m]))", "legendFormat": "ok" },
+        { "refId": "B", "datasource": { "type": "datasource", "uid": "${datasource}" }, "expr": "sum(rate(session_context_expand_total{result=\"error\"}[5m]))", "legendFormat": "error" }
+      ],
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 15, "axisPlacement": "auto" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    }
+  ]
+}

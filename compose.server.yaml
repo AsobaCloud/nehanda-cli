@@ -1,0 +1,127 @@
+# Full aimee-server + aimee-kb stack.
+#
+# aimee-server fronts the /v1 HTTP API and owns DB1 (user-scoped store); it
+# reaches aimee-kb (DB2 + pgvector) over HTTP via AIMEE_KB_API_URL. This is the
+# "services-split" topology from
+# docs/proposals/done/aimee-server-http-api-and-openai-compat.md: the server's
+# kb_client_v1_* calls route to the kb's /v1 HTTP API when AIMEE_KB_API_URL is
+# set (src/server/kb_client.c). The kb owns Postgres + the embedder.
+#
+#   docker compose -f compose.server.yaml up --build
+#
+# Server /v1 on :8740 (bearer "aimee-local-dev"); kb /v1 on :8741.
+#   curl -H "Authorization: Bearer aimee-local-dev" http://localhost:8740/v1/health
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: aimee_shared
+      POSTGRES_USER: aimee
+      POSTGRES_PASSWORD: aimee
+    volumes:
+      - aimee-server-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aimee -d aimee_shared"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  embedder:
+    build:
+      context: .
+      dockerfile: Dockerfile.embedder
+    volumes:
+      - aimee-embedder-models:/opt/models
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  aimee-kb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      AIMEE_HOME: /var/lib/aimee
+      AIMEE_DB2_URL: postgresql://aimee:aimee@postgres:5432/aimee_shared
+      AIMEE_EMBEDDER_URL: http://embedder:8080
+    # aimee-kb serves /v1 over HTTP only; the legacy --socket transport was retired (#2747).
+    command: ["--http-port=8741"]
+    ports:
+      - "8741:8741"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embedder:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8741/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - aimee-kb-home:/var/lib/aimee
+
+  aimee-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    # The server's worker threads need a 64 MB stack (the 8 MB container default
+    # overflows during startup — matches systemd's LimitSTACK=67108864).
+    ulimits:
+      stack: 67108864
+    environment:
+      AIMEE_HOME: /var/lib/aimee
+      # DB1: user-scoped store owned by the server (self-contained SQLite file).
+      AIMEE_DB1_URL: sqlite:///var/lib/aimee/aimee.db
+      # Reach the kb over its /v1 HTTP API. The base URL must NOT include /v1 —
+      # kb_client paths already carry the /v1 prefix (kb_client_v1_url).
+      AIMEE_KB_API_URL: http://aimee-kb:8741
+      AIMEE_SERVER_HTTP_BIND: "1"
+    ports:
+      - "8740:8740"
+    depends_on:
+      aimee-kb:
+        condition: service_healthy
+    # An unauthenticated probe gets 401, which still proves the listener is up;
+    # treat 200/401 as healthy so this stays correct if the bearer is overridden.
+    healthcheck:
+      test: ["CMD-SHELL",
+             "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8740/v1/health | grep -qE '^(200|401)$$'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - aimee-server-home:/var/lib/aimee
+      # Durable mirror-tier state (AIMEE_WORKSPACES_DIR): bare mirrors +
+      # reconstructed worktrees, persisted across recreations on their own volume.
+      - aimee-server-workspaces:/var/lib/aimee-workspaces
+
+  # Optional local LLM for the kb synthesis / curator passes. Enable with
+  #   docker compose -f compose.server.yaml --profile llm up
+  llm:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    profiles: ["llm"]
+    environment:
+      LLAMA_ARG_HF_REPO: ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M
+      LLAMA_ARG_HOST: 0.0.0.0
+      LLAMA_ARG_PORT: "8080"
+      LLAMA_ARG_ENDPOINT_HEALTH: "1"
+    volumes:
+      - aimee-llm-models:/root/.cache/llama.cpp
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  aimee-kb-home:
+  aimee-server-home:
+  aimee-server-workspaces:
+  aimee-server-postgres:
+  aimee-embedder-models:
+  aimee-llm-models:

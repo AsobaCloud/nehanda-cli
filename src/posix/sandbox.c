@@ -1,0 +1,743 @@
+/*
+ * posix/sandbox.c: Linux namespace sandbox for tool execution.
+ *
+ * Provides optional OS-level isolation around agent tool execution using
+ * Linux user+mount namespaces.  Falls back safely with a warning when
+ * namespaces are unavailable (nested containers, restricted kernels).
+ *
+ * Supported modes:
+ *   off            — plain fork/exec, no isolation
+ *   workspace_only — new mount namespace; bind-mount workspace + essentials only
+ *   allowlist      — new mount namespace; bind-mount configured paths + essentials
+ *
+ * Network isolation (optional):
+ *   Creates a new network namespace so the child cannot reach the network.
+ *   Falls back silently if CLONE_NEWNET is unavailable.
+ *
+ * Container detection:
+ *   Checks /.dockerenv, /run/.containerenv, and /proc/1/cgroup for container
+ *   markers.  When detected, sandbox_available() returns 0 because nested user
+ *   namespaces are often blocked by the outer container's seccomp policy.
+ */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
+#include "sandbox.h"
+#include "aimee_home.h"
+#include "log.h"
+
+#define log_warn(...) aimee_log(LOG_WARN, "sandbox", __VA_ARGS__)
+#define log_info(...) aimee_log(LOG_INFO, "sandbox", __VA_ARGS__)
+
+#include <errno.h>
+#include <fcntl.h>
+#include <sched.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+/* -------------------------------------------------------------------------
+ * Container detection
+ * ---------------------------------------------------------------------- */
+
+int sandbox_detect_container(void)
+{
+   /* Docker leaves a sentinel file */
+   if (access("/.dockerenv", F_OK) == 0)
+      return 1;
+
+   /* Podman / systemd-nspawn */
+   if (access("/run/.containerenv", F_OK) == 0)
+      return 1;
+
+   /* Inspect /proc/1/cgroup for container runtime signatures */
+   FILE *f = fopen("/proc/1/cgroup", "r");
+   if (f)
+   {
+      char line[256];
+      while (fgets(line, sizeof(line), f))
+      {
+         if (strstr(line, "docker") || strstr(line, "lxc") || strstr(line, "kubepods") ||
+             strstr(line, "containerd"))
+         {
+            fclose(f);
+            return 1;
+         }
+      }
+      fclose(f);
+   }
+
+   return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * Availability check
+ * ---------------------------------------------------------------------- */
+
+int sandbox_available(const char **reason)
+{
+#ifndef __linux__
+   if (reason)
+      *reason = "Linux namespaces not available on this platform";
+   return 0;
+#else
+   if (sandbox_detect_container())
+   {
+      if (reason)
+         *reason = "running inside a container — nested namespaces may be blocked";
+      return 0;
+   }
+
+   /* Probe whether unprivileged user namespaces are permitted.
+    * The kernel sysctl /proc/sys/kernel/unprivileged_userns_clone (Debian/Ubuntu)
+    * or /proc/sys/user/max_user_namespaces controls this. */
+   {
+      FILE *f = fopen("/proc/sys/kernel/unprivileged_userns_clone", "r");
+      if (f)
+      {
+         int val = 0;
+         int rc = fscanf(f, "%d", &val);
+         fclose(f);
+         if (rc == 1 && val == 0)
+         {
+            if (reason)
+               *reason = "unprivileged user namespaces disabled "
+                         "(kernel.unprivileged_userns_clone=0)";
+            return 0;
+         }
+      }
+   }
+
+   /* Quick smoke-test: can we actually call unshare(CLONE_NEWUSER)?
+    * We do this in a child so we don't contaminate the current process. */
+   pid_t pid = fork();
+   if (pid < 0)
+   {
+      if (reason)
+         *reason = "fork failed during sandbox availability check";
+      return 0;
+   }
+   if (pid == 0)
+   {
+      /* child: attempt user namespace creation and exit with status */
+      if (unshare(CLONE_NEWUSER) == 0)
+         _exit(0);
+      _exit(1);
+   }
+   int status = 0;
+   waitpid(pid, &status, 0);
+   if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+   {
+      if (reason)
+         *reason = "unshare(CLONE_NEWUSER) failed — kernel may not support "
+                   "unprivileged user namespaces";
+      return 0;
+   }
+
+   return 1;
+#endif /* __linux__ */
+}
+
+/* -------------------------------------------------------------------------
+ * Internal: write uid_map / gid_map to implement a root-in-namespace mapping.
+ * Called from the child after unshare(CLONE_NEWUSER) so it can perform mounts.
+ * ---------------------------------------------------------------------- */
+
+#ifdef __linux__
+
+static int write_file(const char *path, const char *content)
+{
+   int fd = open(path, O_WRONLY);
+   if (fd < 0)
+      return -1;
+   size_t len = strlen(content);
+   ssize_t n = write(fd, content, len);
+   close(fd);
+   return (n == (ssize_t)len) ? 0 : -1;
+}
+
+/* Map child's uid 0 → parent's real uid, and similarly for gid. */
+static int setup_userns_maps(pid_t child_pid)
+{
+   char path[64];
+   char map[64];
+   uid_t uid = getuid();
+   gid_t gid = getgid();
+
+   snprintf(path, sizeof(path), "/proc/%d/uid_map", (int)child_pid);
+   snprintf(map, sizeof(map), "0 %d 1\n", (int)uid);
+   if (write_file(path, map) != 0)
+      return -1;
+
+   /* Must write "deny" to setgroups before writing gid_map */
+   snprintf(path, sizeof(path), "/proc/%d/setgroups", (int)child_pid);
+   if (write_file(path, "deny\n") != 0)
+      return -1;
+
+   snprintf(path, sizeof(path), "/proc/%d/gid_map", (int)child_pid);
+   snprintf(map, sizeof(map), "0 %d 1\n", (int)gid);
+   if (write_file(path, map) != 0)
+      return -1;
+
+   return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * Internal: essentials to bind-mount in any sandboxed environment.
+ * ---------------------------------------------------------------------- */
+
+static const char *const g_essential_paths[] = {
+    "/bin",       "/usr/bin",    "/usr/lib",   "/usr/lib64",
+    "/lib",       "/lib64",      "/lib32",     "/etc/resolv.conf",
+    "/etc/hosts", "/etc/passwd", "/etc/group", "/etc/ssl",
+    "/proc",      "/dev",        "/sys",       "/tmp",
+    NULL,
+};
+
+/* Bind-mount src → dst (create mountpoint as needed).
+ * Returns 0 on success, -1 on error (errno set). */
+static int bind_mount(const char *src, const char *dst)
+{
+   struct stat st;
+   if (stat(src, &st) != 0)
+      return 0; /* source doesn't exist — skip silently */
+
+   if (S_ISDIR(st.st_mode))
+   {
+      if (mkdir(dst, 0755) != 0 && errno != EEXIST)
+         return -1;
+   }
+   else
+   {
+      /* File — create empty target */
+      int fd = open(dst, O_WRONLY | O_CREAT, 0644);
+      if (fd < 0 && errno != EEXIST)
+         return -1;
+      if (fd >= 0)
+         close(fd);
+   }
+
+   if (mount(src, dst, NULL, MS_BIND | MS_REC, NULL) != 0)
+      return -1;
+
+   return 0;
+}
+
+static int sandbox_path_is_abs_clean(const char *path)
+{
+   return path && path[0] == '/' && strstr(path, "/../") == NULL && strcmp(path, "/..") != 0 &&
+          strstr(path, "/..") == NULL;
+}
+
+static void mkdir_sandbox_parents(const char *sandbox_root, char *dst)
+{
+   size_t root_len = strlen(sandbox_root);
+   for (char *p = dst + root_len + 1; *p; p++)
+   {
+      if (*p == '/')
+      {
+         *p = '\0';
+         mkdir(dst, 0755);
+         *p = '/';
+      }
+   }
+}
+
+static void bind_mount_abs_path(const char *sandbox_root, const char *src)
+{
+   if (!sandbox_path_is_abs_clean(src))
+      return;
+
+   char dst[SANDBOX_MAX_PATH_LEN];
+   int n = snprintf(dst, sizeof(dst), "%s%s", sandbox_root, src);
+   if (n < 0 || (size_t)n >= sizeof(dst))
+      return;
+   mkdir_sandbox_parents(sandbox_root, dst);
+   bind_mount(src, dst);
+}
+
+static int bind_mount_abs_path_required(const char *sandbox_root, const char *src, int read_only)
+{
+   struct stat st;
+
+   if (!sandbox_path_is_abs_clean(src))
+      return -1;
+   if (stat(src, &st) != 0)
+      return -1;
+
+   char dst[SANDBOX_MAX_PATH_LEN];
+   int n = snprintf(dst, sizeof(dst), "%s%s", sandbox_root, src);
+   if (n < 0 || (size_t)n >= sizeof(dst))
+      return -1;
+   mkdir_sandbox_parents(sandbox_root, dst);
+   if (bind_mount(src, dst) != 0)
+      return -1;
+   if (read_only && mount(dst, dst, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY | MS_REC, NULL) != 0)
+   {
+      log_warn("sandbox: failed to remount %s read-only: %s", src, strerror(errno));
+      return -1;
+   }
+   return 0;
+}
+
+static void bind_mount_parent_abs_path(const char *sandbox_root, const char *path)
+{
+   if (!sandbox_path_is_abs_clean(path))
+      return;
+
+   char parent[SANDBOX_MAX_PATH_LEN];
+   int n = snprintf(parent, sizeof(parent), "%s", path);
+   if (n < 0 || (size_t)n >= sizeof(parent))
+      return;
+
+   char *slash = strrchr(parent, '/');
+   if (!slash || slash == parent)
+      return;
+   *slash = '\0';
+   bind_mount_abs_path(sandbox_root, parent);
+}
+
+static void bind_mount_executable_parent(const char *sandbox_root, const char *path)
+{
+   if (!sandbox_path_is_abs_clean(path))
+      return;
+
+   char parent[SANDBOX_MAX_PATH_LEN];
+   int n = snprintf(parent, sizeof(parent), "%s", path);
+   if (n < 0 || (size_t)n >= sizeof(parent))
+      return;
+
+   char *slash = strrchr(parent, '/');
+   if (!slash || slash == parent)
+      return;
+   *slash = '\0';
+   bind_mount_abs_path(sandbox_root, parent);
+}
+
+static int sandbox_path_has_dir(const char *path_env, const char *dir)
+{
+   if (!path_env || !dir || !dir[0])
+      return 0;
+   size_t dir_len = strlen(dir);
+   const char *p = path_env;
+   while (*p)
+   {
+      const char *colon = strchr(p, ':');
+      size_t len = colon ? (size_t)(colon - p) : strlen(p);
+      if (len == dir_len && strncmp(p, dir, dir_len) == 0)
+         return 1;
+      if (!colon)
+         break;
+      p = colon + 1;
+   }
+   return 0;
+}
+
+static int sandbox_dir_has_aimee(const char *dir)
+{
+   if (!dir || !dir[0])
+      return 0;
+   char candidate[SANDBOX_MAX_PATH_LEN];
+   int n = snprintf(candidate, sizeof(candidate), "%s/aimee", dir);
+   return n > 0 && (size_t)n < sizeof(candidate) && access(candidate, X_OK) == 0;
+}
+
+static void sandbox_prepend_path_dir(char *buf, size_t buf_len, const char *dir)
+{
+   if (!buf || buf_len == 0 || !sandbox_dir_has_aimee(dir) || sandbox_path_has_dir(buf, dir))
+      return;
+
+   char old[8192];
+   snprintf(old, sizeof(old), "%s", buf);
+   if (old[0])
+      snprintf(buf, buf_len, "%s:%s", dir, old);
+   else
+      snprintf(buf, buf_len, "%s", dir);
+}
+
+static void sandbox_prepare_child_path(void)
+{
+   char path_buf[8192];
+   const char *old_path = getenv("PATH");
+   snprintf(path_buf, sizeof(path_buf), "%s", old_path ? old_path : "");
+
+   char exe[SANDBOX_MAX_PATH_LEN];
+   ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+   if (n > 0)
+   {
+      exe[n] = '\0';
+      char *slash = strrchr(exe, '/');
+      if (slash && slash != exe)
+      {
+         *slash = '\0';
+         sandbox_prepend_path_dir(path_buf, sizeof(path_buf), exe);
+      }
+   }
+
+   const char *home = getenv("HOME");
+   if (home && home[0])
+   {
+      char local_bin[SANDBOX_MAX_PATH_LEN];
+      int hn = snprintf(local_bin, sizeof(local_bin), "%s/.local/bin", home);
+      if (hn > 0 && (size_t)hn < sizeof(local_bin))
+         sandbox_prepend_path_dir(path_buf, sizeof(path_buf), local_bin);
+   }
+
+   sandbox_prepend_path_dir(path_buf, sizeof(path_buf), "/usr/local/bin");
+   if (path_buf[0])
+      setenv("PATH", path_buf, 1);
+}
+
+static void bind_aimee_cli_paths(const char *sandbox_root)
+{
+   char exe[SANDBOX_MAX_PATH_LEN];
+   ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+   if (n > 0)
+   {
+      exe[n] = '\0';
+      bind_mount_executable_parent(sandbox_root, exe);
+   }
+
+   const char *path_env = getenv("PATH");
+   if (!path_env || !path_env[0])
+      return;
+
+   const char *p = path_env;
+   while (*p)
+   {
+      const char *colon = strchr(p, ':');
+      size_t len = colon ? (size_t)(colon - p) : strlen(p);
+      if (len > 0 && p[0] == '/' && len < SANDBOX_MAX_PATH_LEN)
+      {
+         char dir[SANDBOX_MAX_PATH_LEN];
+         char candidate[SANDBOX_MAX_PATH_LEN];
+         memcpy(dir, p, len);
+         dir[len] = '\0';
+         int cn = snprintf(candidate, sizeof(candidate), "%s/aimee", dir);
+         if (cn > 0 && (size_t)cn < sizeof(candidate) && access(candidate, X_OK) == 0)
+            bind_mount_abs_path(sandbox_root, dir);
+      }
+      if (!colon)
+         break;
+      p = colon + 1;
+   }
+
+   const char *home = getenv("HOME");
+   if (home && home[0])
+   {
+      char local_bin[SANDBOX_MAX_PATH_LEN];
+      int hn = snprintf(local_bin, sizeof(local_bin), "%s/.local/bin", home);
+      if (hn > 0 && (size_t)hn < sizeof(local_bin) && sandbox_dir_has_aimee(local_bin))
+         bind_mount_abs_path(sandbox_root, local_bin);
+   }
+   if (sandbox_dir_has_aimee("/usr/local/bin"))
+      bind_mount_abs_path(sandbox_root, "/usr/local/bin");
+}
+
+static void bind_aimee_runtime_paths(const char *sandbox_root)
+{
+   /* Delegate shell tools need the active aimee runtime sockets even in
+    * workspace-only sandboxes; otherwise `aimee index` and `aimee memory`
+    * see an empty/unavailable runtime instead of the parent service. */
+   bind_mount_abs_path(sandbox_root, aimee_home());
+   bind_aimee_cli_paths(sandbox_root);
+
+   const char *sock = getenv("AIMEE_SOCK");
+   if (sock && sock[0])
+      bind_mount_parent_abs_path(sandbox_root, sock);
+}
+
+/* -------------------------------------------------------------------------
+ * Internal: set up the mount namespace inside the child.
+ *
+ * Strategy:
+ *   1. Create a tmpfs at /tmp/aimee-sandbox-XXXXXX as the new root.
+ *   2. Bind-mount selected paths into it.
+ *   3. pivot_root or chroot into it.
+ * ---------------------------------------------------------------------- */
+
+static int setup_mount_ns(const sandbox_config_t *cfg, const char *workspace,
+                          const char *read_only_path, const char *write_path)
+{
+   /* Create a private tmpfs to serve as the sandbox root */
+   char sandbox_root[] = "/tmp/aimee-sandbox-XXXXXX";
+   if (mkdtemp(sandbox_root) == NULL)
+      return -1;
+
+   /* Mount tmpfs at sandbox root */
+   if (mount("none", sandbox_root, "tmpfs", 0, "size=64m") != 0)
+   {
+      rmdir(sandbox_root);
+      return -1;
+   }
+
+   /* Bind essential system paths */
+   for (int i = 0; g_essential_paths[i]; i++)
+   {
+      char dst[SANDBOX_MAX_PATH_LEN];
+      snprintf(dst, sizeof(dst), "%s%s", sandbox_root, g_essential_paths[i]);
+      /* Ignore errors for optional paths (e.g., /lib64 may not exist) */
+      bind_mount(g_essential_paths[i], dst);
+   }
+
+   bind_aimee_runtime_paths(sandbox_root);
+
+   if (read_only_path && read_only_path[0] &&
+       bind_mount_abs_path_required(sandbox_root, read_only_path, 1) != 0)
+      return -1;
+   if (write_path && write_path[0] &&
+       bind_mount_abs_path_required(sandbox_root, write_path, 0) != 0)
+      return -1;
+
+   /* Bind workspace or allowlist paths */
+   if (cfg->mode == SANDBOX_MODE_WORKSPACE_ONLY && workspace && workspace[0])
+   {
+      char dst[SANDBOX_MAX_PATH_LEN];
+      snprintf(dst, sizeof(dst), "%s%s", sandbox_root, workspace);
+      mkdir_sandbox_parents(sandbox_root, dst);
+      bind_mount(workspace, dst);
+   }
+   else if (cfg->mode == SANDBOX_MODE_ALLOWLIST)
+   {
+      for (int i = 0; i < cfg->allow_path_count; i++)
+      {
+         const char *src = cfg->allow_paths[i];
+         char dst[SANDBOX_MAX_PATH_LEN];
+         snprintf(dst, sizeof(dst), "%s%s", sandbox_root, src);
+         mkdir_sandbox_parents(sandbox_root, dst);
+         bind_mount(src, dst);
+      }
+   }
+
+   /* chroot into the sandbox root */
+   if (chroot(sandbox_root) != 0)
+      return -1;
+   if (chdir("/") != 0)
+      return -1;
+
+   /* Change CWD to workspace if it exists inside sandbox */
+   if (workspace && workspace[0])
+      chdir(workspace); /* best-effort: ignore if not present */
+
+   return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * Synchronisation pipe: parent signals child once uid/gid maps are written.
+ * ---------------------------------------------------------------------- */
+
+static int g_sync_pipe[2] = {-1, -1};
+
+static void sync_parent_signal(void)
+{
+   char c = 'r';
+   (void)write(g_sync_pipe[1], &c, 1);
+   close(g_sync_pipe[1]);
+   g_sync_pipe[1] = -1;
+}
+
+static void sync_child_wait(void)
+{
+   char c;
+   (void)read(g_sync_pipe[0], &c, 1);
+   close(g_sync_pipe[0]);
+   g_sync_pipe[0] = -1;
+}
+
+/* -------------------------------------------------------------------------
+ * sandbox_exec: fork the child under the configured namespaces.
+ * ---------------------------------------------------------------------- */
+
+static pid_t sandbox_exec_internal(const sandbox_config_t *cfg, const char *cmd, int out_fd,
+                                   int err_fd, const char *workspace, const char *read_only_path,
+                                   const char *write_path, int require_isolation)
+{
+   if (!cfg || cfg->mode == SANDBOX_MODE_OFF)
+   {
+      if (require_isolation)
+         return -1;
+      /* Plain fork/exec — existing behaviour */
+      pid_t pid = fork();
+      if (pid == 0)
+      {
+         dup2(out_fd, STDOUT_FILENO);
+         dup2(err_fd, STDERR_FILENO);
+         if (workspace && workspace[0])
+            chdir(workspace);
+         sandbox_prepare_child_path();
+         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+         _exit(127);
+      }
+      return pid;
+   }
+
+   /* Check availability; fall back with a warning if not possible */
+   const char *unavail_reason = NULL;
+   if (!sandbox_available(&unavail_reason))
+   {
+      if (require_isolation)
+      {
+         log_warn("sandbox: unavailable (%s) — refusing unsandboxed guarded execution",
+                  unavail_reason ? unavail_reason : "unknown reason");
+         return -1;
+      }
+      log_warn("sandbox: unavailable (%s) — running unsandboxed",
+               unavail_reason ? unavail_reason : "unknown reason");
+      pid_t pid = fork();
+      if (pid == 0)
+      {
+         dup2(out_fd, STDOUT_FILENO);
+         dup2(err_fd, STDERR_FILENO);
+         if (workspace && workspace[0])
+            chdir(workspace);
+         sandbox_prepare_child_path();
+         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+         _exit(127);
+      }
+      return pid;
+   }
+
+   if (pipe(g_sync_pipe) != 0)
+      return -1;
+   int setup_pipe[2] = {-1, -1};
+   if (require_isolation && pipe(setup_pipe) != 0)
+   {
+      close(g_sync_pipe[0]);
+      close(g_sync_pipe[1]);
+      return -1;
+   }
+
+   /* Clone with a new user namespace */
+   int clone_flags = CLONE_NEWUSER | SIGCHLD;
+
+   /* Add mount namespace for filesystem isolation */
+   if (cfg->mode != SANDBOX_MODE_OFF)
+      clone_flags |= CLONE_NEWNS;
+
+   /* Optionally isolate network */
+   if (cfg->network_isolated)
+      clone_flags |= CLONE_NEWNET;
+
+   pid_t pid = fork();
+   if (pid < 0)
+   {
+      close(g_sync_pipe[0]);
+      close(g_sync_pipe[1]);
+      if (setup_pipe[0] >= 0)
+         close(setup_pipe[0]);
+      if (setup_pipe[1] >= 0)
+         close(setup_pipe[1]);
+      return -1;
+   }
+
+   if (pid == 0)
+   {
+      /* Child — wait for uid/gid map to be written before doing anything */
+      close(g_sync_pipe[1]);
+      g_sync_pipe[1] = -1;
+      if (setup_pipe[0] >= 0)
+         close(setup_pipe[0]);
+
+      /* Enter user namespace */
+      if (unshare(clone_flags & ~SIGCHLD) != 0)
+      {
+         sync_child_wait();
+         if (require_isolation)
+         {
+            char failed = '0';
+            (void)write(setup_pipe[1], &failed, 1);
+            _exit(126);
+         }
+         /* Fall back: just exec without namespaces */
+         dup2(out_fd, STDOUT_FILENO);
+         dup2(err_fd, STDERR_FILENO);
+         if (workspace && workspace[0])
+            chdir(workspace);
+         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+         _exit(127);
+      }
+
+      sync_child_wait();
+
+      /* Set up mount namespace now that we have uid 0 in the new user ns */
+      if (cfg->mode != SANDBOX_MODE_OFF)
+      {
+         if (setup_mount_ns(cfg, workspace, read_only_path, write_path) != 0)
+         {
+            /* Mount namespace setup failed — exec without FS isolation */
+            if (require_isolation)
+            {
+               char failed = '0';
+               (void)write(setup_pipe[1], &failed, 1);
+               _exit(126);
+            }
+         }
+      }
+
+      if (require_isolation)
+      {
+         char ok = '1';
+         (void)write(setup_pipe[1], &ok, 1);
+         close(setup_pipe[1]);
+      }
+
+      dup2(out_fd, STDOUT_FILENO);
+      dup2(err_fd, STDERR_FILENO);
+      sandbox_prepare_child_path();
+      execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+      _exit(127);
+   }
+
+   /* Parent: write uid/gid maps then signal child */
+   close(g_sync_pipe[0]);
+   g_sync_pipe[0] = -1;
+   if (setup_pipe[1] >= 0)
+      close(setup_pipe[1]);
+
+   if (setup_userns_maps(pid) != 0)
+   {
+      /* Maps failed — signal child anyway so it doesn't hang, then reap */
+      sync_parent_signal();
+      waitpid(pid, NULL, 0);
+      if (setup_pipe[0] >= 0)
+         close(setup_pipe[0]);
+      return -1;
+   }
+
+   sync_parent_signal();
+   if (require_isolation)
+   {
+      char setup_status = '0';
+      ssize_t n = read(setup_pipe[0], &setup_status, 1);
+      close(setup_pipe[0]);
+      if (n != 1 || setup_status != '1')
+      {
+         waitpid(pid, NULL, 0);
+         return -1;
+      }
+   }
+   log_info("sandbox: started pid %d mode=%s network_isolated=%d", (int)pid,
+            sandbox_mode_to_string(cfg->mode), cfg->network_isolated);
+   return pid;
+}
+
+pid_t sandbox_exec(const sandbox_config_t *cfg, const char *cmd, int out_fd, int err_fd,
+                   const char *workspace)
+{
+   return sandbox_exec_internal(cfg, cmd, out_fd, err_fd, workspace, NULL, NULL, 0);
+}
+
+pid_t sandbox_exec_with_readonly(const sandbox_config_t *cfg, const char *cmd, int out_fd,
+                                 int err_fd, const char *workspace, const char *read_only_path,
+                                 const char *write_path)
+{
+   return sandbox_exec_internal(cfg, cmd, out_fd, err_fd, workspace, read_only_path, write_path, 1);
+}
+
+#endif /* __linux__ */

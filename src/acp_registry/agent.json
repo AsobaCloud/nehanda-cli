@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "aimee",
+  "display_name": "aimee",
+  "description": "Local-first homelab and code agent with persistent memory and delegation.",
+  "icon": "icon.svg",
+  "distribution": {
+    "type": "command",
+    "command": "aimee",
+    "args": ["acp-serve"]
+  }
+}

@@ -1,0 +1,17 @@
+# benchmarks/targets/mem0/pin.toml
+# Runtime pins for the mem0 target adapter.
+#
+# mem0 is installed via pip (mem0ai). Record the pinned version here after
+# the initial calibration run so results are reproducible.
+
+[target]
+name = "mem0"
+adapter_version = "1"
+capabilities = ["memory_ingest", "memory_answer"]
+
+[runtime]
+binary = ""
+package = "mem0ai"
+package_version = ""
+config_hash_required = false
+deterministic = false

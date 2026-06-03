@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "proposal": "effectiveness-weighted-code-vector-graph",
+  "phase": 7,
+  "description": "Ablation matrix for graph-vector-code fusion. Each arm sets the config gates listed and is run against the production-gate corpus. The eval harness records Recall@{1,5,10}, MRR, nDCG, and answer-citation accuracy per arm, plus p95 latency. Promotion to default requires the full-fusion arm to beat the baseline arm on the agreed gates while staying within the latency budget.",
+  "metrics": ["recall@1", "recall@5", "recall@10", "mrr", "ndcg@10", "citation_accuracy", "p95_latency_ms"],
+  "promotion_gate": {
+    "note": "Provisional thresholds; the implementation PR may replace with an explicit precision/recall tradeoff + non-regression bound after measuring the live baseline.",
+    "recall@10_min_gain_pp": 15.0,
+    "mrr_min_gain": 0.10,
+    "p95_latency_max_overhead_pct": 25.0,
+    "baseline_arm": "baseline"
+  },
+  "arms": [
+    {
+      "name": "baseline",
+      "description": "Fusion off — existing lexical/semantic/graph memory recall.",
+      "config": {
+        "memory.recall.graph_code_fusion_state": "off",
+        "memory.recall.code_vectors_enabled": 0,
+        "memory.graph.utility_scoring_enabled": 0,
+        "memory.graph.code_projection_enabled": 0
+      }
+    },
+    {
+      "name": "structural_graph_only",
+      "description": "Code graph projection edges with structural trust, no code vectors, no learned utility.",
+      "config": {
+        "memory.recall.graph_code_fusion_state": "shadow",
+        "memory.recall.code_vectors_enabled": 0,
+        "memory.graph.utility_scoring_enabled": 0,
+        "memory.graph.code_projection_enabled": 1
+      }
+    },
+    {
+      "name": "structural_graph_plus_code_vectors",
+      "description": "Structural graph + code vector recall, no learned utility.",
+      "config": {
+        "memory.recall.graph_code_fusion_state": "shadow",
+        "memory.recall.code_vectors_enabled": 1,
+        "memory.graph.utility_scoring_enabled": 0,
+        "memory.graph.code_projection_enabled": 1
+      }
+    },
+    {
+      "name": "fusion_without_learned_utility",
+      "description": "Full graph-vector fusion rerank but utility scoring disabled.",
+      "config": {
+        "memory.recall.graph_code_fusion_state": "on",
+        "memory.recall.code_vectors_enabled": 1,
+        "memory.graph.utility_scoring_enabled": 0,
+        "memory.graph.code_projection_enabled": 1
+      }
+    },
+    {
+      "name": "learned_utility_replay_only",
+      "description": "Replay recorded utility feedback, no structural code bias (code structural_factor = 1.0).",
+      "config": {
+        "memory.recall.graph_code_fusion_state": "on",
+        "memory.recall.code_vectors_enabled": 0,
+        "memory.graph.utility_scoring_enabled": 1,
+        "memory.graph.code_projection_enabled": 1,
+        "memory.graph.code_structural_factor_disabled": 1
+      }
+    },
+    {
+      "name": "utility_cap_default",
+      "description": "Full fusion with default utility cap [-0.5, 2.0].",
+      "config": {
+        "memory.recall.graph_code_fusion_state": "on",
+        "memory.recall.code_vectors_enabled": 1,
+        "memory.graph.utility_scoring_enabled": 1,
+        "memory.graph.code_projection_enabled": 1,
+        "memory.graph.utility_cap": "default"
+      }
+    },
+    {
+      "name": "utility_cap_rebalanced",
+      "description": "Full fusion with rebalanced utility cap [-0.25, 1.0] for sparse feedback.",
+      "config": {
+        "memory.recall.graph_code_fusion_state": "on",
+        "memory.recall.code_vectors_enabled": 1,
+        "memory.graph.utility_scoring_enabled": 1,
+        "memory.graph.code_projection_enabled": 1,
+        "memory.graph.utility_cap": "rebalanced"
+      }
+    },
+    {
+      "name": "code_structural_factor_disabled",
+      "description": "Full fusion but code structural_factor forced to 1.0 (ablate cold-start code bias).",
+      "config": {
+        "memory.recall.graph_code_fusion_state": "on",
+        "memory.recall.code_vectors_enabled": 1,
+        "memory.graph.utility_scoring_enabled": 1,
+        "memory.graph.code_projection_enabled": 1,
+        "memory.graph.code_structural_factor_disabled": 1
+      }
+    },
+    {
+      "name": "full_fusion",
+      "description": "All signals on — structural graph + code vectors + learned utility + fusion rerank.",
+      "config": {
+        "memory.recall.graph_code_fusion_state": "on",
+        "memory.recall.code_vectors_enabled": 1,
+        "memory.graph.utility_scoring_enabled": 1,
+        "memory.graph.code_projection_enabled": 1
+      }
+    }
+  ],
+  "latency_arms": [
+    {"name": "graph_expansion_off", "config": {"memory.recall.graph_code_fusion_state": "off"}},
+    {"name": "graph_expansion_shadow", "config": {"memory.recall.graph_code_fusion_state": "shadow"}},
+    {"name": "graph_expansion_on", "config": {"memory.recall.graph_code_fusion_state": "on"}}
+  ]
+}

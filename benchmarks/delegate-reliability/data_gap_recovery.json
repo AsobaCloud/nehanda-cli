@@ -1,0 +1,11 @@
+{
+  "name": "data_gap_recovery",
+  "role": "execute",
+  "prompt": "First try to inspect a definitely missing file named /tmp/aimee-delegate-reliability-missing-file. Then recover by inspecting README.md and respond with recovered-after-missing.",
+  "success_check": {
+    "type": "contains",
+    "value": "recovered-after-missing"
+  },
+  "max_turns": 6,
+  "max_latency_ms": 60000
+}

@@ -1,0 +1,21 @@
+#ifndef DEC_KB_CURATOR_DRAIN_H
+#define DEC_KB_CURATOR_DRAIN_H 1
+
+#include <pthread.h>
+
+typedef struct
+{
+   pthread_t thread;
+   int active;
+   volatile int stop;
+} kb_curator_drain_ctx_t;
+
+/* Initialise and start the curator drain thread.
+ * No-op if both kb_curator_extract_docs_enabled and
+ * kb_curator_extract_code_enabled are 0 (default). */
+void kb_curator_drain_init(kb_curator_drain_ctx_t *ctx);
+
+/* Stop the drain thread and wait for it to exit. */
+void kb_curator_drain_shutdown(kb_curator_drain_ctx_t *ctx);
+
+#endif /* DEC_KB_CURATOR_DRAIN_H */

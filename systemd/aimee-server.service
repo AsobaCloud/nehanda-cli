@@ -1,0 +1,21 @@
+[Unit]
+Description=Aimee Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/aimee-server --persistent
+Restart=on-failure
+RestartSec=5
+# Threads inherit the 8 MB RLIMIT_STACK default; the kb inotify watch
+# thread needs more headroom. 64 MB guards against large per-thread
+# frames (see server_kb_workers.c watch table).
+LimitSTACK=67108864
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/root/.config/aimee
+
+[Install]
+WantedBy=multi-user.target

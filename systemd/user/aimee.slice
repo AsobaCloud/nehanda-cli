@@ -1,0 +1,20 @@
+[Unit]
+Description=Aimee resource-bounded slice
+Before=slices.target
+
+[Slice]
+# Aimee owns interactive server processes, Codex/OpenCode app-server children,
+# MCP children, and short-lived build/verify subprocesses. Keep a real guardrail,
+# but leave enough headroom that normal two-session use does not enter direct
+# reclaim and stall the TUIs while the host still has plenty of free memory.
+CPUQuota=600%
+CPUWeight=50
+
+MemoryHigh=16G
+MemoryMax=24G
+MemorySwapMax=0
+
+TasksMax=768
+
+# Keep aimee lower-priority than the interactive shell.
+IOWeight=50

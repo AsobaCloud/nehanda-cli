@@ -1,0 +1,109 @@
+/* test_json_fluent.c: unit tests for the json_fluent helpers */
+#include "json_fluent.h"
+#include "cJSON.h"
+#include <stdio.h>
+#include <string.h>
+
+#define CHECK(cond)                                                                                \
+   do                                                                                              \
+   {                                                                                               \
+      if (!(cond))                                                                                 \
+      {                                                                                            \
+         fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);                           \
+         return 1;                                                                                 \
+      }                                                                                            \
+   } while (0)
+
+static int test_optional_getters(void)
+{
+   cJSON *o = cJSON_Parse("{\"s\":\"hi\",\"n\":42,\"b\":true,\"d\":3.5}");
+   CHECK(o);
+   CHECK(strcmp(jo_str(o, "s", "def"), "hi") == 0);
+   CHECK(strcmp(jo_str(o, "missing", "def"), "def") == 0);
+   CHECK(jo_str(o, "missing", NULL) == NULL);
+   CHECK(jo_int(o, "n", 0) == 42);
+   CHECK(jo_int(o, "missing", -1) == -1);
+   CHECK(jo_i64(o, "n", 0) == 42);
+   CHECK(jo_num(o, "d", 0) == 3.5);
+   CHECK(jo_bool(o, "b", 0) == 1);
+   CHECK(jo_bool(o, "missing", 1) == 1);
+   /* Wrong type → default */
+   CHECK(jo_int(o, "s", 7) == 7);
+   CHECK(strcmp(jo_str(o, "n", "def"), "def") == 0);
+   /* NULL obj tolerated */
+   CHECK(strcmp(jo_str(NULL, "x", "ok"), "ok") == 0);
+   CHECK(jo_int(NULL, "x", 5) == 5);
+   cJSON_Delete(o);
+   return 0;
+}
+
+static int test_required_getters(void)
+{
+   cJSON *o = cJSON_Parse("{\"name\":\"alice\",\"age\":30}");
+   CHECK(o);
+   const char *s = NULL;
+   CHECK(jo_need_str(o, "name", &s) == 0);
+   CHECK(strcmp(s, "alice") == 0);
+   CHECK(jo_need_str(o, "missing", &s) == -1);
+   CHECK(jo_need_str(o, "age", &s) == -1); /* wrong type */
+   double d = 0;
+   CHECK(jo_need_num(o, "age", &d) == 0);
+   CHECK(d == 30.0);
+   CHECK(jo_need_num(o, "name", &d) == -1);
+   cJSON_Delete(o);
+   return 0;
+}
+
+static int test_null_safe_adds(void)
+{
+   cJSON *o = cJSON_CreateObject();
+   jo_add_str(o, "k", NULL);
+   jo_add_str(o, "j", "v");
+   jo_add_i64(o, "i", 123);
+   jo_add_num(o, "d", 1.5);
+   jo_add_bool(o, "b", 1);
+   CHECK(strcmp(jo_str(o, "k", "x"), "") == 0);
+   CHECK(strcmp(jo_str(o, "j", "x"), "v") == 0);
+   CHECK(jo_i64(o, "i", 0) == 123);
+   CHECK(jo_num(o, "d", 0) == 1.5);
+   CHECK(jo_bool(o, "b", 0) == 1);
+   cJSON_Delete(o);
+   return 0;
+}
+
+static int test_response_builders(void)
+{
+   cJSON *ok = jo_ok();
+   CHECK(strcmp(jo_str(ok, "status", ""), "ok") == 0);
+   cJSON_Delete(ok);
+
+   cJSON *okv = jo_ok_kv("key", "val");
+   CHECK(strcmp(jo_str(okv, "status", ""), "ok") == 0);
+   CHECK(strcmp(jo_str(okv, "key", ""), "val") == 0);
+   cJSON_Delete(okv);
+
+   cJSON *err = jo_err("bad");
+   CHECK(strcmp(jo_str(err, "status", ""), "error") == 0);
+   CHECK(strcmp(jo_str(err, "message", ""), "bad") == 0);
+   cJSON_Delete(err);
+
+   /* NULL message is safe */
+   cJSON *err2 = jo_err(NULL);
+   CHECK(strcmp(jo_str(err2, "message", "x"), "") == 0);
+   cJSON_Delete(err2);
+   return 0;
+}
+
+int main(void)
+{
+   int failed = 0;
+   failed += test_optional_getters();
+   failed += test_required_getters();
+   failed += test_null_safe_adds();
+   failed += test_response_builders();
+   if (failed == 0)
+      printf("test_json_fluent: ok\n");
+   else
+      fprintf(stderr, "test_json_fluent: %d failure(s)\n", failed);
+   return failed ? 1 : 0;
+}

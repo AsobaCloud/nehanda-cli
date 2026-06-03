@@ -1,0 +1,125 @@
+{
+  "description": "Charter fixture corpus for deliberate planning (MCTS + SMT constraint validation). Four shapes: positive (MCTS produces valid terminal plan), false_positive (no valid plan exists; planner must return unsat), regression (case-based repair re-derives passing plan from failure trace), latency (rollout-budget vs plan quality).",
+  "fixtures": [
+    {
+      "id": "positive_db_migration",
+      "shape": "positive",
+      "goal": "migrate coord_jobs to src/db1/ typed API",
+      "risk_classes": ["db-migration", "callsite-sweep"],
+      "expected_plan_mode": "mcts_smt",
+      "constraint_pack": [
+        {"family": "rollback_availability", "requires": "plan.rollback.available == true"},
+        {"family": "verify_before_merge",   "requires": "plan.includes('aimee git verify')"},
+        {"family": "dependency_ordering",   "requires": "all subgoal deps are topologically sorted"}
+      ],
+      "target_plan": {
+        "goal": "migrate coord_jobs to src/db1/ typed API",
+        "subgoals": [
+          {"id": "s1", "desc": "read current coord_jobs shape", "depends_on": []},
+          {"id": "s2", "desc": "add typed db1 accessors",       "depends_on": ["s1"]},
+          {"id": "s3", "desc": "migrate callers",               "depends_on": ["s2"]},
+          {"id": "s4", "desc": "remove old path + verify",      "depends_on": ["s3"]}
+        ],
+        "risk_classes": ["db-migration", "callsite-sweep"],
+        "required_verifications": ["aimee git verify"],
+        "rollback_plan": {"available": true, "kind": "git_reset --soft"}
+      },
+      "metric": "MCTS must produce terminal plan passing all constraints within mcts_budget rollouts"
+    },
+    {
+      "id": "positive_schema_change",
+      "shape": "positive",
+      "goal": "schema change: add session_id column to audit_events table",
+      "risk_classes": ["schema-change"],
+      "expected_plan_mode": "mcts_smt",
+      "constraint_pack": [
+        {"family": "rollback_availability", "requires": "plan.rollback.available == true"},
+        {"family": "verify_before_merge",   "requires": "plan.includes('aimee git verify')"}
+      ],
+      "target_plan": {
+        "goal": "add session_id column to audit_events",
+        "subgoals": [
+          {"id": "s1", "desc": "add column migration", "depends_on": []},
+          {"id": "s2", "desc": "update insert paths",  "depends_on": ["s1"]},
+          {"id": "s3", "desc": "verify + PR",          "depends_on": ["s2"]}
+        ],
+        "risk_classes": ["schema-change"],
+        "required_verifications": ["aimee git verify"],
+        "rollback_plan": {"available": true, "kind": "revert migration"}
+      },
+      "metric": "MCTS must produce terminal plan passing all constraints"
+    },
+    {
+      "id": "false_positive_missing_rollback",
+      "shape": "false_positive",
+      "note": "Destructive plan without rollback must fail SMT constraint validation. Planner must not return a committed plan — must return unsat with capability_scope or rollback_availability violation.",
+      "goal": "drop table legacy_sessions",
+      "risk_classes": ["destructive"],
+      "constraint_pack": [
+        {"family": "rollback_availability", "requires": "plan.rollback.available == true"}
+      ],
+      "candidate_plan": {
+        "goal": "drop table legacy_sessions",
+        "subgoals": [{"id": "s1", "desc": "run DROP TABLE", "depends_on": []}],
+        "risk_classes": ["destructive"],
+        "required_verifications": [],
+        "rollback_plan": {"available": false}
+      },
+      "expected_result": "unsat",
+      "expected_violations": ["rollback_availability"],
+      "metric": "Constraint solver must return unsat with rollback_availability violation"
+    },
+    {
+      "id": "false_positive_missing_verify",
+      "shape": "false_positive",
+      "note": "Plan that omits aimee git verify before merge must fail verify_before_merge constraint.",
+      "goal": "callsite sweep: rename db_get_session to db1_session_get",
+      "risk_classes": ["callsite-sweep"],
+      "constraint_pack": [
+        {"family": "verify_before_merge", "requires": "plan.includes('aimee git verify')"}
+      ],
+      "candidate_plan": {
+        "goal": "callsite sweep rename",
+        "subgoals": [
+          {"id": "s1", "desc": "grep callers", "depends_on": []},
+          {"id": "s2", "desc": "rename + push", "depends_on": ["s1"]}
+        ],
+        "risk_classes": ["callsite-sweep"],
+        "required_verifications": [],
+        "rollback_plan": {"available": true, "kind": "git_reset --soft"}
+      },
+      "expected_result": "unsat",
+      "expected_violations": ["verify_before_merge"],
+      "metric": "Constraint solver must return unsat with verify_before_merge violation"
+    },
+    {
+      "id": "regression_repair_from_failure",
+      "shape": "regression",
+      "note": "Failure trace: db migration plan failed at step s3 (callers not fully migrated). Case-based repair must re-derive a passing plan by injecting a verification sub-step before s4.",
+      "goal": "migrate coord_jobs typed API (repair after failure)",
+      "failure_trace": {
+        "failed_step": "s3",
+        "error": "remaining callers still reference old coord_jobs_get_status",
+        "steps_completed": ["s1", "s2"]
+      },
+      "repair_seed": {
+        "source": "case:coord_jobs_precedent",
+        "recovery_suffix": [
+          {"id": "s3b", "desc": "grep remaining callers",     "depends_on": ["s2"]},
+          {"id": "s3c", "desc": "patch remaining callers",    "depends_on": ["s3b"]},
+          {"id": "s4",  "desc": "remove old path + verify",   "depends_on": ["s3c"]}
+        ]
+      },
+      "metric": "Case-based repair must produce terminal plan passing SMT constraints"
+    },
+    {
+      "id": "latency_budget_curve",
+      "shape": "latency",
+      "note": "Measures plan quality vs rollout budget. Records first valid plan at each budget checkpoint.",
+      "goal": "generic destructive-class task",
+      "risk_classes": ["db-migration"],
+      "budget_checkpoints": [4, 8, 16, 32, 64],
+      "metric": "First valid plan should appear by budget=16 for simple migrations; quality plateau by budget=64"
+    }
+  ]
+}

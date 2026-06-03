@@ -1,0 +1,2 @@
+The ingest pipeline normalizes markdown headings, preserves table context, and emits deterministic chunk records before embedding.
+

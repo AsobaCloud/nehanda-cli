@@ -1,0 +1,11 @@
+{
+  "name": "malformed_format_recovery",
+  "role": "execute",
+  "prompt": "Use a tool to print malformed-format-ok. If your provider cannot emit native tool calls, use any supported fallback tool-call format. Then respond with malformed-format-ok.",
+  "success_check": {
+    "type": "contains",
+    "value": "malformed-format-ok"
+  },
+  "max_turns": 5,
+  "max_latency_ms": 60000
+}

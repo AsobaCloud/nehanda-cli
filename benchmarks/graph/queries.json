@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "description": "Graph reasoning fixture corpus for the Datalog sidecar.",
+  "fixtures": [
+    {
+      "fixture_kind": "positive",
+      "description": "alias_of: direct entity alias edge resolves",
+      "query": "alias_of(?x, ?y)",
+      "bindings": {"?x": "EntityA"},
+      "facts": [
+        ["entity_edge", "EntityA", "alias", "EntityB", "1", "", ""],
+        ["entity_edge", "EntityC", "alias", "EntityD", "1", "", ""]
+      ],
+      "expected_vars": [{"?x": "EntityA", "?y": "EntityB"}],
+      "min_results": 1
+    },
+    {
+      "fixture_kind": "positive",
+      "description": "same_entity: two aliases share canonical",
+      "query": "same_entity(?x, ?y, ?e)",
+      "bindings": {"?x": "AlphaVariant"},
+      "facts": [
+        ["entity_edge", "AlphaVariant", "alias", "CanonicalEntity", "1", "", ""],
+        ["entity_edge", "BetaVariant",  "alias", "CanonicalEntity", "1", "", ""]
+      ],
+      "expected_vars": [{"?x": "AlphaVariant", "?y": "BetaVariant", "?e": "CanonicalEntity"}],
+      "min_results": 1
+    },
+    {
+      "fixture_kind": "positive",
+      "description": "contradicts_link: bidirectional via artifact_link",
+      "query": "contradicts_link(?a, ?b)",
+      "bindings": {},
+      "facts": [
+        ["artifact_link", "art-1", "art-2", "contradicts"]
+      ],
+      "expected_vars": [
+        {"?a": "art-1", "?b": "art-2"},
+        {"?a": "art-2", "?b": "art-1"}
+      ],
+      "min_results": 2
+    },
+    {
+      "fixture_kind": "positive",
+      "description": "contradiction_ok: committed artifacts with contradicts link pass check",
+      "query": "contradiction_ok(?a, ?b)",
+      "bindings": {"?a": "art-committed-1", "?b": "art-committed-2"},
+      "facts": [
+        ["artifact_link", "art-committed-1", "art-committed-2", "contradicts"],
+        ["artifact", "art-committed-1", "synthesis", "committed", "user", "p1",
+         "0.9", "2026-01-01", "", ""],
+        ["artifact", "art-committed-2", "synthesis", "committed", "user", "p1",
+         "0.9", "2026-01-01", "", ""]
+      ],
+      "expected_vars": [{"?a": "art-committed-1", "?b": "art-committed-2"}],
+      "min_results": 1
+    },
+    {
+      "fixture_kind": "false_positive",
+      "description": "contradiction_ok must fail for proposed (not committed) artifacts",
+      "query": "contradiction_ok(?a, ?b)",
+      "bindings": {"?a": "art-proposed-1", "?b": "art-proposed-2"},
+      "facts": [
+        ["artifact_link", "art-proposed-1", "art-proposed-2", "contradicts"],
+        ["artifact", "art-proposed-1", "synthesis", "proposed", "user", "p1",
+         "0.9", "2026-01-01", "", ""],
+        ["artifact", "art-proposed-2", "synthesis", "proposed", "user", "p1",
+         "0.9", "2026-01-01", "", ""]
+      ],
+      "expected_vars": [],
+      "max_results": 0
+    },
+    {
+      "fixture_kind": "positive",
+      "description": "citation_reachable: transitive link chain A->B->C",
+      "query": "citation_reachable(?a, ?c)",
+      "bindings": {"?a": "root"},
+      "facts": [
+        ["artifact_link", "root",  "mid",  "supports"],
+        ["artifact_link", "mid",   "leaf", "supports"]
+      ],
+      "expected_vars": [
+        {"?a": "root", "?c": "mid"},
+        {"?a": "root", "?c": "leaf"}
+      ],
+      "min_results": 2
+    },
+    {
+      "fixture_kind": "positive",
+      "description": "implements: direct implements link",
+      "query": "implements(?claim, ?code)",
+      "bindings": {},
+      "facts": [
+        ["artifact_link", "claim-xyz", "code-abc", "implements"]
+      ],
+      "expected_vars": [{"?claim": "claim-xyz", "?code": "code-abc"}],
+      "min_results": 1
+    },
+    {
+      "fixture_kind": "regression",
+      "description": "citation_reachable must not return results when no links present",
+      "query": "citation_reachable(?a, ?b)",
+      "bindings": {"?a": "isolated"},
+      "facts": [
+        ["artifact", "isolated", "synthesis", "committed", "user", "p1", "1.0", "", ""]
+      ],
+      "expected_vars": [],
+      "max_results": 0
+    }
+  ]
+}

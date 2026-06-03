@@ -1,0 +1,30 @@
+# aimee-kb configuration example (aimee.yaml format).
+#
+# NOTE on format: the owning proposal sketches these examples in TOML for
+# illustration; the actual aimee config loader reads YAML/JSON (aimee.yaml).
+# These examples use the real, loadable schema.
+#
+# ── DB2: canonical rows + pgvector dense index ───────────────────────────
+# pgvector lives INSIDE this Postgres instance (it's a Postgres extension), so
+# there is no separate vector-store URL. install-today provisions
+# postgres:///aimee_shared with the pgvector extension enabled.
+db2_url: "postgres:///aimee_shared"
+
+# ── Public /v1 HTTP API ──────────────────────────────────────────────────
+# http_port = 0 (default) serves /v1 over the Unix socket only (filesystem
+# permission auth, no token). Set a port to expose the TCP listener; it
+# requires a bearer_token and TLS for any non-loopback bind.
+kb:
+  api:
+    http_port: 8443
+    # Bearer token may be self-describing for scoped access:
+    #   scope:<kind>:<id>:<secret>   -> only that scope; cross-scope => 403
+    #   <secret>                     -> unscoped/admin (full access)
+    # See docs/PUBLIC_API.md and src/kb/kb_scope.c.
+    bearer_token: "scope:workspace:homelab:CHANGE_ME"
+
+  # Background curator/ingest worker tuning (optional).
+  # worker_count: 2
+  # background_ingest:
+  #   enabled: true
+  #   interval_hours: 6

@@ -1,0 +1,17 @@
+# benchmarks/targets/aimee/pin.toml
+# Runtime pins for the aimee target adapter.
+#
+# aimee is built from source; the effective version pin is the git commit
+# recorded in every result artifact. There is no GGUF or container digest
+# to record here. config_hash_required=false means the runner will not
+# reject runs whose agents.json hash differs from a recorded value.
+
+[target]
+name = "aimee"
+adapter_version = "1"
+capabilities = ["memory_ingest", "memory_answer"]
+
+[runtime]
+binary = "aimee-client"
+config_hash_required = false
+deterministic = false

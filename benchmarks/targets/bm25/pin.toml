@@ -1,0 +1,15 @@
+# benchmarks/targets/bm25/pin.toml
+# Runtime pins for the BM25 baseline target adapter.
+#
+# BM25 is a pure-Python implementation with no external binary or model.
+# deterministic=true means results are reproducible across runs without seeds.
+
+[target]
+name = "bm25"
+adapter_version = "1"
+capabilities = ["memory_ingest", "memory_answer"]
+
+[runtime]
+binary = ""
+config_hash_required = false
+deterministic = true

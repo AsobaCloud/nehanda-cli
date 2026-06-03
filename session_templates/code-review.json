@@ -1,0 +1,26 @@
+{
+  "name": "code-review",
+  "description": "Structured code review with independent reviewers",
+  "phases": [
+    {
+      "name": "initial-review",
+      "participants": [
+        { "role": "reviewer" },
+        { "role": "reviewer" }
+      ]
+    },
+    {
+      "name": "rebuttal",
+      "participants": [
+        { "role": "author" }
+      ]
+    },
+    {
+      "name": "final-verdict",
+      "participants": [
+        { "role": "reviewer" },
+        { "role": "reviewer" }
+      ]
+    }
+  ]
+}

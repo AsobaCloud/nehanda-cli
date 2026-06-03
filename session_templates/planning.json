@@ -1,0 +1,24 @@
+{
+  "name": "planning",
+  "description": "Collaborative planning with critique and synthesis",
+  "phases": [
+    {
+      "name": "brainstorm",
+      "participants": [
+        { "role": "planner" }
+      ]
+    },
+    {
+      "name": "critique",
+      "participants": [
+        { "role": "critic" }
+      ]
+    },
+    {
+      "name": "synthesis",
+      "participants": [
+        { "role": "planner" }
+      ]
+    }
+  ]
+}

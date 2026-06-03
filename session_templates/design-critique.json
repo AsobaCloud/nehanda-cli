@@ -1,0 +1,24 @@
+{
+  "name": "design-critique",
+  "description": "Design review with presentation, feedback, and revision",
+  "phases": [
+    {
+      "name": "presentation",
+      "participants": [
+        { "role": "author" }
+      ]
+    },
+    {
+      "name": "feedback",
+      "participants": [
+        { "role": "critic" }
+      ]
+    },
+    {
+      "name": "revision",
+      "participants": [
+        { "role": "author" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1910 @@
+openapi: "3.1.0"
+info:
+  title: aimee-kb API
+  version: "1"
+  description: |
+    Public HTTP API for the aimee knowledge-base sidecar (aimee-kb).
+    Enabled by setting kb.api.http_port in aimee config.
+    Optional bearer-token auth via kb.api.bearer_token.
+
+servers:
+  - url: "http://127.0.0.1:{port}/v1"
+    variables:
+      port:
+        default: "8090"
+        description: Configured kb_api_http_port
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    HealthResponse:
+      # Operational liveness + dependency status. The payload is diagnostic and
+      # may grow new fields; additionalProperties is true so generated SDK
+      # clients accept forward-compatible additions.
+      type: object
+      additionalProperties: true
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: "ok when healthy; a non-ok string when degraded"
+        db2_ok:
+          type: boolean
+          description: DB2 (Postgres) reachable
+        db2_kb_tables_ok:
+          type: boolean
+          description: required kb tables present
+        pgvec_ok:
+          type: boolean
+          description: pgvector extension available
+        pgvec_collection_ok:
+          type: boolean
+        embed_ok:
+          type: boolean
+        embed_command:
+          type: string
+        chunk_count:
+          type: integer
+        embedding_count:
+          type: integer
+        warnings:
+          type: array
+          items:
+            type: string
+
+    VersionResponse:
+      type: object
+      required: [version, service]
+      properties:
+        version:
+          type: string
+          example: "0.2.0"
+        service:
+          type: string
+          example: "aimee-kb"
+
+    CapabilitiesResponse:
+      type: object
+      required: [capabilities, version]
+      properties:
+        capabilities:
+          type: array
+          items:
+            type: string
+          example: ["memory", "search", "index"]
+        version:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    # ── Phase 3–4: Ingest API and corpus staging schemas ───────────────────
+
+    DocIngestResponse:
+      type: object
+      properties:
+        doc_id:
+          type: integer
+          format: int64
+        state:
+          type: string
+          enum: [staged]
+
+    DocsManifestRequest:
+      type: object
+      required: [docs]
+      properties:
+        scope:
+          type: string
+          default: global
+        docs:
+          type: array
+          items:
+            type: object
+            required: [content_hash]
+            properties:
+              doc_key:
+                type: string
+              path:
+                type: string
+              content_hash:
+                type: string
+              scope:
+                type: string
+
+    DocsManifestResponse:
+      type: object
+      required: [missing, total, present, missing_count]
+      properties:
+        missing:
+          type: array
+          items:
+            type: object
+            properties:
+              doc_key:
+                type: string
+              content_hash:
+                type: string
+              scope:
+                type: string
+        total:
+          type: integer
+        present:
+          type: integer
+        missing_count:
+          type: integer
+
+    DocMetadataResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        filename:
+          type: string
+        content_hash:
+          type: string
+        converter:
+          type: string
+        converter_version:
+          type: string
+        scope:
+          type: string
+        state:
+          type: string
+        review_needed:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    ReviewQueueResponse:
+      type: object
+      properties:
+        docs:
+          type: array
+          items:
+            $ref: "#/components/schemas/DocMetadataResponse"
+        next_cursor:
+          type: integer
+          format: int64
+          nullable: true
+
+    ReviewAcceptRequest:
+      type: object
+      properties:
+        release_id:
+          type: integer
+          format: int64
+
+    ReviewRejectRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+
+    CreateReleaseRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+
+    CreateReleaseResponse:
+      type: object
+      properties:
+        release_id:
+          type: integer
+          format: int64
+        state:
+          type: string
+          enum: [pending]
+
+    RollbackRequest:
+      type: object
+      properties:
+        target_release_id:
+          type: integer
+          format: int64
+
+    ActiveReleaseResponse:
+      type: object
+      properties:
+        release_id:
+          type: integer
+          format: int64
+          nullable: true
+        name:
+          type: string
+        state:
+          type: string
+        promoted_at:
+          type: string
+
+    # ── Phase 5: Retrieval schemas ──────────────────────────────────────────
+
+    SearchHit:
+      type: object
+      properties:
+        artifact_id:
+          type: string
+        score:
+          type: number
+          format: double
+        kind:
+          type: string
+        excerpt:
+          type: string
+        citations:
+          type: array
+          items:
+            type: object
+            properties:
+              source_kind:
+                type: string
+              source_id:
+                type: string
+
+    SearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        project:
+          type: string
+        scope_kind:
+          type: string
+        scope_id:
+          type: string
+        max_results:
+          type: integer
+          default: 10
+        fusion_mode:
+          type: string
+        cursor:
+          type: string
+
+    SearchResponse:
+      type: object
+      properties:
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchHit"
+        next_cursor:
+          type: string
+          nullable: true
+        total_hits:
+          type: integer
+        fusion_mode_used:
+          type: string
+
+    ArtifactResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+        state:
+          type: string
+        scope_kind:
+          type: string
+        scope_id:
+          type: string
+        confidence:
+          type: number
+          format: double
+        payload:
+          type: object
+        citations:
+          type: array
+          items:
+            type: object
+            properties:
+              source_kind:
+                type: string
+              source_id:
+                type: string
+        updated_at:
+          type: string
+          format: date-time
+
+    ArtifactLinksResponse:
+      type: object
+      properties:
+        artifact_id:
+          type: string
+        links:
+          type: array
+          items:
+            type: object
+            properties:
+              to_id:
+                type: string
+              link_kind:
+                type: string
+
+    CodeFindHit:
+      type: object
+      properties:
+        project:
+          type: string
+        file_path:
+          type: string
+        line:
+          type: integer
+        kind:
+          type: string
+
+    CodeFindResponse:
+      type: object
+      properties:
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/CodeFindHit"
+        next_cursor:
+          type: string
+          nullable: true
+
+    CodeSearchHit:
+      type: object
+      properties:
+        project:
+          type: string
+        file_path:
+          type: string
+        snippet:
+          type: string
+        rank:
+          type: number
+          format: double
+
+    CodeSearchResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/CodeSearchHit"
+        next_cursor:
+          type: string
+          nullable: true
+
+    CodeCallerHit:
+      type: object
+      properties:
+        project:
+          type: string
+        file_path:
+          type: string
+        caller:
+          type: string
+        line:
+          type: integer
+
+    CodeCallersResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/CodeCallerHit"
+        next_cursor:
+          type: string
+          nullable: true
+
+    CodeDefinition:
+      type: object
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+        line:
+          type: integer
+
+    CodeStructureResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        definitions:
+          type: array
+          items:
+            $ref: "#/components/schemas/CodeDefinition"
+
+    CodeProjectLanguage:
+      type: object
+      properties:
+        lang:
+          type: string
+        count:
+          type: integer
+
+    CodeProjectStatsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        project:
+          type: string
+        files:
+          type: integer
+        definitions:
+          type: integer
+        langs:
+          type: array
+          items:
+            $ref: "#/components/schemas/CodeProjectLanguage"
+
+    CodeProject:
+      type: object
+      properties:
+        name:
+          type: string
+        root:
+          type: string
+        scanned_at:
+          type: string
+
+    CodeProjectsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/CodeProject"
+        next_cursor:
+          type: string
+          nullable: true
+
+    BlastRadiusResponse:
+      type: object
+      properties:
+        file:
+          type: string
+        dependents:
+          type: array
+          items:
+            type: string
+        dependent_count:
+          type: integer
+        dependencies:
+          type: array
+          items:
+            type: string
+        dependency_count:
+          type: integer
+
+    CodeScanRequest:
+      type: object
+      required: [project, root_path]
+      properties:
+        project:
+          type: string
+        root_path:
+          type: string
+        force:
+          type: boolean
+          default: false
+
+    CodeScanResponse:
+      type: object
+      required: [status, skipped, project, files, inspected]
+      properties:
+        status:
+          type: string
+          example: ok
+        skipped:
+          type: boolean
+        project:
+          type: string
+        files:
+          type: integer
+        inspected:
+          type: integer
+
+    CodeBuildRequest:
+      type: object
+      required: [path, project]
+      properties:
+        path:
+          type: string
+        project:
+          type: string
+        embedding_command:
+          type: string
+        force:
+          type: boolean
+          default: false
+
+    CodeUpdateRequest:
+      type: object
+      required: [path, project]
+      properties:
+        path:
+          type: string
+        project:
+          type: string
+        embedding_command:
+          type: string
+
+    CodeBuildResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        project:
+          type: string
+        files_scanned:
+          type: integer
+        files_indexed:
+          type: integer
+        files_skipped:
+          type: integer
+        files_removed:
+          type: integer
+        chunks_added:
+          type: integer
+        chunks_removed:
+          type: integer
+        embeddings_added:
+          type: integer
+
+    CodeUpdateResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        project:
+          type: string
+        files_scanned:
+          type: integer
+        files_indexed:
+          type: integer
+        files_skipped:
+          type: integer
+        files_removed:
+          type: integer
+        chunks_added:
+          type: integer
+        chunks_removed:
+          type: integer
+        embeddings_added:
+          type: integer
+
+    MaintenanceRepairRequest:
+      type: object
+      required: [path, project]
+      properties:
+        path:
+          type: string
+        project:
+          type: string
+        embedding_command:
+          type: string
+
+    MaintenanceRepairResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        project:
+          type: string
+        files_scanned:
+          type: integer
+        files_indexed:
+          type: integer
+        files_skipped:
+          type: integer
+        files_removed:
+          type: integer
+        chunks_added:
+          type: integer
+        chunks_removed:
+          type: integer
+        embeddings_added:
+          type: integer
+
+    MaintenanceReconcileRequest:
+      type: object
+      properties:
+        dry_run:
+          type: boolean
+          default: false
+
+    MaintenanceReconcileResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        rc:
+          type: integer
+        dry_run:
+          type: boolean
+        memory:
+          type: object
+          properties:
+            kept:
+              type: integer
+              format: int64
+            pruned:
+              type: integer
+              format: int64
+        kb:
+          type: object
+          properties:
+            kept:
+              type: integer
+              format: int64
+            pruned:
+              type: integer
+              format: int64
+
+    MaintenanceClearRequest:
+      type: object
+      required: [project]
+      properties:
+        project:
+          type: string
+
+    MaintenanceClearResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        project:
+          type: string
+        chunks_deleted:
+          type: integer
+
+    PipelineStatusResponse:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [idle, running, failed]
+        queue_depth:
+          type: integer
+        active_jobs:
+          type: array
+          items:
+            type: object
+        queue:
+          type: object
+          properties:
+            pending:
+              type: integer
+            running:
+              type: integer
+            done:
+              type: integer
+            failed:
+              type: integer
+            total:
+              type: integer
+
+    JobStatusResponse:
+      type: object
+      required: [id, kind, document_id, project, status, attempts]
+      properties:
+        id:
+          type: integer
+          format: int64
+        kind:
+          type: string
+        document_id:
+          type: integer
+          format: int64
+        project:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, done, failed]
+        attempts:
+          type: integer
+        last_error:
+          type: string
+        claimed_by:
+          type: string
+        claimed_at:
+          type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+
+    IngestStatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        queue:
+          type: object
+          properties:
+            pending:
+              type: integer
+            running:
+              type: integer
+            done_last_24h:
+              type: integer
+            failed_last_24h:
+              type: integer
+        workers:
+          type: object
+          properties:
+            configured:
+              type: integer
+            active:
+              type: integer
+        recent:
+          type: array
+          items:
+            type: object
+            properties:
+              project:
+                type: string
+              status:
+                type: string
+              completed_at:
+                type: string
+              files_indexed:
+                type: integer
+              chunks_added:
+                type: integer
+              error:
+                type: string
+
+    WorkersResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        configured:
+          type: integer
+        slots:
+          type: array
+          items:
+            type: object
+        threads:
+          type: array
+          items:
+            type: object
+        background:
+          type: array
+          items:
+            type: object
+
+    IngestRequest:
+      type: object
+      properties:
+        workspace:
+          type: string
+          description: Workspace root, workspace name, or "all".
+        embedding_command:
+          type: string
+        force:
+          type: boolean
+          default: false
+
+    IngestResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        projects_queued:
+          type: integer
+        message:
+          type: string
+
+    DrainRequest:
+      type: object
+      properties:
+        embedding_command:
+          type: string
+        timeout:
+          type: integer
+          default: 0
+
+    DrainResponse:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [idle, running, failed]
+        processed:
+          type: integer
+        pending:
+          type: integer
+        running:
+          type: integer
+        done:
+          type: integer
+        failed:
+          type: integer
+        total:
+          type: integer
+
+    EntityProfileResponse:
+      type: object
+      properties:
+        entity:
+          type: string
+        kind:
+          type: string
+        summary:
+          type: string
+        facts:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        updated_at:
+          type: string
+
+    EntitySearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        limit:
+          type: integer
+          default: 10
+        cursor:
+          type: string
+
+    EntitySearchResponse:
+      type: object
+      properties:
+        entities:
+          type: array
+          items:
+            type: object
+            properties:
+              entity:
+                type: string
+              kind:
+                type: string
+              summary:
+                type: string
+              score:
+                type: number
+                format: double
+        next_cursor:
+          type: string
+          nullable: true
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Service health check
+      description: Returns {"status":"ok"} when the service is running.
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+    head:
+      operationId: headHealth
+      summary: Service health check (HEAD)
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+
+  /version:
+    get:
+      operationId: getVersion
+      summary: Service version
+      responses:
+        "200":
+          description: Version information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Advertised capabilities
+      description: |
+        Returns the set of capability strings this aimee-kb instance supports.
+        Phase 1 always returns ["memory", "search", "index"].
+      responses:
+        "200":
+          description: Capability list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilitiesResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /intelligence/calibration/readiness:
+    get:
+      operationId: getIntelligenceCalibrationReadiness
+      summary: Calibration readiness
+      responses:
+        "200":
+          description: Calibration readiness summary
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          description: Unauthorized
+
+  /intelligence/demotion/check:
+    get:
+      operationId: getIntelligenceDemotionCheck
+      summary: Dry-run demotion readiness check
+      responses:
+        "200":
+          description: Demotion readiness summary
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          description: Unauthorized
+
+  /intelligence/bandit/export:
+    get:
+      operationId: getIntelligenceBanditExport
+      summary: Export fusion bandit decision data
+      responses:
+        "200":
+          description: Bandit decisions and arm stats
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          description: Unauthorized
+
+  /actions/{action}:
+    post:
+      operationId: postAction
+      summary: Execute a versioned knowledge-service action
+      parameters:
+        - name: action
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Action response
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          description: Unauthorized
+        "404":
+          description: Unknown action
+
+  # ── Phase 3: Ingest API ────────────────────────────────────────────────────
+
+  /docs:
+    post:
+      operationId: postDocs
+      summary: Upload a document for ingest
+      description: |
+        Accepts multipart/form-data with a required `file` part and an optional
+        `scope` field (default: global). Normalizes to markdown, stores in DB2,
+        and queues an extract_doc job. Returns existing doc_id on idempotent re-upload.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                scope:
+                  type: string
+                  default: global
+      responses:
+        "201":
+          description: Document ingested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocIngestResponse"
+        "200":
+          description: Idempotent re-upload (existing doc_id returned)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocIngestResponse"
+        "400":
+          description: Missing file part
+        "401":
+          description: Unauthorized
+        "422":
+          description: Normalization failed (converter error)
+        "503":
+          description: DB unavailable
+
+  /docs/manifest:
+    post:
+      operationId: postDocsManifest
+      summary: Check which uploaded document hashes are absent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocsManifestRequest"
+      responses:
+        "200":
+          description: Manifest diff
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocsManifestResponse"
+        "400":
+          description: Invalid manifest request
+        "401":
+          description: Unauthorized
+        "405":
+          description: Method not allowed
+        "500":
+          description: Serialization failed
+        "503":
+          description: DB unavailable
+
+  /docs/{id}:
+    get:
+      operationId: getDoc
+      summary: Retrieve doc metadata by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Document metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocMetadataResponse"
+        "401":
+          description: Unauthorized
+        "404":
+          description: Document not found
+    delete:
+      operationId: deleteDoc
+      summary: Delete a staged document
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Document deleted
+        "401":
+          description: Unauthorized
+        "404":
+          description: Document not found
+
+  /review:
+    get:
+      operationId: getReview
+      summary: List staged documents pending review
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        "200":
+          description: Review queue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReviewQueueResponse"
+        "401":
+          description: Unauthorized
+
+  /review/{id}/accept:
+    post:
+      operationId: postReviewAccept
+      summary: Accept a staged document
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewAcceptRequest"
+      responses:
+        "200":
+          description: Document accepted
+        "400":
+          description: Invalid id
+        "401":
+          description: Unauthorized
+        "404":
+          description: Document not found
+
+  /review/{id}/reject:
+    post:
+      operationId: postReviewReject
+      summary: Reject a staged document
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRejectRequest"
+      responses:
+        "200":
+          description: Document rejected
+        "400":
+          description: Invalid id
+        "401":
+          description: Unauthorized
+        "404":
+          description: Document not found
+
+  # ── Phase 4: Corpus staging and release lifecycle ──────────────────────────
+
+  /releases:
+    post:
+      operationId: postReleases
+      summary: Create a new corpus release
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReleaseRequest"
+      responses:
+        "201":
+          description: Release created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateReleaseResponse"
+        "400":
+          description: Missing name
+        "401":
+          description: Unauthorized
+        "409":
+          description: Name already exists
+
+  /releases/active:
+    get:
+      operationId: getActiveRelease
+      summary: Get the currently active corpus release
+      responses:
+        "200":
+          description: Active release (or null if none)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActiveReleaseResponse"
+        "401":
+          description: Unauthorized
+
+  /releases/{id}/promote:
+    post:
+      operationId: postPromote
+      summary: Promote a release to active
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Release promoted
+        "400":
+          description: Invalid id
+        "401":
+          description: Unauthorized
+        "409":
+          description: Promote failed
+
+  /releases/{id}/rollback:
+    post:
+      operationId: postRollback
+      summary: Roll back to a prior release
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RollbackRequest"
+      responses:
+        "200":
+          description: Rolled back
+        "400":
+          description: Invalid id
+        "401":
+          description: Unauthorized
+        "409":
+          description: No prior release to roll back to
+
+  # ── Phase 5: Retrieval endpoints ───────────────────────────────────────────
+
+  /search:
+    post:
+      operationId: postSearch
+      summary: Hybrid knowledge search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          description: Bad request (missing query)
+        "401":
+          description: Unauthorized
+
+  /artifacts/{id}:
+    get:
+      operationId: getArtifact
+      summary: Retrieve an artifact by UUID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Artifact payload and citations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactResponse"
+        "401":
+          description: Unauthorized
+        "404":
+          description: Artifact not found
+
+  /artifacts/{id}/links:
+    get:
+      operationId: getArtifactLinks
+      summary: Retrieve outgoing links from an artifact
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Artifact links
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactLinksResponse"
+        "401":
+          description: Unauthorized
+        "404":
+          description: Artifact not found
+
+  /code/find:
+    get:
+      operationId: getCodeFind
+      summary: Symbol/identifier lookup across the canonical index
+      parameters:
+        - name: identifier
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          schema:
+            type: string
+        - name: max_results
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Code find results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodeFindResponse"
+        "400":
+          description: Missing identifier parameter
+        "401":
+          description: Unauthorized
+
+  /code/search:
+    get:
+      operationId: getCodeSearch
+      summary: Full-text code search across indexed file contents
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          schema:
+            type: string
+        - name: max_results
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Code search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodeSearchResponse"
+        "400":
+          description: Missing query parameter
+        "401":
+          description: Unauthorized
+        "503":
+          description: Canonical index unavailable
+
+  /code/callers:
+    get:
+      operationId: getCodeCallers
+      summary: Call sites for a symbol in the canonical code index
+      parameters:
+        - name: symbol
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          schema:
+            type: string
+        - name: max_results
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Caller results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodeCallersResponse"
+        "400":
+          description: Missing symbol parameter
+        "401":
+          description: Unauthorized
+        "503":
+          description: Canonical index unavailable
+
+  /code/projects:
+    get:
+      operationId: getCodeProjects
+      summary: List projects in the canonical code index
+      parameters:
+        - name: max_results
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: Indexed projects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodeProjectsResponse"
+        "401":
+          description: Unauthorized
+        "405":
+          description: Method not allowed
+        "503":
+          description: Canonical index unavailable
+
+  /code/blast-radius:
+    get:
+      operationId: getCodeBlastRadius
+      summary: Blast-radius computation for a file
+      parameters:
+        - name: project
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: file_path
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Blast radius
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BlastRadiusResponse"
+        "400":
+          description: Missing required parameters
+        "401":
+          description: Unauthorized
+        "404":
+          description: File not found in index
+
+  /code/structure:
+    get:
+      operationId: getCodeStructure
+      summary: Definitions for a file in the canonical code index
+      parameters:
+        - name: project
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: file_path
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: max_results
+          in: query
+          schema:
+            type: integer
+            default: 256
+      responses:
+        "200":
+          description: File definitions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodeStructureResponse"
+        "400":
+          description: Missing required parameters
+        "401":
+          description: Unauthorized
+        "503":
+          description: Canonical index unavailable
+
+  /code/project-stats:
+    get:
+      operationId: getCodeProjectStats
+      summary: Project-level canonical code index counts and language breakdown
+      parameters:
+        - name: project
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Project index statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodeProjectStatsResponse"
+        "400":
+          description: Missing required parameters
+        "401":
+          description: Unauthorized
+        "503":
+          description: Canonical index unavailable
+
+  /code/scan:
+    post:
+      operationId: postCodeScan
+      summary: Request a canonical code index scan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CodeScanRequest"
+      responses:
+        "202":
+          description: Scan accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodeScanResponse"
+        "401":
+          description: Unauthorized
+        "405":
+          description: Method not allowed
+
+  /code/build:
+    post:
+      operationId: postCodeBuild
+      summary: Build a project knowledge index
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CodeBuildRequest"
+      responses:
+        "200":
+          description: Build complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodeBuildResponse"
+        "400":
+          description: Missing required parameters
+        "401":
+          description: Unauthorized
+        "503":
+          description: Knowledge or vector store unavailable
+
+  /code/update:
+    post:
+      operationId: postCodeUpdate
+      summary: Incrementally update a project knowledge index
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CodeUpdateRequest"
+      responses:
+        "200":
+          description: Update complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodeUpdateResponse"
+        "400":
+          description: Missing required parameters
+        "401":
+          description: Unauthorized
+        "503":
+          description: Knowledge store unavailable
+
+  /maintenance/repair:
+    post:
+      operationId: postMaintenanceRepair
+      summary: Repair a project knowledge index
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaintenanceRepairRequest"
+      responses:
+        "200":
+          description: Repair complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaintenanceRepairResponse"
+        "400":
+          description: Missing required parameters
+        "401":
+          description: Unauthorized
+        "503":
+          description: Knowledge or vector store unavailable
+
+  /maintenance/reconcile:
+    post:
+      operationId: postMaintenanceReconcile
+      summary: Reconcile orphaned vector records
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaintenanceReconcileRequest"
+      responses:
+        "200":
+          description: Reconcile complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaintenanceReconcileResponse"
+        "401":
+          description: Unauthorized
+        "500":
+          description: Reconcile failed
+
+  /maintenance/clear:
+    post:
+      operationId: postMaintenanceClear
+      summary: Clear indexed knowledge for a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaintenanceClearRequest"
+      responses:
+        "200":
+          description: Project cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaintenanceClearResponse"
+        "400":
+          description: Missing project
+        "401":
+          description: Unauthorized
+        "500":
+          description: Clear failed
+
+  /pipeline/status:
+    get:
+      operationId: getPipelineStatus
+      summary: Report asynchronous knowledge ingest queue status
+      responses:
+        "200":
+          description: Pipeline status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PipelineStatusResponse"
+        "401":
+          description: Unauthorized
+        "405":
+          description: Method not allowed
+        "503":
+          description: Queue unavailable
+
+  /jobs/{job_id}:
+    get:
+      operationId: getJobStatus
+      summary: Report asynchronous knowledge ingest job status
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "200":
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobStatusResponse"
+        "401":
+          description: Unauthorized
+        "404":
+          description: Job not found
+        "405":
+          description: Method not allowed
+        "503":
+          description: Job status unavailable
+
+  /ingest/status:
+    get:
+      operationId: getIngestStatus
+      summary: Report background project ingest status
+      responses:
+        "200":
+          description: Background ingest status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestStatusResponse"
+        "401":
+          description: Unauthorized
+        "405":
+          description: Method not allowed
+        "503":
+          description: Ingest status unavailable
+
+  /workers:
+    get:
+      operationId: getWorkers
+      summary: Report aimee-kb worker and background task status
+      responses:
+        "200":
+          description: Worker status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkersResponse"
+        "401":
+          description: Unauthorized
+        "405":
+          description: Method not allowed
+        "503":
+          description: Workers unavailable
+
+  /ingest:
+    post:
+      operationId: postIngest
+      summary: Enqueue background project ingest
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestRequest"
+      responses:
+        "202":
+          description: Ingest queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+        "401":
+          description: Unauthorized
+        "405":
+          description: Method not allowed
+        "503":
+          description: Knowledge store unavailable
+
+  /drain:
+    post:
+      operationId: postDrain
+      summary: Drain the asynchronous knowledge ingest queue
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DrainRequest"
+      responses:
+        "200":
+          description: Queue drained
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DrainResponse"
+        "401":
+          description: Unauthorized
+        "405":
+          description: Method not allowed
+        "500":
+          description: Queue drain failed
+
+  /entities/{id}:
+    get:
+      operationId: getEntityProfile
+      summary: Canonical entity profile
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Entity name (slug)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Entity profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntityProfileResponse"
+        "401":
+          description: Unauthorized
+        "404":
+          description: Entity not found
+
+  /entities/search:
+    post:
+      operationId: postEntitySearch
+      summary: Find entities by name or context
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EntitySearchRequest"
+      responses:
+        "200":
+          description: Entity search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EntitySearchResponse"
+        "400":
+          description: Missing query
+        "401":
+          description: Unauthorized
