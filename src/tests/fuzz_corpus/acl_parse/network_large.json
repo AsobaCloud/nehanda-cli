@@ -1,0 +1,30 @@
+{
+  "network": {
+    "hosts": [
+      {"name": "h1", "ip": "1.1.1.1"}, {"name": "h2", "ip": "2.2.2.2"},
+      {"name": "h3", "ip": "3.3.3.3"}, {"name": "h4", "ip": "4.4.4.4"},
+      {"name": "h5", "ip": "5.5.5.5"}, {"name": "h6", "ip": "6.6.6.6"},
+      {"name": "h7", "ip": "7.7.7.7"}, {"name": "h8", "ip": "8.8.8.8"},
+      {"name": "h9"}, {"name": "h10", "ip": null},
+      {"name": 12345}, {"ip": "1.2.3.4"},
+      {}, "not-an-object", 42, null, true
+    ],
+    "networks": [
+      {"name": "n1", "cidr": "10.0.0.0/8"},
+      {"name": "n2", "cidr": "172.16.0.0/12"},
+      {"name": "n3", "cidr": "192.168.0.0/16"},
+      {"cidr": "10.10.10.0/24"},
+      {"name": "no-cidr"},
+      {},
+      "not-an-object"
+    ],
+    "tunnels": [
+      {"name": "t1", "relay_ssh": "jump@host", "target_host": "10.0.0.1", "target_port": 22, "reconnect_delay": 5, "max_reconnects": 3},
+      {"name": "t2", "target_port": -1},
+      {"name": "t3", "target_port": 99999},
+      {}
+    ]
+  },
+  "default_agent": "test",
+  "fallback_chain": ["a", "b", "c", 42, null, true]
+}

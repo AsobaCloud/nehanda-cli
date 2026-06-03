@@ -1,0 +1,123 @@
+/* test_agent_runtime_messages.c: unit tests for agent runtime message helpers. */
+#include "agent_runtime_messages.h"
+#include "cJSON.h"
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+
+static const char *last_content(cJSON *messages)
+{
+   int n = cJSON_GetArraySize(messages);
+   cJSON *msg = cJSON_GetArrayItem(messages, n - 1);
+   cJSON *content = msg ? cJSON_GetObjectItem(msg, "content") : NULL;
+   return cJSON_IsString(content) ? content->valuestring : "";
+}
+
+static void test_final_instruction(void)
+{
+   cJSON *messages = cJSON_CreateArray();
+   agent_session_append_final_instruction(messages);
+
+   assert(cJSON_GetArraySize(messages) == 1);
+   assert(strstr(last_content(messages), "FINAL RESPONSE REQUIRED") != NULL);
+   assert(strstr(last_content(messages), "Do not call tools") != NULL);
+
+   cJSON_Delete(messages);
+}
+
+static void test_final_retry_instruction(void)
+{
+   cJSON *messages = cJSON_CreateArray();
+   agent_session_append_final_retry_instruction(messages, "XML tool_call block");
+
+   assert(cJSON_GetArraySize(messages) == 1);
+   assert(strstr(last_content(messages), "FINAL RESPONSE RETRY") != NULL);
+   assert(strstr(last_content(messages), "retrying automatically") != NULL);
+   assert(strstr(last_content(messages), "do not emit XML tool_call blocks") != NULL);
+   assert(strstr(last_content(messages), "XML tool_call block") != NULL);
+
+   cJSON_Delete(messages);
+}
+
+static void test_final_tool_violation_retry_budget(void)
+{
+   cJSON *messages = cJSON_CreateArray();
+   int turn = 4;
+   int max_t = 5;
+   int retry_count = 0;
+   char err[128] = "";
+
+   assert(agent_session_retry_final_tool_violation(messages, "tool call", &turn, &max_t, 5,
+                                                   &retry_count, err, sizeof(err)) == 1);
+   assert(turn == 5);
+   assert(max_t == 6);
+   assert(retry_count == 1);
+   assert(cJSON_GetArraySize(messages) == 1);
+   assert(err[0] == '\0');
+
+   assert(agent_session_retry_final_tool_violation(messages, "tool call", &turn, &max_t, 5,
+                                                   &retry_count, err, sizeof(err)) == 1);
+   assert(turn == 6);
+   assert(max_t == 7);
+   assert(retry_count == 2);
+   assert(cJSON_GetArraySize(messages) == 2);
+
+   assert(agent_session_retry_final_tool_violation(messages, "tool call", &turn, &max_t, 5,
+                                                   &retry_count, err, sizeof(err)) == 0);
+   assert(strstr(err, "repeatedly attempted tool calls") != NULL);
+   assert(cJSON_GetArraySize(messages) == 2);
+
+   cJSON_Delete(messages);
+}
+
+static void test_degenerate_retry_instruction(void)
+{
+   cJSON *messages = cJSON_CreateArray();
+   agent_session_append_degenerate_retry_instruction(messages);
+
+   assert(cJSON_GetArraySize(messages) == 1);
+   assert(strstr(last_content(messages), "DELEGATE RESPONSE RETRY") != NULL);
+   assert(strstr(last_content(messages), "before any tool executed") != NULL);
+   assert(strstr(last_content(messages), "tool-call markup as plain text") != NULL);
+
+   cJSON_Delete(messages);
+}
+
+static void test_degenerate_retry_budget(void)
+{
+   cJSON *messages = cJSON_CreateArray();
+   int turn = 0;
+   int retry_count = 0;
+
+   assert(agent_session_retry_degenerate_response(messages, &turn, &retry_count) == 1);
+   assert(turn == 1);
+   assert(retry_count == 1);
+   assert(cJSON_GetArraySize(messages) == 1);
+
+   assert(agent_session_retry_degenerate_response(messages, &turn, &retry_count) == 0);
+   assert(turn == 1);
+   assert(retry_count == 1);
+   assert(cJSON_GetArraySize(messages) == 1);
+
+   cJSON_Delete(messages);
+}
+
+static void test_null_safe(void)
+{
+   agent_session_append_final_message(NULL, "done");
+   agent_session_append_final_instruction(NULL);
+   agent_session_append_final_retry_instruction(NULL, "tool call");
+   agent_session_append_degenerate_retry_instruction(NULL);
+}
+
+int main(void)
+{
+   test_final_instruction();
+   test_final_retry_instruction();
+   test_final_tool_violation_retry_budget();
+   test_degenerate_retry_instruction();
+   test_degenerate_retry_budget();
+   test_null_safe();
+   printf("test_agent_runtime_messages: ok\n");
+   return 0;
+}

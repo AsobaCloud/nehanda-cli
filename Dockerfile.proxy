@@ -1,0 +1,6 @@
+FROM alpine:3.20
+RUN apk add --no-cache sqlite-libs libpq openssl-libs-static
+COPY aimee-proxy /usr/local/bin/
+COPY aimee-proxy.yaml /etc/aimee/
+EXPOSE 8400
+CMD ["aimee-proxy", "--config", "/etc/aimee/aimee-proxy.yaml", "start"]

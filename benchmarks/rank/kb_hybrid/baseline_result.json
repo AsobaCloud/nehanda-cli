@@ -1,0 +1,18 @@
+{
+  "mode": "linear",
+  "k": 5,
+  "baseline_rrf": {
+    "ndcg@5": 0.7,
+    "mrr": 0.6667,
+    "p@5": 0.28,
+    "n_queries": 5
+  },
+  "target": {
+    "ndcg@5": 0.8,
+    "mrr": 0.8,
+    "p@5": 0.28,
+    "n_queries": 5
+  },
+  "baseline_delta_ndcg@5": 0.1,
+  "decision": "rollout"
+}

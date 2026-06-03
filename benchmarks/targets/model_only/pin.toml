@@ -1,0 +1,5 @@
+[target]
+name = "model_only"
+description = "Raw model, no memory layer. Uses full transcript as context."
+deterministic = false
+capabilities = ["memory_answer", "text_answer", "code_complete"]

@@ -1,0 +1,293 @@
+# benchmarks/catalog.toml
+# Unified benchmark suite — single source of truth for datasets, judge, targets, and seeds.
+#
+# dataset.*.hash is populated by scripts/download-benchmarks.sh after fetch-and-verify.
+# judge.model and judge.hash are pinned in PR2 after the calibration study.
+# target.*.pin points to per-target runtime pin files.
+
+[suite]
+harness_version = "1"
+default_seed = 42
+
+# ---------------------------------------------------------------------------
+# Judge
+# ---------------------------------------------------------------------------
+# profile "frontier" uses the operator's configured execute-role model.
+# profile "open70b" uses the pinned open-weights GGUF (locked in PR2).
+# profile "small" is for fast CI smoke only; results are not canonical.
+
+[judge]
+profile = "frontier"
+model = ""
+hash = ""
+majority = 3
+seed = 42
+
+# ---------------------------------------------------------------------------
+# Datasets — memory pillar
+# ---------------------------------------------------------------------------
+
+[dataset.locomo]
+pillar = "memory"
+canonical_url = "https://github.com/snap-research/locomo"
+hash = "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4"
+grader = "llm"
+splits = ["full"]
+
+[dataset.longmemeval_s]
+pillar = "memory"
+canonical_url = "https://github.com/xiaowu0162/LongMemEval"
+hash = "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
+grader = "llm"
+splits = ["full"]
+
+[dataset.longmemeval_m]
+pillar = "memory"
+canonical_url = "https://github.com/xiaowu0162/LongMemEval"
+hash = ""
+grader = "llm"
+splits = ["full"]
+
+[dataset.longmemeval_l]
+pillar = "memory"
+canonical_url = "https://github.com/xiaowu0162/LongMemEval"
+hash = ""
+grader = "llm"
+splits = ["full"]
+
+[dataset.msc]
+pillar = "memory"
+canonical_url = "https://parl.ai/projects/msc/"
+hash = ""
+grader = "llm"
+splits = ["test"]
+
+[dataset.dmr]
+pillar = "memory"
+canonical_url = "https://github.com/cpacker/MemGPT"
+hash = ""
+grader = "llm"
+splits = ["full"]
+
+[dataset.beam]
+pillar = "memory"
+canonical_url = ""
+hash = ""
+grader = "llm"
+splits = ["full"]
+
+[dataset.mrcr]
+pillar = "memory"
+canonical_url = ""
+hash = ""
+grader = "exact_match"
+splits = ["full"]
+
+[dataset.ruler]
+pillar = "memory"
+canonical_url = "https://github.com/hsiehjackson/RULER"
+hash = ""
+grader = "dataset_native"
+splits = ["up_to_128k"]
+
+[dataset.l_eval]
+pillar = "memory"
+canonical_url = "https://github.com/OpenLMLab/LEval"
+hash = ""
+grader = "dataset_native"
+splits = ["closed_ended"]
+
+# ---------------------------------------------------------------------------
+# Datasets — coding pillar (PR5)
+# ---------------------------------------------------------------------------
+
+[dataset.humaneval]
+pillar = "coding"
+canonical_url = "https://github.com/openai/human-eval"
+hash = ""
+grader = "pytest"
+
+[dataset.mbpp_plus]
+pillar = "coding"
+canonical_url = "https://github.com/evalplus/evalplus"
+hash = ""
+grader = "pytest"
+
+[dataset.bigcodebench]
+pillar = "coding"
+canonical_url = "https://github.com/bigcode-project/bigcodebench"
+hash = ""
+grader = "pytest"
+
+[dataset.livecodebench]
+pillar = "coding"
+canonical_url = "https://github.com/LiveCodeBench/LiveCodeBench"
+hash = ""
+grader = "dataset_native"
+
+[dataset.aider_polyglot]
+pillar = "coding"
+canonical_url = "https://github.com/Aider-AI/aider"
+hash = ""
+grader = "dataset_native"
+
+[dataset.repobench]
+pillar = "coding"
+canonical_url = "https://github.com/Leolty/repobench"
+hash = ""
+grader = "dataset_native"
+
+[dataset.swebench_lite]
+pillar = "coding"
+canonical_url = "https://github.com/swe-bench/SWE-bench"
+hash = ""
+grader = "swebench_harness"
+
+[dataset.swebench_verified]
+pillar = "coding"
+canonical_url = "https://github.com/swe-bench/SWE-bench"
+hash = ""
+grader = "swebench_harness"
+
+[dataset.terminalbench]
+pillar = "coding"
+canonical_url = ""
+hash = ""
+grader = "dataset_native"
+
+# ---------------------------------------------------------------------------
+# Datasets — reasoning pillar (PR6)
+# ---------------------------------------------------------------------------
+
+[dataset.gsm8k]
+pillar = "reasoning"
+canonical_url = "https://github.com/openai/grade-school-math"
+hash = ""
+grader = "numeric_extraction"
+
+[dataset.math_500]
+pillar = "reasoning"
+canonical_url = "https://github.com/hendrycks/math"
+hash = ""
+grader = "boxed_extraction"
+
+[dataset.aime]
+pillar = "reasoning"
+canonical_url = "https://artofproblemsolving.com/wiki/index.php/AMC_history"
+hash = ""
+grader = "numeric_extraction"
+note = "pinned year locked in PR6"
+
+[dataset.gpqa]
+pillar = "reasoning"
+canonical_url = "https://github.com/idavidrein/gpqa"
+hash = ""
+grader = "mcq_letter"
+
+[dataset.arc_agi_2]
+pillar = "reasoning"
+canonical_url = "https://arcprize.org"
+hash = ""
+grader = "exact_grid"
+splits = ["public"]
+
+[dataset.bbh]
+pillar = "reasoning"
+canonical_url = "https://github.com/suzgunmirac/BIG-Bench-Hard"
+hash = ""
+grader = "dataset_native"
+
+[dataset.mmlu_pro]
+pillar = "reasoning"
+canonical_url = "https://github.com/TIGER-AI-Lab/MMLU-Pro"
+hash = ""
+grader = "mcq_letter"
+
+[dataset.hle]
+pillar = "reasoning"
+canonical_url = "https://humanitiesexams.org"
+hash = ""
+grader = "dataset_native"
+splits = ["public"]
+
+[dataset.frontiermath]
+pillar = "reasoning"
+canonical_url = "https://epochai.org/frontiermath"
+hash = ""
+grader = "dataset_native"
+splits = ["public"]
+
+[dataset.virtual_context]
+pillar = "session"
+canonical_url = ""
+hash = ""
+grader = "llm"
+fixture_path = "benchmarks/virtual-context/fixtures.json"
+note = "local fixture corpus — not a public dataset download"
+
+[dataset.delegate_reliability]
+pillar = "reliability"
+canonical_url = ""
+hash = ""
+grader = "deterministic"
+fixture_path = "benchmarks/delegate-reliability"
+splits = ["full"]
+
+[track.ablation]
+presets = ["full", "no_rescue", "no_respond", "no_sampling", "no_normalize", "no_retry", "bare"]
+default = "full"
+
+[dataset.drop]
+pillar = "reasoning"
+canonical_url = "https://allennlp.org/drop"
+hash = ""
+grader = "f1_em"
+
+[dataset.logiqa]
+pillar = "reasoning"
+canonical_url = "https://github.com/lgw863/LogiQA-dataset"
+hash = ""
+grader = "mcq_letter"
+
+# ---------------------------------------------------------------------------
+# Targets
+# ---------------------------------------------------------------------------
+
+[target.aimee]
+adapter = "benchmarks/targets/aimee/adapter.py"
+capabilities = ["memory_ingest", "memory_answer"]
+pin = "benchmarks/targets/aimee/pin.toml"
+
+[target.model_only]
+adapter = "benchmarks/targets/model_only/adapter.py"
+capabilities = ["memory_answer", "text_answer", "code_complete"]
+pin = "benchmarks/targets/model_only/pin.toml"
+
+[target.small_agent]
+adapter = "benchmarks/targets/small_agent/adapter.py"
+capabilities = ["memory_ingest", "memory_answer", "code_complete"]
+pin = "benchmarks/targets/small_agent/pin.toml"
+
+[target.bm25]
+adapter = "benchmarks/targets/bm25/adapter.py"
+capabilities = ["memory_ingest", "memory_answer"]
+pin = "benchmarks/targets/bm25/pin.toml"
+
+[target.rag_chromadb]
+adapter = "benchmarks/targets/rag_chromadb/adapter.py"
+capabilities = ["memory_ingest", "memory_answer"]
+pin = "benchmarks/targets/rag_chromadb/pin.toml"
+
+[target.mem0]
+adapter = "benchmarks/targets/mem0/adapter.py"
+capabilities = ["memory_ingest", "memory_answer"]
+pin = "benchmarks/targets/mem0/pin.toml"
+
+# ---------------------------------------------------------------------------
+# Seeds
+# ---------------------------------------------------------------------------
+
+[seeds]
+dataset_sample = 42
+judge_sampling = 42
+target_sampling = 42

@@ -1,0 +1,11 @@
+{
+  "name": "conditional_routing",
+  "role": "execute",
+  "prompt": "Use tools to inspect whether the current directory has a src directory. If it does, respond with route-src-present.",
+  "success_check": {
+    "type": "contains",
+    "value": "route-src-present"
+  },
+  "max_turns": 5,
+  "max_latency_ms": 60000
+}

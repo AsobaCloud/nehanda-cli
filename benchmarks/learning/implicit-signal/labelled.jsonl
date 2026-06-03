@@ -1,0 +1,154 @@
+{"heuristic":"citation_then_repair","user_text":"No, that's not right. I meant the other one.","expected":true,"notes":"Starts with correction cue 'No'"}
+{"heuristic":"citation_then_repair","user_text":"Actually, the file is in src/headers/, not src/.","expected":true,"notes":"'Actually' correction cue"}
+{"heuristic":"citation_then_repair","user_text":"That's wrong, the function is called memory_get not memory_fetch.","expected":true,"notes":"'That's wrong' correction cue"}
+{"heuristic":"citation_then_repair","user_text":"Not quite — it returns int, not void.","expected":true,"notes":"'Not quite' correction cue"}
+{"heuristic":"citation_then_repair","user_text":"Wrong, the table is in DB1 not DB2.","expected":true,"notes":"'Wrong' correction cue"}
+{"heuristic":"citation_then_repair","user_text":"Incorrect. The signal type is 'correction', not 'edit'.","expected":true,"notes":"'Incorrect' correction cue"}
+{"heuristic":"citation_then_repair","user_text":"Great idea, let's use that approach.","expected":false,"notes":"Continuation — should not match repair"}
+{"heuristic":"citation_then_repair","user_text":"","expected":false,"notes":"Empty text — no classification"}
+{"heuristic":"citation_then_repair","user_text":"Okay let's continue.","expected":false,"notes":"Short continuation — not a repair"}
+{"heuristic":"citation_then_continuation","user_text":"Great, let's extend that to handle edge cases too.","expected":true,"notes":"Substantive continuation"}
+{"heuristic":"citation_then_continuation","user_text":"Sounds good. Can we also add a test for the NULL path?","expected":true,"notes":"Advancing question, substantive text"}
+{"heuristic":"citation_then_continuation","user_text":"Perfect. Now let's wire that into cmd_chat.c.","expected":true,"notes":"Next-step continuation"}
+{"heuristic":"citation_then_continuation","user_text":"No, that's wrong.","expected":false,"notes":"Repair cue — should not match continuation"}
+{"heuristic":"citation_then_continuation","user_text":"Actually I need something different.","expected":false,"notes":"Correction cue — not continuation"}
+{"heuristic":"citation_then_continuation","user_text":"ok","expected":false,"notes":"Too short — NONE classification"}
+{"heuristic":"repeat_question","session_id":"sess-abc","tool":"memory_search","query_hash":"a1b2c3d4","prior_seen":true,"expected":true,"notes":"Same triple appeared earlier this month"}
+{"heuristic":"repeat_question","session_id":"sess-abc","tool":"memory_search","query_hash":"a1b2c3d4","prior_seen":false,"expected":false,"notes":"First occurrence — no repeat"}
+{"heuristic":"repeat_question","session_id":"sess-abc","tool":"memory_recall","query_hash":"a1b2c3d4","prior_seen":true,"expected":true,"notes":"Different tool but same hash — still a match on triple"}
+{"heuristic":"repeat_question","session_id":"sess-xyz","tool":"memory_search","query_hash":"a1b2c3d4","prior_seen":true,"expected":true,"notes":"Different session, same query — independent repeat"}
+{"heuristic":"repeated_correction","target_key":"db1_path","correction_count":1,"expected":false,"notes":"Single correction — below threshold"}
+{"heuristic":"repeated_correction","target_key":"db1_path","correction_count":3,"expected":true,"notes":"Three corrections to same key — above threshold"}
+{"heuristic":"repeated_correction","target_key":"learning_ttl","correction_count":2,"expected":true,"notes":"Two corrections — meets threshold"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"git_push_branch","description":"Always push with -u flag","expected":true,"notes":"Repeated push workflow captured"}
+{"heuristic":"workflow_repetition","workspace":"infrastructure","signal_type":"make_target","description":"Use make -j$(nproc) for builds","expected":true,"notes":"Build workflow captured"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"","description":"Empty signal type","expected":false,"notes":"Empty signal type — should not fire"}
+{"heuristic":"citation_then_repair","user_text":"No, you need to include the full path.","expected":true,"notes":"'no,' prefix — comma form"}
+{"heuristic":"citation_then_repair","user_text":"Actually it's a struct, not a pointer.","expected":true,"notes":"'actually' lowercase-match"}
+{"heuristic":"citation_then_repair","user_text":"Nope, that's the old API.","expected":true,"notes":"'nope' prefix"}
+{"heuristic":"citation_then_repair","user_text":"Not right — the port is 8080, not 80.","expected":true,"notes":"'not right' prefix"}
+{"heuristic":"citation_then_repair","user_text":"Not quite what I meant — please use the id field.","expected":true,"notes":"'not quite' prefix, longer text"}
+{"heuristic":"citation_then_repair","user_text":"Not true — the cache is always flushed on commit.","expected":true,"notes":"'not true' prefix"}
+{"heuristic":"citation_then_repair","user_text":"Thats wrong, the header is in src/headers/ not src/.","expected":true,"notes":"'thats wrong' (no apostrophe) prefix"}
+{"heuristic":"citation_then_repair","user_text":"That is wrong — the server owns DB1 only.","expected":true,"notes":"'that is wrong' three-word prefix"}
+{"heuristic":"citation_then_repair","user_text":"No. The config key is learning_ttl, not learning_timeout.","expected":true,"notes":"'no.' period form"}
+{"heuristic":"citation_then_repair","user_text":"No! That would delete all the data.","expected":true,"notes":"'no!' exclamation form"}
+{"heuristic":"citation_then_repair","user_text":"No, we're on Postgres now, not SQLite.","expected":true,"notes":"'no ' space form"}
+{"heuristic":"citation_then_repair","user_text":"ACTUALLY that path doesn't exist in the new codebase.","expected":true,"notes":"'actually' uppercase — case-insensitive match"}
+{"heuristic":"citation_then_repair","user_text":"Wrong file — it's cmd_memory_op.c not cmd_memory.c.","expected":true,"notes":"'wrong' file correction"}
+{"heuristic":"citation_then_repair","user_text":"Incorrect. The threshold is 2, not 3.","expected":true,"notes":"'incorrect.' with period"}
+{"heuristic":"citation_then_repair","user_text":"Not right at all — use the scoped variant.","expected":true,"notes":"'not right' followed by extra text"}
+{"heuristic":"citation_then_repair","user_text":"Not quite — the function signature changed in P4.","expected":true,"notes":"'not quite' dash form"}
+{"heuristic":"citation_then_repair","user_text":"Yes, that looks correct.","expected":false,"notes":"Affirmation — no correction cue"}
+{"heuristic":"citation_then_repair","user_text":"Perfect. Let's proceed with that.","expected":false,"notes":"Continuation — no cue"}
+{"heuristic":"citation_then_repair","user_text":"Thanks, that helps.","expected":false,"notes":"Acknowledgment — no cue"}
+{"heuristic":"citation_then_repair","user_text":"Sounds good to me.","expected":false,"notes":"Continuation — no cue"}
+{"heuristic":"citation_then_repair","user_text":"Not that one, the other file.","expected":false,"notes":"'not that' is not in the cue set"}
+{"heuristic":"citation_then_continuation","user_text":"Let's also add error handling for the NULL case.","expected":true,"notes":"Follow-up request, no cue"}
+{"heuristic":"citation_then_continuation","user_text":"Good. Can we make that a configurable flag?","expected":true,"notes":"Question continuation"}
+{"heuristic":"citation_then_continuation","user_text":"Now let's update the tests for that change.","expected":true,"notes":"Next-step continuation"}
+{"heuristic":"citation_then_continuation","user_text":"Yes, and we should also handle the timeout path.","expected":true,"notes":"Yes + substantive continuation"}
+{"heuristic":"citation_then_continuation","user_text":"That looks right, but I want to also check the edge case.","expected":true,"notes":"Affirmation then continuation"}
+{"heuristic":"citation_then_continuation","user_text":"Can you also show me the tests for that?","expected":true,"notes":"Request continuation"}
+{"heuristic":"citation_then_continuation","user_text":"Looks good, let's extend that to the other modules.","expected":true,"notes":"Approval + extend"}
+{"heuristic":"citation_then_continuation","user_text":"Agreed. Now what about the memory leak on the error path?","expected":true,"notes":"Agree + follow-up question"}
+{"heuristic":"citation_then_continuation","user_text":"Exactly right. Can we do the same for the other sinks?","expected":true,"notes":"Confirmation + extension"}
+{"heuristic":"citation_then_continuation","user_text":"Makes sense. Let's also run the simulation trace.","expected":true,"notes":"Affirmation + next step"}
+{"heuristic":"citation_then_continuation","user_text":"Right, and we need to update the docs too.","expected":true,"notes":"Continuation with addition"}
+{"heuristic":"citation_then_continuation","user_text":"What happens when the vector index is unavailable?","expected":true,"notes":"Follow-up question, substantive"}
+{"heuristic":"citation_then_continuation","user_text":"Now add a test for the corroboration threshold.","expected":true,"notes":"Test step continuation"}
+{"heuristic":"citation_then_continuation","user_text":"Sure, and while we're at it let's refactor the sink dispatch.","expected":true,"notes":"Affirmation + side task"}
+{"heuristic":"citation_then_continuation","user_text":"Not that one, the other file.","expected":true,"notes":"'not that' is not a correction cue; >=3 non-space chars"}
+{"heuristic":"citation_then_continuation","user_text":"Let me try a different query to narrow it down.","expected":true,"notes":"Substantive next-step text"}
+{"heuristic":"citation_then_continuation","user_text":"Let's commit this and move on.","expected":true,"notes":"Action continuation"}
+{"heuristic":"citation_then_continuation","user_text":"Interesting — does that also apply to the rules sink?","expected":true,"notes":"Curiosity continuation"}
+{"heuristic":"citation_then_continuation","user_text":"OK and one more thing — what's the weekly cap for reranker?","expected":true,"notes":"'OK' only 2 chars but full text has more; not a repair cue"}
+{"heuristic":"citation_then_continuation","user_text":"Wrong, use the write path instead.","expected":false,"notes":"Correction cue 'wrong'"}
+{"heuristic":"citation_then_continuation","user_text":"","expected":false,"notes":"Empty — NONE"}
+{"heuristic":"citation_then_continuation","user_text":"No! That file should not be deleted.","expected":false,"notes":"'no!' correction cue"}
+{"heuristic":"citation_then_continuation","user_text":"hi","expected":false,"notes":"Only 2 non-space chars — NONE"}
+{"heuristic":"citation_then_continuation","user_text":"OK","expected":false,"notes":"2 non-space chars — NONE"}
+{"heuristic":"citation_then_continuation","user_text":"Nope, wrong direction.","expected":false,"notes":"'nope' correction cue"}
+{"heuristic":"citation_then_continuation","user_text":"Incorrect. That's not how it works.","expected":false,"notes":"'incorrect.' correction cue"}
+{"heuristic":"citation_then_continuation","user_text":"Actually that's backwards.","expected":false,"notes":"'actually' correction cue"}
+{"heuristic":"repeat_question","session_id":"sess-001","tool":"memory_search","query_hash":"b2c3d4e5","prior_seen":true,"expected":true,"notes":"Repeat on different hash"}
+{"heuristic":"repeat_question","session_id":"sess-001","tool":"memory_search","query_hash":"b2c3d4e5","prior_seen":false,"expected":false,"notes":"First occurrence of this hash"}
+{"heuristic":"repeat_question","session_id":"sess-002","tool":"recall","query_hash":"c3d4e5f6","prior_seen":true,"expected":true,"notes":"Repeat on 'recall' tool"}
+{"heuristic":"repeat_question","session_id":"sess-002","tool":"recall","query_hash":"c3d4e5f6","prior_seen":false,"expected":false,"notes":"First occurrence on 'recall' tool"}
+{"heuristic":"repeat_question","session_id":"sess-003","tool":"memory_find","query_hash":"d4e5f6a7","prior_seen":true,"expected":true,"notes":"Repeat on memory_find tool"}
+{"heuristic":"repeat_question","session_id":"sess-003","tool":"memory_find","query_hash":"d4e5f6a7","prior_seen":false,"expected":false,"notes":"First occurrence on memory_find tool"}
+{"heuristic":"repeat_question","session_id":"sess-004","tool":"memory_search","query_hash":"e5f6a7b8","prior_seen":true,"expected":true,"notes":"Repeat same session different hash"}
+{"heuristic":"repeat_question","session_id":"sess-005","tool":"memory_search","query_hash":"e5f6a7b8","prior_seen":true,"expected":true,"notes":"Cross-session repeat of same hash"}
+{"heuristic":"repeat_question","session_id":"sess-005","tool":"memory_search","query_hash":"e5f6a7b8","prior_seen":false,"expected":false,"notes":"No prior occurrence in this session"}
+{"heuristic":"repeat_question","session_id":"sess-006","tool":"list_facts","query_hash":"f6a7b8c9","prior_seen":true,"expected":true,"notes":"Repeat on list_facts tool"}
+{"heuristic":"repeat_question","session_id":"sess-006","tool":"list_facts","query_hash":"f6a7b8c9","prior_seen":false,"expected":false,"notes":"First list_facts occurrence"}
+{"heuristic":"repeat_question","session_id":"sess-007","tool":"search_graph","query_hash":"a7b8c9d0","prior_seen":true,"expected":true,"notes":"Repeat on search_graph tool"}
+{"heuristic":"repeat_question","session_id":"sess-007","tool":"search_graph","query_hash":"a7b8c9d0","prior_seen":false,"expected":false,"notes":"First search_graph occurrence"}
+{"heuristic":"repeat_question","session_id":"sess-008","tool":"memory_recall","query_hash":"b8c9d0e1","prior_seen":true,"expected":true,"notes":"Same hash used again in same session"}
+{"heuristic":"repeat_question","session_id":"sess-008","tool":"memory_recall","query_hash":"b8c9d0e1","prior_seen":false,"expected":false,"notes":"First recall occurrence in session"}
+{"heuristic":"repeat_question","session_id":"sess-009","tool":"memory_search","query_hash":"c9d0e1f2","prior_seen":true,"expected":true,"notes":"Long-running session repeat"}
+{"heuristic":"repeat_question","session_id":"sess-010","tool":"memory_search","query_hash":"c9d0e1f2","prior_seen":true,"expected":true,"notes":"Repeat across different sessions"}
+{"heuristic":"repeat_question","session_id":"sess-010","tool":"memory_search","query_hash":"c9d0e1f2","prior_seen":false,"expected":false,"notes":"Unique in this session, not prior_seen"}
+{"heuristic":"repeat_question","session_id":"sess-011","tool":"memory_answer","query_hash":"d0e1f2a3","prior_seen":true,"expected":true,"notes":"Repeat on memory_answer tool"}
+{"heuristic":"repeat_question","session_id":"sess-011","tool":"memory_answer","query_hash":"d0e1f2a3","prior_seen":false,"expected":false,"notes":"First memory_answer call"}
+{"heuristic":"repeat_question","session_id":"sess-012","tool":"memory_search","query_hash":"e1f2a3b4","prior_seen":true,"expected":true,"notes":"Repeat from prior session"}
+{"heuristic":"repeat_question","session_id":"sess-012","tool":"recall","query_hash":"e1f2a3b4","prior_seen":true,"expected":true,"notes":"Same hash via different tool — both repeat"}
+{"heuristic":"repeat_question","session_id":"sess-013","tool":"memory_search","query_hash":"f2a3b4c5","prior_seen":false,"expected":false,"notes":"Genuinely new query — no repeat"}
+{"heuristic":"repeat_question","session_id":"sess-013","tool":"memory_recall","query_hash":"f2a3b4c5","prior_seen":false,"expected":false,"notes":"Same new hash on different tool"}
+{"heuristic":"repeat_question","session_id":"sess-014","tool":"memory_search","query_hash":"a3b4c5d6","prior_seen":true,"expected":true,"notes":"Repeat at end of long session"}
+{"heuristic":"repeat_question","session_id":"sess-014","tool":"memory_search","query_hash":"a3b4c5d6","prior_seen":false,"expected":false,"notes":"Unique query in this session"}
+{"heuristic":"repeated_correction","target_key":"learning_ttl","correction_count":1,"expected":false,"notes":"Single correction to learning_ttl — below threshold"}
+{"heuristic":"repeated_correction","target_key":"qdrant_url","correction_count":4,"expected":true,"notes":"Four corrections — well above threshold"}
+{"heuristic":"repeated_correction","target_key":"qdrant_url","correction_count":0,"expected":false,"notes":"Zero corrections — no signal"}
+{"heuristic":"repeated_correction","target_key":"postgres_url","correction_count":2,"expected":true,"notes":"Two corrections to postgres_url"}
+{"heuristic":"repeated_correction","target_key":"postgres_url","correction_count":1,"expected":false,"notes":"One correction to postgres_url — below threshold"}
+{"heuristic":"repeated_correction","target_key":"sink_weekly_cap","correction_count":3,"expected":true,"notes":"Three corrections to cap setting"}
+{"heuristic":"repeated_correction","target_key":"sink_weekly_cap","correction_count":1,"expected":false,"notes":"Single correction to cap"}
+{"heuristic":"repeated_correction","target_key":"model_name","correction_count":2,"expected":true,"notes":"Two corrections to model setting"}
+{"heuristic":"repeated_correction","target_key":"model_name","correction_count":1,"expected":false,"notes":"One correction to model — no repeat signal"}
+{"heuristic":"repeated_correction","target_key":"api_base_url","correction_count":5,"expected":true,"notes":"Five corrections — operator needs persistent update"}
+{"heuristic":"repeated_correction","target_key":"api_base_url","correction_count":1,"expected":false,"notes":"Single api_base_url correction"}
+{"heuristic":"repeated_correction","target_key":"commit_ratio_window","correction_count":2,"expected":true,"notes":"Two corrections to window setting"}
+{"heuristic":"repeated_correction","target_key":"commit_ratio_window","correction_count":0,"expected":false,"notes":"No corrections yet"}
+{"heuristic":"repeated_correction","target_key":"vector_dim","correction_count":3,"expected":true,"notes":"Three corrections to vector dimension"}
+{"heuristic":"repeated_correction","target_key":"vector_dim","correction_count":1,"expected":false,"notes":"Single vector_dim correction"}
+{"heuristic":"repeated_correction","target_key":"","correction_count":3,"expected":false,"notes":"Empty target_key — no anchor, should not fire"}
+{"heuristic":"repeated_correction","target_key":"kb_host","correction_count":2,"expected":true,"notes":"Two corrections to kb_host"}
+{"heuristic":"repeated_correction","target_key":"kb_host","correction_count":1,"expected":false,"notes":"Single kb_host correction"}
+{"heuristic":"repeated_correction","target_key":"tls_cert_path","correction_count":2,"expected":true,"notes":"Two corrections to cert path"}
+{"heuristic":"repeated_correction","target_key":"tls_cert_path","correction_count":1,"expected":false,"notes":"One cert path correction"}
+{"heuristic":"repeated_correction","target_key":"log_level","correction_count":3,"expected":true,"notes":"Three corrections to log_level"}
+{"heuristic":"repeated_correction","target_key":"log_level","correction_count":1,"expected":false,"notes":"Single log_level correction"}
+{"heuristic":"repeated_correction","target_key":"autolabel_repair","correction_count":2,"expected":true,"notes":"Two corrections to repair flag"}
+{"heuristic":"repeated_correction","target_key":"autolabel_repair","correction_count":0,"expected":false,"notes":"No corrections to repair flag"}
+{"heuristic":"repeated_correction","target_key":"weekly_cap_rule","correction_count":4,"expected":true,"notes":"Four corrections to rule cap"}
+{"heuristic":"repeated_correction","target_key":"weekly_cap_rule","correction_count":1,"expected":false,"notes":"Single rule cap correction"}
+{"heuristic":"repeated_correction","target_key":"detection_threshold","correction_count":2,"expected":true,"notes":"Two corrections to detection threshold"}
+{"heuristic":"repeated_correction","target_key":"detection_threshold","correction_count":1,"expected":false,"notes":"Single detection threshold correction"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"git_commit","description":"Always run clang-format before commit","expected":true,"notes":"Commit workflow captured"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"make_verify","description":"Run aimee git verify before push","expected":true,"notes":"Verify workflow captured"}
+{"heuristic":"workflow_repetition","workspace":"infrastructure","signal_type":"ansible_playbook","description":"Run ansible-playbook site.yml for infra changes","expected":true,"notes":"Ansible workflow captured"}
+{"heuristic":"workflow_repetition","workspace":"smoothfs","signal_type":"make_target","description":"Use make -j8 for smoothfs builds","expected":true,"notes":"Build workflow in smoothfs project"}
+{"heuristic":"workflow_repetition","workspace":"","signal_type":"git_push_branch","description":"Some description","expected":false,"notes":"Empty workspace — should not fire"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"git_pull","description":"Pull before starting new work","expected":true,"notes":"Pull workflow"}
+{"heuristic":"workflow_repetition","workspace":"web","signal_type":"npm_build","description":"Run npm run build before deploy","expected":true,"notes":"npm build workflow"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"aimee_index_overview","description":"Run aimee index overview to orient in codebase","expected":true,"notes":"Index overview workflow"}
+{"heuristic":"workflow_repetition","workspace":"","signal_type":"","description":"Both empty","expected":false,"notes":"Both workspace and signal_type empty"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"clang_format","description":"Run clang-format-19 on modified files","expected":true,"notes":"Format workflow captured"}
+{"heuristic":"workflow_repetition","workspace":"infrastructure","signal_type":"pct_exec","description":"Use pct exec for LXC guest commands","expected":true,"notes":"Proxmox workflow captured"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"db_migrate","description":"Run db migrate after schema changes","expected":true,"notes":"Migration workflow captured"}
+{"heuristic":"workflow_repetition","workspace":"smoothkernel","signal_type":"make_target","description":"make -j$(nproc) modules_install","expected":true,"notes":"Kernel build workflow"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"git_checkout","description":"Checkout feature branch before work","expected":true,"notes":"Branch checkout workflow"}
+{"heuristic":"workflow_repetition","workspace":"","signal_type":"make_target","description":"Build workflow","expected":false,"notes":"Empty workspace — no anchor"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"test_run","description":"Run test suite after changes","expected":true,"notes":"Test run workflow"}
+{"heuristic":"workflow_repetition","workspace":"infrastructure","signal_type":"docker_compose","description":"docker-compose up -d for local dev","expected":true,"notes":"Docker workflow captured"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"memory_search","description":"Search memory for prior context before starting","expected":true,"notes":"Memory search workflow"}
+{"heuristic":"workflow_repetition","workspace":"SmoothNAS","signal_type":"rsync","description":"rsync -av for backup operations","expected":true,"notes":"Backup workflow captured"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"","description":"Signal type cleared","expected":false,"notes":"Empty signal_type — should not fire"}
+{"heuristic":"workflow_repetition","workspace":"gow","signal_type":"wolf_build","description":"Build wolf with cmake --preset release","expected":true,"notes":"GoW build workflow"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"kb_restart","description":"Restart aimee-kb after schema changes","expected":true,"notes":"Service restart workflow"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"git_stash","description":"Stash changes before switching context","expected":true,"notes":"Stash workflow captured"}
+{"heuristic":"workflow_repetition","workspace":"","signal_type":"git_commit","description":"Commit workflow","expected":false,"notes":"Empty workspace — cannot anchor to project"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"lint_check","description":"Run scripts/check_tier_deps.sh before PR","expected":true,"notes":"Lint workflow captured"}
+{"heuristic":"workflow_repetition","workspace":"aimee","signal_type":"index_rebuild","description":"Rebuild index after large refactor","expected":true,"notes":"Index rebuild workflow"}
+{"heuristic":"workflow_repetition","workspace":"","signal_type":"index_rebuild","description":"No workspace given","expected":false,"notes":"Empty workspace — cannot anchor"}

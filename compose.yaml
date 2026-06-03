@@ -1,0 +1,88 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: aimee_shared
+      POSTGRES_USER: aimee
+      POSTGRES_PASSWORD: aimee
+    volumes:
+      - aimee-kb-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aimee -d aimee_shared"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  embedder:
+    build:
+      context: .
+      dockerfile: Dockerfile.embedder
+    volumes:
+      - aimee-embedder-models:/opt/models
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  aimee-kb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      AIMEE_HOME: /var/lib/aimee
+      AIMEE_DB2_URL: postgresql://aimee:aimee@postgres:5432/aimee_shared
+      # Real semantic embeddings via the resident embedder service.
+      AIMEE_EMBEDDER_URL: http://embedder:8080
+      # Point at any OpenAI-compatible endpoint to enable the synthesis /
+      # curator passes; the optional `llm` profile below brings up a local
+      # llama.cpp server.
+      LLM_ENDPOINT: http://llm:8080/v1
+      LLM_MODEL: gemma-4-e4b-it
+    # aimee-kb serves /v1 over HTTP only; the legacy --socket transport was retired (#2747).
+    command: ["--http-port=8741"]
+    ports:
+      - "8741:8741"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embedder:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8741/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - aimee-kb-home:/var/lib/aimee
+
+  # Optional local LLM for the synthesis / curator passes — llama.cpp's
+  # llama-server, which serves an OpenAI-compatible API at /v1. Enable with
+  #   docker compose --profile llm up
+  # The model is fetched from HuggingFace on first start (-hf) and cached in the
+  # volume; override LLAMA_ARG_HF_REPO to choose a different GGUF.
+  llm:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    profiles: ["llm"]
+    environment:
+      LLAMA_ARG_HF_REPO: ggml-org/gemma-4-E4B-it-GGUF:Q4_K_M
+      LLAMA_ARG_HOST: 0.0.0.0
+      LLAMA_ARG_PORT: "8080"
+      LLAMA_ARG_ENDPOINT_HEALTH: "1"
+    volumes:
+      - aimee-llm-models:/root/.cache/llama.cpp
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  aimee-kb-home:
+  aimee-kb-postgres:
+  aimee-embedder-models:
+  aimee-llm-models:

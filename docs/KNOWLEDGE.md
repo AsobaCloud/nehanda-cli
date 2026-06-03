@@ -1,0 +1,179 @@
+# How aimee learns, and becomes your company's knowledge base
+
+aimee is built to be the **institutional memory of an entire organization**: a
+single, self-learning knowledge base that distills what *everyone* knows,
+across engineering, product, sales, support, operations, legal, finance, and
+makes it queryable by anyone, in the language of whatever domain they work in.
+
+It starts small and useful, persistent memory for your AI coding tool, and the
+*same substrate* scales up to a company-wide knowledge base. Nothing about the
+model changes between "remember my database host" and "what are the engineering
+implications of the new billing policy?"; it's the same ingest, the same graph,
+the same retrieval, at a different scope.
+
+This document explains the mechanisms behind that. Most of the substrate ships
+today (memory tiers, the curator extraction pipeline, the scope lattice, the
+knowledge graph, idle reflection, delegation); the full all-domain reach and the
+deepest cross-domain synthesis are the trajectory the architecture is built
+toward. Each capability below summarizes the machinery that backs it.
+
+---
+
+## 1. One knowledge base, every domain
+
+A shared `aimee-kb` is the organization's collective memory. The curator ingests
+**any document**, prose, code, API specs, runbooks, design docs, tickets,
+meeting notes, policies, and extracts structured knowledge from it. The pipeline
+is domain-agnostic: it doesn't care whether a document came from an engineer or
+a sales lead, it extracts entities, facts, decisions, and relationships either
+way.
+
+- *Under the hood:* a doc-and-code extraction pipeline (the "deep curator")
+  turns each ingested document into structured entities, facts, decisions, and
+  relationships, running inside a single shared `aimee-kb` service that many
+  users and projects connect to.
+
+Knowledge is organized by a **scope lattice**, `global > workspace > project >
+user`, so the same store holds company-wide truth, team context, and private
+notes without them bleeding into each other.
+
+- *Under the hood:* a memory scope lattice with an audited public access
+  contract governs what each scope (`global`/`workspace`/`project`/`user`) can
+  read and write, so promotion outward is an explicit, recorded change.
+
+---
+
+## 2. Knowledge distills two ways
+
+**Outward, the whole org compounds.** Everyone who works against a shared
+`aimee-kb` inherits everyone else's distilled knowledge. A fix one engineer
+learned, a constraint legal flagged, a customer pattern support noticed, once
+it's in a shared scope, every future query by every person benefits from it. The
+team's knowledge stops living in individual heads and chat logs and starts
+accumulating in one place.
+
+**Inward, aimee learns you.** The more you use aimee, the more it distills
+*your* knowledge, preferences, decisions, and recurring patterns into durable
+memory and an evolving personal profile. Your private (`user`-scoped) knowledge
+stays yours; what you choose to share promotes outward through an audited
+scope-change.
+
+- *Under the hood:* a cross-source learning pipeline distills sessions and
+  documents into durable memory and an evolving personal profile, splitting
+  episodic experience from semantic fact and keeping a stable per-user identity
+  that improves continuously as you use it.
+
+---
+
+## 3. It learns, it doesn't just store
+
+aimee is not a filing cabinet. Knowledge moves through a pipeline that actively
+improves it:
+
+```
+ingest → extract → synthesize → judge → link → promote
+```
+
+- **Extract** structured facts/entities/decisions from raw documents and sessions.
+- **Synthesize** higher-order knowledge from many low-level signals.
+- **Judge** candidates for quality before they become durable.
+- **Link** them into the knowledge graph (§4).
+- **Promote** the ones that prove useful; **decay** the ones that don't.
+
+It tunes *itself*: promotion thresholds are calibrated from outcomes, routing and
+ranking policies are learned from feedback, and the system runs **reflection
+passes on idle time** to consolidate what it has seen, without you asking.
+
+- *Under the hood:* idle-time reflection passes synthesize new knowledge from
+  what aimee has seen; Bayesian calibration tunes promotion thresholds from
+  outcomes; contextual-bandit routers learn ranking and routing from feedback;
+  and lifecycle states plus scheduled maintenance cycles promote what proves
+  useful and decay what doesn't.
+
+---
+
+## 4. Pattern recognition across all domains
+
+Everything aimee ingests lands in **one typed knowledge graph**. That's what lets
+it draw conclusions no single document states, by connecting entities, edges,
+and evidence that originated in different teams, formats, and domains.
+
+This is the heart of the company-wide vision: because a product spec, the code
+that implements it, the support tickets about it, and the contract that governs
+it all resolve to the *same* entities in the *same* graph, aimee can reason
+**across the boundary between any two domains**. For example:
+
+- Turn a **business/product document** into concrete **engineering implications**
+  ("this billing change requires these services to handle proration").
+- Answer a deep **technical/implementation** question for a **non-technical
+  audience** in plain language ("is the data deletion request actually honored?
+  yes, here's where, in terms a lawyer can act on").
+- Connect a **support** pattern to the **engineering** root cause, or a **sales**
+  commitment to the **roadmap** that has to deliver it.
+
+Business↔engineering is just one pair; the same machinery spans every domain in
+the company.
+
+- *Under the hood:* a typed knowledge-graph ontology with case-based recall and
+  contradiction logic, PageRank-based context pruning, per-entity profile cards,
+  and citation-backed synthesized recall (`memory_ask`) that returns answers with
+  a confidence signal.
+
+Answers come **with citations and a confidence signal**, so a cross-domain
+conclusion can be traced back to the documents it was drawn from.
+
+---
+
+## 5. Delegation that cuts cost
+
+A company-scale knowledge base does real work, synthesis, extraction, review,
+code changes, and that work costs inference. aimee keeps the bill down by
+routing each task to the **cheapest model that can actually do it**:
+
+- **Local models (Ollama)** cost nothing.
+- **Subscription-plan delegates** (ChatGPT Plus, `mistral-plan`) cost nothing
+  *extra*, you've already paid for the seat.
+- Only when a task genuinely needs it does work reach a **pay-per-token** API.
+
+The router picks the cheapest capable delegate, runs it (in parallel where it
+helps), and hands the primary agent a **compact result** instead of making it
+process raw content, so you save both on the delegate *and* on the expensive
+primary agent's context. The economics layer tracks cost and success per
+delegate so routing improves over time.
+
+- Backed by: the delegate router and economics layer (`src/server/delegate_*.c`,
+  `delegate_economics.c`); see [Setting Up Delegates](DELEGATES.md).
+
+```bash
+aimee delegate review "Review this PR"        # → cheapest capable delegate
+aimee delegate code --tools "Add tests"       # write-capable, isolated worktree
+aimee agent list                              # see configured delegates + slots
+```
+
+---
+
+## 6. The foundation it all rides on
+
+| Layer | What it gives the knowledge base |
+|-------|----------------------------------|
+| 4-tier scoped memory (L0-L3) | Fast scratch → durable facts, with automatic promotion and decay |
+| Guardrails | Sensitive-file blocking and anti-pattern detection on the hot path |
+| Session isolation | Parallel sessions in isolated git worktrees that never clobber each other |
+| Zero-cloud | Runs fully local; hosted inference is opt-in, not required |
+| Speed | Sub-10ms session start and hook checks |
+
+See the [Architecture](ARCHITECTURE.md) for how the `aimee-server` (hot path,
+DB1) and `aimee-kb` (knowledge, DB2/DB3) split this work, and the
+[Manual](../MANUAL.md) for the day-to-day commands.
+
+---
+
+## Where this is today vs. where it's heading
+
+The substrate is real and shipping: the four-tier memory, the curator extraction
+pipeline, the scope lattice, the typed knowledge graph and graph retrieval, idle
+reflection, calibration/bandit learning, and delegation all exist in the current
+build. The **all-domain, whole-company reach**, ingesting every team's documents
+into one shared graph and synthesizing freely across them, is the direction the
+architecture charts. This page describes that destination and the mechanisms
+already carrying us there; [Feature Status](STATUS.md) tracks what's live today.

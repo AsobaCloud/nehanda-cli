@@ -1,0 +1,229 @@
+#ifndef DEC_AGENT_EXEC_H
+#define DEC_AGENT_EXEC_H 1
+
+#include "agent_types.h"
+
+struct cJSON; /* forward declaration for gemini_prompt_cache_attach */
+
+/* Execution */
+int agent_execute_with_tools(const agent_t *agent, const agent_network_t *network,
+                             const char *system_prompt, const char *user_prompt, int max_tokens,
+                             double temperature, agent_result_t *out);
+
+int agent_execute_with_tools_for_role(const agent_t *agent, const agent_network_t *network,
+                                      const char *role, const char *system_prompt,
+                                      const char *user_prompt, int max_tokens, double temperature,
+                                      agent_result_t *out);
+
+int agent_execute_session_with_tools(const agent_t *agent, const agent_network_t *network,
+                                     const char *system_prompt, const char *user_prompt,
+                                     int max_tokens, double temperature,
+                                     struct cJSON *initial_messages,
+                                     struct cJSON **updated_messages, agent_result_t *out);
+
+int agent_execute(const agent_t *agent, const char *system_prompt, const char *user_prompt,
+                  int max_tokens, double temperature, agent_result_t *out);
+
+int agent_run(agent_config_t *cfg, const char *role, const char *system_prompt,
+              const char *user_prompt, int max_tokens, agent_result_t *out);
+
+/* Like agent_run but forces tool execution regardless of agent config */
+int agent_run_with_tools(agent_config_t *cfg, const char *role, const char *system_prompt,
+                         const char *user_prompt, int max_tokens, agent_result_t *out);
+
+/* Variant for delegates whose prompt explicitly says no edits should be made.
+ * When enforce_writes is 0, write-role delegates still get tools but the
+ * no-write watchdog is disabled for this run. */
+int agent_run_with_tools_write_enforce(agent_config_t *cfg, const char *role,
+                                       const char *system_prompt, const char *user_prompt,
+                                       int max_tokens, int enforce_writes, agent_result_t *out);
+
+int agent_run_parallel(agent_config_t *cfg, agent_task_t *tasks, int task_count,
+                       agent_result_t *out);
+
+/* Delegate fallback helpers */
+int agent_error_is_retryable(const char *error);
+int agent_try_same_tier_fallback(agent_config_t *cfg, agent_t **current, const char *role,
+                                 const char *system_prompt, const char *user_prompt, int max_tokens,
+                                 int enforce_writes, agent_result_t *out, int rc);
+
+/* Execute with per-agent concurrency guard. Acquires a slot from the
+ * provider catalog before calling agent_execute_with_tools_for_role and
+ * releases it on return. Returns -1 immediately if the agent is at its
+ * max_parallel ceiling. */
+int agent_execute_guarded(agent_t *ag, const agent_network_t *net, const char *role,
+                          const char *system_prompt, const char *user_prompt, int max_tokens,
+                          agent_result_t *out);
+
+/* Logging */
+void agent_log_call(const agent_result_t *result, const char *role);
+int agent_get_stats(const char *name, agent_stats_t *out, int max);
+
+/* Task type classification */
+task_type_t task_type_classify(const char *prompt);
+
+/* Resolve the effective max-turns limit for an agent invocation.
+ * Primary sessions (role == NULL) ignore agent->max_turns; only delegates cap. */
+int agent_resolve_max_turns(const agent_t *agent, const char *role);
+const char *task_type_name(task_type_t type);
+
+/* Context assembly */
+size_t agent_exec_context_budget_chars(const agent_t *agent);
+char *agent_build_exec_context(const agent_t *agent, const agent_network_t *network,
+                               const char *custom_prompt);
+char *agent_build_exec_context_ex(const agent_t *agent, const agent_network_t *network,
+                                  const char *custom_prompt, int skip_kb_context);
+void agent_print_context(const agent_config_t *cfg);
+
+/* Ephemeral SSH */
+int agent_ssh_setup(const agent_network_t *network, char *key_path_out, size_t key_path_len,
+                    char *session_id_out, size_t session_id_len);
+void agent_ssh_cleanup(const agent_network_t *network, const char *key_path,
+                       const char *session_id);
+
+/* Policy, trace, confidence */
+int tool_validate(const char *tool_name, const char *args_json, char *err_out, size_t err_len);
+const char *tool_suggest(const char *name);
+const char *tool_side_effect(const char *tool_name);
+char *agent_collect_tool_prompts(void);
+void agent_trace_log(int plan_id, int turn, const char *direction, const char *content,
+                     const char *tool_name, const char *tool_args, const char *tool_result,
+                     const char *context_hash);
+int agent_estimate_confidence(const char *response_text);
+int policy_check_tool(const char *tool_name, const char *side_effect, const char *args_json,
+                      char *reason_out, size_t reason_len);
+int policy_load(void);
+
+/* Metrics, introspection, manifests, contract */
+void agent_write_metrics(void);
+void agent_introspect_env(void);
+void agent_write_manifest(const char *run_id, const agent_result_t *result, const char *role);
+char *agent_load_project_contract(const char *project_root);
+/* Compact a raw tool result string using application config.
+ * tool_name may be NULL to skip per-tool overrides. Returns a heap-allocated
+ * string bounded by AGENT_TOOL_OUTPUT_MAX; caller must free(). */
+char *agent_compress_tool_result(const char *raw, size_t raw_len, const char *tool_name);
+
+/* Self-correcting delegate loop
+ *
+ * Wraps agent_run in a quality-checking loop. After each iteration the agent
+ * is asked to self-assess task completion (0-100). Execution continues until
+ * the completion score meets the threshold, the optional verify command passes,
+ * or the iteration cap is reached.
+ *
+ * This is separate from --retry (transient failure retry). The loop addresses
+ * quality: "task not fully done", whereas retry addresses reliability: "API
+ * error, try again". */
+
+#define AGENT_LOOP_MAX_ITER_DEFAULT  5    /* maximum iterations before giving up */
+#define AGENT_LOOP_THRESHOLD_DEFAULT 95   /* stop when completion >= this */
+#define AGENT_LOOP_CONTEXT_MAX       8192 /* max bytes of accumulated context */
+
+typedef struct
+{
+   int max_iterations;       /* cap on total iterations */
+   int completion_threshold; /* 0-100: stop when self-assessed >= this */
+   char verify_cmd[1024];    /* optional shell command; failure → continue loop */
+   /* runtime (zeroed on init) */
+   int current_iteration;
+   int last_completion;       /* last parsed completion score */
+   char *accumulated_context; /* heap: summary of prior iterations (NULL if none) */
+} agent_loop_t;
+
+/* Initialise loop with explicit parameters. Sets runtime fields to zero. */
+void agent_loop_init(agent_loop_t *loop, int max_iter, int threshold, const char *verify_cmd);
+
+/* Free heap resources. Safe to call on a zero-initialised struct. */
+void agent_loop_free(agent_loop_t *loop);
+
+/* Parse a completion score and optional gaps from a delegate response.
+ * Scans for the last occurrence of {"completion": N, "gaps": [...]} in text.
+ * Returns the completion score (0-100) on success, or -1 if not found.
+ * If gaps_out is non-NULL and gaps_len > 0, fills it with the "gaps" array
+ * as a comma-separated string. */
+int agent_loop_parse_completion(const char *response, char *gaps_out, size_t gaps_len);
+
+/* Run a self-correcting agent loop.
+ * Executes agent_run repeatedly, augmenting the prompt with self-assessment
+ * instructions and feeding prior-iteration context into each continuation.
+ * Stops when:
+ *   (a) self-assessed completion >= loop->completion_threshold AND
+ *       verify_cmd passes (or is empty), OR
+ *   (b) loop->max_iterations is exhausted.
+ * out->response is set to the final iteration's response (caller must free).
+ * Returns 0 when the task is considered complete, -1 on hard failure. */
+int agent_loop_run(agent_config_t *cfg, const char *role, const char *system_prompt,
+                   const char *original_prompt, int max_tokens, agent_loop_t *loop,
+                   agent_result_t *out);
+
+/* Provider health */
+typedef enum
+{
+   PROVIDER_ERR_NONE = 0,
+   PROVIDER_ERR_NETWORK,    /* connection refused, DNS failure, timeout */
+   PROVIDER_ERR_AUTH,       /* 401, 403 */
+   PROVIDER_ERR_RATE_LIMIT, /* 429 */
+   PROVIDER_ERR_SERVER,     /* 5xx */
+   PROVIDER_ERR_CLIENT,     /* other 4xx */
+   PROVIDER_ERR_UNKNOWN
+} provider_err_class_t;
+
+typedef struct
+{
+   int available;         /* 1=ok, 0=unreachable, -1=unknown */
+   int64_t last_check_ms; /* monotonic timestamp of last check */
+   int last_http_status;  /* last HTTP status code, or -1 for network error */
+   char error[256];       /* last error message */
+} provider_health_t;
+
+provider_err_class_t provider_classify_error(int http_status);
+const char *provider_error_message(provider_err_class_t cls);
+void provider_health_update(const char *provider_name, int http_status);
+const provider_health_t *provider_health_get(const char *provider_name);
+
+/* HTTP */
+int agent_http_get(const char *url, const char *extra_headers, char **response_buf, int timeout_ms);
+int agent_http_put(const char *url, const char *auth_header, const char *body, char **response_buf,
+                   int timeout_ms, const char *extra_headers);
+int agent_http_post(const char *url, const char *auth_header, const char *body, char **response_buf,
+                    int timeout_ms, const char *extra_headers);
+int agent_http_post_content_type(const char *url, const char *auth_header, const char *content_type,
+                                 const char *body, char **response_buf, int timeout_ms,
+                                 const char *extra_headers);
+int agent_http_delete(const char *url, const char *auth_header, int timeout_ms);
+
+/* Streaming callback: called for each data chunk. Return 0 to continue, non-zero to abort. */
+typedef int (*agent_http_stream_cb)(const char *data, size_t len, void *userdata);
+
+int agent_http_get_stream(const char *url, const char *extra_headers, agent_http_stream_cb callback,
+                          void *userdata, int timeout_ms);
+int agent_http_post_stream(const char *url, const char *auth_header, const char *body,
+                           agent_http_stream_cb callback, void *userdata, int timeout_ms,
+                           const char *extra_headers);
+int agent_http_post_form(const char *url, const char *body, char **response_buf, int timeout_ms);
+void agent_http_init(void);
+void agent_http_cleanup(void);
+
+/* Gemini Prompt Cache
+ *
+ * Gemini supports explicit caching of system prompts ("cachedContent").
+ * Create once before the agent loop; attach to each request; delete on cleanup.
+ * All functions degrade silently on error so callers need no special handling. */
+
+/* Try to create a cached-content resource for system_prompt.
+ * On success fills cache_name_out and returns 0; returns -1 on any error.
+ * endpoint_base: e.g. "https://generativelanguage.googleapis.com/v1beta" (NULL = default)
+ * timeout_ms: per-request HTTP timeout */
+int gemini_prompt_cache_create(const char *endpoint_base, const char *auth_header,
+                               const char *model, const char *system_prompt, int timeout_ms,
+                               char *cache_name_out, size_t name_len);
+
+/* Attach a cached-content reference to an already-built Gemini request body.
+ * Removes "systemInstruction" (it lives in the cache) and adds "cachedContent". */
+void gemini_prompt_cache_attach(struct cJSON *req, const char *cache_name);
+
+/* Delete a cached-content resource. Errors are logged at DEBUG, never surfaced. */
+void gemini_prompt_cache_delete(const char *endpoint_base, const char *auth_header,
+                                const char *cache_name, int timeout_ms);
+
+#endif /* DEC_AGENT_EXEC_H */

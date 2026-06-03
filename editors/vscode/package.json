@@ -1,0 +1,84 @@
+{
+  "name": "aimee-vscode",
+  "displayName": "aimee",
+  "description": "Chat with aimee (delegate-routed, with memory + guardrails) inside VS Code via the aimee-server /v1 API.",
+  "version": "0.0.1",
+  "publisher": "aimee",
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "engines": {
+    "vscode": "^1.104.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "aimee.chat",
+        "name": "aimee",
+        "fullName": "aimee",
+        "description": "Route this prompt through aimee (memory + guardrails + delegate fabric).",
+        "isSticky": true
+      }
+    ],
+    "languageModelChatProviders": [
+      {
+        "vendor": "aimee",
+        "displayName": "aimee"
+      }
+    ],
+    "commands": [
+      {
+        "command": "aimee.showServerStatus",
+        "title": "aimee: Show server status"
+      },
+      {
+        "command": "aimee.searchMemory",
+        "title": "aimee: Recall from memory"
+      },
+      {
+        "command": "aimee.searchKnowledgeBase",
+        "title": "aimee: Search knowledge base"
+      },
+      {
+        "command": "aimee.openChat",
+        "title": "aimee: Open chat panel"
+      }
+    ],
+    "configuration": {
+      "title": "aimee",
+      "properties": {
+        "aimee.apiBase": {
+          "type": "string",
+          "default": "http://127.0.0.1:8910/v1",
+          "description": "Base URL of the aimee-server /v1 API (the loopback TCP listener; see `aimee api status`)."
+        },
+        "aimee.bearerToken": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Bearer token for the /v1 API (your `aimee.api.bearer_token`). A `project:`-scoped token is recommended so the editor can read and chat but not perform admin mutations."
+        },
+        "aimee.model": {
+          "type": "string",
+          "default": "aimee",
+          "description": "Model id sent to /v1/chat/completions."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "check": "tsc --noEmit -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.104.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""Result schema validation tests.
+
+Tests that validate_direct_result, validate_llm_result, and
+validate_provenance correctly accept valid results and reject
+malformed ones.
+"""
+
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from benchmarks.common.result_schema import (
+    PROVENANCE_FIELDS,
+    validate_direct_result,
+    validate_llm_result,
+    validate_provenance,
+)
+
+
+def _valid_direct_row() -> dict:
+    return {
+        "system": "aimee",
+        "track": "direct",
+        "git_commit": "abc1234",
+        "question_id": "q1",
+        "question": "What is the capital of France?",
+        "gold_answer": "Paris",
+        "verdict": "CORRECT",
+        "retrieval_latency_s": 0.05,
+        "retrieved_ids": ["id1", "id2"],
+        "citations": [],
+        "category": "geography",
+    }
+
+
+def _valid_llm_row() -> dict:
+    return {
+        **_valid_direct_row(),
+        "track": "llm",
+        "generated_answer": "Paris",
+        "judge_votes": ["CORRECT", "CORRECT", "CORRECT"],
+        "answer_latency_s": 1.2,
+        "judge_latency_s": 0.8,
+        "wall_clock_s": 2.1,
+        "tokens": {"prompt": 100, "completion": 50},
+        "cost": {"usd": 0.001},
+    }
+
+
+def _sample_value(key: str) -> str | int | bool:
+    if key == "seed":
+        return 42
+    if key == "pinned":
+        return True
+    return "v1.0.0"
+
+
+def _valid_provenance_payload() -> dict:
+    payload = {key: _sample_value(key) for key in PROVENANCE_FIELDS}
+    # Override enum-like fields that require specific values.
+    payload["environment"] = "container"
+    payload["judge_profile"] = "open70b"
+    return payload
+
+
+class DirectResultSchemaTest(unittest.TestCase):
+    def test_valid_row_passes(self) -> None:
+        validate_direct_result(_valid_direct_row(), "category")
+
+    def test_missing_system_fails(self) -> None:
+        row = _valid_direct_row()
+        del row["system"]
+        with self.assertRaises(ValueError):
+            validate_direct_result(row, "category")
+
+    def test_missing_verdict_fails(self) -> None:
+        row = _valid_direct_row()
+        del row["verdict"]
+        with self.assertRaises(ValueError):
+            validate_direct_result(row, "category")
+
+    def test_invalid_verdict_fails(self) -> None:
+        row = _valid_direct_row()
+        row["verdict"] = "MAYBE"
+        with self.assertRaises(ValueError):
+            validate_direct_result(row, "category")
+
+    def test_wrong_track_fails(self) -> None:
+        row = _valid_direct_row()
+        row["track"] = "llm"
+        with self.assertRaises(ValueError):
+            validate_direct_result(row, "category")
+
+    def test_missing_label_field_fails(self) -> None:
+        row = _valid_direct_row()
+        del row["category"]
+        with self.assertRaises(ValueError):
+            validate_direct_result(row, "category")
+
+    def test_null_field_fails(self) -> None:
+        row = _valid_direct_row()
+        row["gold_answer"] = None  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            validate_direct_result(row, "category")
+
+    def test_wrong_type_for_retrieved_ids_fails(self) -> None:
+        row = _valid_direct_row()
+        row["retrieved_ids"] = "not_a_list"  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            validate_direct_result(row, "category")
+
+
+class LLMResultSchemaTest(unittest.TestCase):
+    def test_valid_llm_row_passes(self) -> None:
+        validate_llm_result(_valid_llm_row(), "category")
+
+    def test_missing_generated_answer_fails(self) -> None:
+        row = _valid_llm_row()
+        del row["generated_answer"]
+        with self.assertRaises(ValueError):
+            validate_llm_result(row, "category")
+
+    def test_missing_judge_votes_fails(self) -> None:
+        row = _valid_llm_row()
+        del row["judge_votes"]
+        with self.assertRaises(ValueError):
+            validate_llm_result(row, "category")
+
+    def test_missing_tokens_fails(self) -> None:
+        row = _valid_llm_row()
+        del row["tokens"]
+        with self.assertRaises(ValueError):
+            validate_llm_result(row, "category")
+
+    def test_wrong_type_for_latency_fails(self) -> None:
+        row = _valid_llm_row()
+        row["answer_latency_s"] = "one second"  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            validate_llm_result(row, "category")
+
+
+class ProvenanceSchemaTest(unittest.TestCase):
+    def test_valid_full_provenance_passes(self) -> None:
+        errors = validate_provenance(_valid_provenance_payload())
+        self.assertEqual(errors, [], f"Expected no errors, got {errors}")
+
+    def test_empty_payload_passes(self) -> None:
+        errors = validate_provenance({})
+        self.assertEqual(errors, [], "Empty payload should be valid (legacy compat)")
+
+    def test_invalid_environment_fails(self) -> None:
+        errors = validate_provenance({"environment": "docker"})
+        self.assertTrue(
+            any("environment" in e for e in errors),
+            f"Expected environment error, got {errors}",
+        )
+
+    def test_invalid_judge_profile_fails(self) -> None:
+        errors = validate_provenance({"judge_profile": "unknown"})
+        self.assertTrue(
+            any("judge_profile" in e for e in errors),
+            f"Expected judge_profile error, got {errors}",
+        )
+
+    def test_null_target_system_fails(self) -> None:
+        errors = validate_provenance({"target_system": None})  # type: ignore[dict-item]
+        self.assertTrue(
+            any("null" in e and "target_system" in e for e in errors),
+            f"Expected null field error for target_system, got {errors}",
+        )
+
+    def test_wrong_type_for_seed_fails(self) -> None:
+        errors = validate_provenance({"seed": "42"})  # type: ignore[dict-item]
+        self.assertTrue(
+            any("seed" in e and "wrong type" in e for e in errors),
+            f"Expected type error for seed, got {errors}",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

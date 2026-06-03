@@ -1,0 +1,48 @@
+services:
+  # Shared Postgres store for the proxy replicas. A single aimee binary
+  # can run against SQLite or Postgres; this compose file demonstrates
+  # the two-replica Postgres deployment described in
+  # docs/proposals/accepted/three-db-split-user-shared-vectors.md.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aimee
+      POSTGRES_PASSWORD: aimee
+      POSTGRES_DB: aimee_proxy
+    volumes:
+      - proxy-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "aimee", "-d", "aimee_proxy"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    restart: unless-stopped
+
+  aimee-proxy-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    ports:
+      - "8400:8400"
+    volumes:
+      - ./examples/aimee-proxy-postgres.yaml:/etc/aimee/aimee-proxy.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  aimee-proxy-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    ports:
+      - "8401:8400"
+    volumes:
+      - ./examples/aimee-proxy-postgres.yaml:/etc/aimee/aimee-proxy.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  proxy-pg-data:

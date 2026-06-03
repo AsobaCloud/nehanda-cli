@@ -1,0 +1,134 @@
+{
+  "description": "Virtual context benchmark fixture corpus. Each fixture represents an anonymized session where the agent must recall an early tool result to answer a late-turn question. Add real anonymized sessions before running the gate benchmark.",
+  "schema_version": "1",
+  "fixtures": [
+    {
+      "id": "vc_synthetic_001",
+      "notes": "SYNTHETIC: replace with a real anonymized session before running the gate. Shows schema only.",
+      "tool_call_count": 22,
+      "long_context": true,
+      "recall_question": "What exit code did the first Bash tool call return?",
+      "ground_truth": "1",
+      "session_turns": [
+        {
+          "role": "user",
+          "content": "Check if the build passes."
+        },
+        {
+          "role": "assistant",
+          "content": "I'll run the build.",
+          "tool_calls": [
+            {
+              "type": "bash",
+              "command": "make -j4",
+              "exit_code": 1,
+              "stdout": "",
+              "stderr": "error: undefined reference to 'db1_conn'"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "Fix the linker error and try again."
+        },
+        {
+          "role": "assistant",
+          "content": "Let me fix the missing symbol.",
+          "tool_calls": [
+            {"type": "read", "path": "src/db1.c", "content": "/* stub */"},
+            {"type": "edit", "path": "src/db1.c", "summary": "add db1_conn definition"},
+            {"type": "bash", "command": "make -j4", "exit_code": 0, "stdout": "Build OK", "stderr": ""}
+          ]
+        },
+        {
+          "role": "user",
+          "content": "Great. Now run tests."
+        },
+        {
+          "role": "assistant",
+          "content": "Running the test suite.",
+          "tool_calls": [
+            {"type": "bash", "command": "make test", "exit_code": 0, "stdout": "All tests passed", "stderr": ""}
+          ]
+        },
+        {
+          "role": "user",
+          "content": "What exit code did the first build attempt return?"
+        }
+      ]
+    },
+    {
+      "id": "vc_synthetic_002",
+      "notes": "SYNTHETIC: replace with a real anonymized session before running the gate. Shows schema only.",
+      "tool_call_count": 20,
+      "long_context": false,
+      "recall_question": "What was the value of the AIMEE_LOG_LEVEL variable in the first Bash call?",
+      "ground_truth": "debug",
+      "session_turns": [
+        {
+          "role": "user",
+          "content": "Check what log level aimee is running at."
+        },
+        {
+          "role": "assistant",
+          "content": "Let me check.",
+          "tool_calls": [
+            {"type": "bash", "command": "echo $AIMEE_LOG_LEVEL", "exit_code": 0, "stdout": "debug", "stderr": ""}
+          ]
+        },
+        {
+          "role": "user",
+          "content": "Now change it and restart."
+        },
+        {
+          "role": "assistant",
+          "content": "Setting log level to info.",
+          "tool_calls": [
+            {"type": "bash", "command": "export AIMEE_LOG_LEVEL=info && systemctl restart aimee", "exit_code": 0, "stdout": "", "stderr": ""}
+          ]
+        },
+        {
+          "role": "user",
+          "content": "What was the original log level before we changed it?"
+        }
+      ]
+    },
+    {
+      "id": "vc_synthetic_003",
+      "notes": "SYNTHETIC: replace with a real anonymized session before running the gate. Shows schema only.",
+      "tool_call_count": 28,
+      "long_context": true,
+      "recall_question": "How many lines did the first grep call return?",
+      "ground_truth": "3",
+      "session_turns": [
+        {
+          "role": "user",
+          "content": "How many files reference kb_client_index_code_search?"
+        },
+        {
+          "role": "assistant",
+          "content": "Let me search.",
+          "tool_calls": [
+            {"type": "bash", "command": "grep -r kb_client_index_code_search src/ | wc -l", "exit_code": 0, "stdout": "3", "stderr": ""}
+          ]
+        },
+        {
+          "role": "user",
+          "content": "Add a new caller. Create src/new_caller.c."
+        },
+        {
+          "role": "assistant",
+          "content": "Creating the new caller file.",
+          "tool_calls": [
+            {"type": "write", "path": "src/new_caller.c", "summary": "new file calling kb_client_index_code_search"},
+            {"type": "bash", "command": "grep -r kb_client_index_code_search src/ | wc -l", "exit_code": 0, "stdout": "4", "stderr": ""}
+          ]
+        },
+        {
+          "role": "user",
+          "content": "How many references were there before we added the new caller?"
+        }
+      ]
+    }
+  ]
+}

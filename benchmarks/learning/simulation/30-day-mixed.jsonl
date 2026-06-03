@@ -1,0 +1,31 @@
+{"ts":"2026-05-01T09:00:00Z","signal_type":"mark_rule","source":"explicit","high_confidence":true,"description":"use absolute paths in file edits"}
+{"ts":"2026-05-02T10:00:00Z","signal_type":"citation_then_repair","source":"implicit","target_key":"mem-001"}
+{"ts":"2026-05-03T11:00:00Z","signal_type":"citation_then_continuation","source":"implicit","target_key":"mem-002"}
+{"ts":"2026-05-04T09:30:00Z","signal_type":"mark_rule","source":"explicit","high_confidence":true,"description":"run clang-format before git verify"}
+{"ts":"2026-05-05T14:00:00Z","signal_type":"repeat_question","source":"implicit"}
+{"ts":"2026-05-06T10:15:00Z","signal_type":"correction","source":"explicit","target_key":"db1_path","correction_text":"/home/virant/.aimee/db.sqlite"}
+{"ts":"2026-05-07T09:00:00Z","signal_type":"repeated_correction","source":"implicit","target_key":"db1_path"}
+{"ts":"2026-05-08T11:00:00Z","signal_type":"workflow_repetition","source":"implicit","workflow_project":"aimee","workflow_signal_type":"git_push_branch"}
+{"ts":"2026-05-09T10:00:00Z","signal_type":"citation_then_repair","source":"implicit","target_key":"mem-003"}
+{"ts":"2026-05-10T12:00:00Z","signal_type":"mark_rule","source":"explicit","high_confidence":true,"description":"never use aimee_db_t in new code"}
+{"ts":"2026-05-11T09:00:00Z","signal_type":"thumb_up","source":"explicit","target_key":"mem-004"}
+{"ts":"2026-05-12T10:30:00Z","signal_type":"citation_then_continuation","source":"implicit","target_key":"mem-005"}
+{"ts":"2026-05-13T14:00:00Z","signal_type":"repeat_question","source":"implicit"}
+{"ts":"2026-05-14T09:00:00Z","signal_type":"correction","source":"explicit","target_key":"learning_ttl","correction_text":"14"}
+{"ts":"2026-05-15T11:00:00Z","signal_type":"repeated_correction","source":"implicit","target_key":"learning_ttl"}
+{"ts":"2026-05-16T10:00:00Z","signal_type":"citation_then_repair","source":"implicit","target_key":"mem-006"}
+{"ts":"2026-05-17T09:30:00Z","signal_type":"workflow_repetition","source":"implicit","workflow_project":"infrastructure","workflow_signal_type":"make_target"}
+{"ts":"2026-05-18T12:00:00Z","signal_type":"mark_rule","source":"explicit","high_confidence":true,"description":"workers must not access DB directly"}
+{"ts":"2026-05-19T10:00:00Z","signal_type":"citation_then_continuation","source":"implicit","target_key":"mem-007"}
+{"ts":"2026-05-20T09:00:00Z","signal_type":"thumb_down","source":"explicit","target_key":"mem-008"}
+{"ts":"2026-05-21T11:30:00Z","signal_type":"citation_then_repair","source":"implicit","target_key":"mem-009"}
+{"ts":"2026-05-22T10:00:00Z","signal_type":"mark_rule","source":"explicit","high_confidence":true,"description":"db2 is postgres, db1 is sqlite"}
+{"ts":"2026-05-23T09:00:00Z","signal_type":"repeat_question","source":"implicit"}
+{"ts":"2026-05-24T14:00:00Z","signal_type":"correction","source":"explicit","target_key":"max_iterations","correction_text":"50"}
+{"ts":"2026-05-25T10:30:00Z","signal_type":"citation_then_continuation","source":"implicit","target_key":"mem-010"}
+{"ts":"2026-05-26T09:00:00Z","signal_type":"workflow_repetition","source":"implicit","workflow_project":"aimee","workflow_signal_type":"test_command"}
+{"ts":"2026-05-27T11:00:00Z","signal_type":"mark_rule","source":"explicit","high_confidence":true,"description":"batch verify before push"}
+{"ts":"2026-05-28T10:00:00Z","signal_type":"citation_then_repair","source":"implicit","target_key":"mem-011"}
+{"ts":"2026-05-29T09:30:00Z","signal_type":"repeated_correction","source":"implicit","target_key":"max_iterations"}
+{"ts":"2026-05-30T14:00:00Z","signal_type":"citation_then_continuation","source":"implicit","target_key":"mem-012"}
+{"_assert":"commit_ratio_below_ceiling","weekly_cap_per_sink":5,"total_days":30,"note":"30-day mixed trace; mark_rule auto-commits should not exceed weekly cap per sink in any rolling 7-day window"}

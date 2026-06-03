@@ -1,0 +1,27 @@
+{
+  "name": "debate",
+  "description": "Adversarial analysis with alternating turns",
+  "phases": [
+    {
+      "name": "opening",
+      "participants": [
+        { "role": "for" },
+        { "role": "against" }
+      ]
+    },
+    {
+      "name": "cross-examination",
+      "participants": [
+        { "role": "for" },
+        { "role": "against" }
+      ]
+    },
+    {
+      "name": "closing",
+      "participants": [
+        { "role": "for" },
+        { "role": "against" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+/* session_compact.h: structured session compaction for long-running conversations.
+ *
+ * When a session approaches the model's context window, this module summarises
+ * the older portion of the message history into a compact boundary marker and
+ * preserves the most-recent turns verbatim so the agent can continue without
+ * losing immediate context.
+ *
+ * Summary boundary structure:
+ *   [CONTEXT COMPACTION — REFERENCE ONLY]
+ *   ## Active Task
+ *   ## Goal
+ *   ## Constraints
+ *   ## Completed Actions
+ *   ## Active State
+ *   ## In Progress
+ *   ## Blocked
+ *   ## Key Decisions
+ *   ## Resolved Questions
+ *   ## Pending User Asks
+ *   ## Relevant Files
+ *   [turn N+1 onward retained verbatim]
+ *
+ * Pressure levels (returned by session_compact_pressure):
+ *   SESSION_PRESSURE_OK      — context usage is fine
+ *   SESSION_PRESSURE_WARN    — approaching limit, consider preparing
+ *   SESSION_PRESSURE_COMPACT — compact now before the next LLM call
+ */
+#ifndef SESSION_COMPACT_H
+#define SESSION_COMPACT_H 1
+
+struct cJSON;
+
+/* Pressure levels */
+#define SESSION_PRESSURE_OK      0
+#define SESSION_PRESSURE_WARN    1
+#define SESSION_PRESSURE_COMPACT 2
+
+/* Default thresholds (percentage of context window) */
+#define SESSION_COMPACT_DEFAULT_WARN_PCT    70
+#define SESSION_COMPACT_DEFAULT_COMPACT_PCT 80
+
+/* Number of recent messages always retained verbatim (the "tail") */
+#define SESSION_COMPACT_RETAIN_TAIL 6
+
+/* Maximum length of the generated summary text */
+#define SESSION_COMPACT_SUMMARY_MAX 8192
+
+typedef struct
+{
+   int warn_pct;    /* warn threshold %; 0 = use default (70) */
+   int compact_pct; /* compact threshold %; 0 = use default (80) */
+   int retain_tail; /* recent messages to keep verbatim; 0 = use default (6) */
+} session_compact_config_t;
+
+typedef struct
+{
+   int compacted;        /* 1 if compaction happened; 0 if not needed/messages too few */
+   int messages_before;  /* total messages before compaction */
+   int messages_after;   /* total messages after compaction */
+   int messages_removed; /* messages replaced by the summary boundary */
+   int repairs;          /* tool-pair repairs performed before compaction */
+   char summary[SESSION_COMPACT_SUMMARY_MAX]; /* generated summary text */
+} session_compact_result_t;
+
+/* Estimate the approximate token count for a cJSON messages array.
+ * Uses a 4-character-per-token approximation on serialised content.
+ * Returns 0 if messages is NULL or not an array. */
+int session_compact_estimate_tokens(struct cJSON *messages);
+
+/* Check context pressure given token counts and context window size.
+ * Returns SESSION_PRESSURE_OK / WARN / COMPACT.
+ * prompt_tokens + completion_tokens: accumulated this session.
+ * context_window: model limit in tokens (0 = unknown; returns OK).
+ * cfg may be NULL to use built-in defaults. */
+int session_compact_pressure(int prompt_tokens, int completion_tokens, int context_window,
+                             const session_compact_config_t *cfg);
+
+/* Compact a cJSON messages array in-place.
+ *
+ * Steps performed:
+ *   1. Repair orphaned tool call / result pairs (message_history_repair).
+ *   2. Build a structured text summary of the messages to be discarded.
+ *   3. Insert a "compaction boundary" user message with the summary.
+ *   4. Remove the summarised messages, retaining the tail verbatim.
+ *   5. Merge consecutive same-role messages (messages_compact_consecutive).
+ *
+ * The first message is always kept (typically the system prompt or original
+ * task). Messages in the middle are summarised.  The last `retain_tail`
+ * messages are kept verbatim.
+ *
+ * Returns 0 on success (result->compacted indicates whether anything changed).
+ * Returns -1 on error (messages NULL or not an array).
+ * cfg may be NULL to use built-in defaults.
+ * out may be NULL if the caller only needs the side effect. */
+int session_compact(struct cJSON *messages, const session_compact_config_t *cfg,
+                    session_compact_result_t *out);
+
+/* Produce a structured 11-section summary for a given focus topic without a
+ * real messages array.  Builds a minimal synthetic conversation so that
+ * ## Active Task is set to `topic`.  All other sections are populated with
+ * default placeholder text.
+ *
+ * Output is written into `out` (NUL-terminated).
+ * Returns 0 on success, -1 on error (topic NULL or out NULL). */
+int session_compact_focused(const char *topic, char *out, size_t out_len);
+
+#endif /* SESSION_COMPACT_H */

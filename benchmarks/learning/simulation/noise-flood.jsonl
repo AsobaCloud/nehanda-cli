@@ -1,0 +1,21 @@
+{"ts":"2026-05-01T00:00:00Z","signal_type":"thumb_up","target_key":"mem-001","source":"explicit"}
+{"ts":"2026-05-01T00:01:00Z","signal_type":"thumb_up","target_key":"mem-002","source":"explicit"}
+{"ts":"2026-05-01T00:02:00Z","signal_type":"thumb_up","target_key":"mem-003","source":"explicit"}
+{"ts":"2026-05-01T00:03:00Z","signal_type":"citation_then_repair","target_key":"mem-004","source":"implicit"}
+{"ts":"2026-05-01T00:04:00Z","signal_type":"repeat_question","target_key":"","source":"implicit"}
+{"ts":"2026-05-01T00:05:00Z","signal_type":"citation_then_repair","target_key":"mem-005","source":"implicit"}
+{"ts":"2026-05-01T00:06:00Z","signal_type":"citation_then_continuation","target_key":"mem-006","source":"implicit"}
+{"ts":"2026-05-01T00:07:00Z","signal_type":"repeat_question","target_key":"","source":"implicit"}
+{"ts":"2026-05-01T00:08:00Z","signal_type":"citation_then_repair","target_key":"mem-007","source":"implicit"}
+{"ts":"2026-05-01T00:09:00Z","signal_type":"repeated_correction","target_key":"db1_path","source":"implicit"}
+{"ts":"2026-05-01T00:10:00Z","signal_type":"citation_then_repair","target_key":"mem-008","source":"implicit"}
+{"ts":"2026-05-01T00:11:00Z","signal_type":"mark_rule","target_key":"","source":"explicit"}
+{"ts":"2026-05-01T00:12:00Z","signal_type":"citation_then_continuation","target_key":"mem-009","source":"implicit"}
+{"ts":"2026-05-01T00:13:00Z","signal_type":"repeated_correction","target_key":"db1_path","source":"implicit"}
+{"ts":"2026-05-01T00:14:00Z","signal_type":"workflow_repetition","workflow_project":"aimee","workflow_signal_type":"git_push_branch","source":"implicit"}
+{"ts":"2026-05-01T00:15:00Z","signal_type":"citation_then_repair","target_key":"mem-010","source":"implicit"}
+{"ts":"2026-05-01T00:16:00Z","signal_type":"thumb_down","target_key":"mem-011","source":"explicit"}
+{"ts":"2026-05-01T00:17:00Z","signal_type":"citation_then_repair","target_key":"mem-012","source":"implicit"}
+{"ts":"2026-05-01T00:18:00Z","signal_type":"repeat_question","target_key":"","source":"implicit"}
+{"ts":"2026-05-01T00:19:00Z","signal_type":"citation_then_continuation","target_key":"mem-013","source":"implicit"}
+{"_assert":"commit_ratio_below_ceiling","weekly_cap_per_sink":5,"note":"20 signals; at most 5 mark_rule auto-commits; ratio should not exceed per-sink cap"}

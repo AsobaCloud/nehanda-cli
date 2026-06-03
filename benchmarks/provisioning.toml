@@ -1,0 +1,281 @@
+# benchmarks/provisioning.toml
+# Per-dataset provisioning manifest for the unified benchmark suite.
+#
+# This file documents, for *every* dataset in benchmarks/catalog.toml, a
+# concrete provisioning path: where the canonical copy comes from, which file(s)
+# are expected under data/<bench>/, and whether it can be fetched automatically
+# or must be placed manually (gated / requires a transform step).
+#
+# benchmarks/check_provisioning.py enforces that every catalog dataset has an
+# entry here (coverage gate) and, once files are present on disk, computes their
+# SHA-256 so the matching catalog.toml `hash` field can be pinned.
+#
+# method:
+#   auto     fetchable from `fetch` with curl/wget, no credentials required.
+#   auto_hf  fetchable from a Hugging Face dataset; may need HF_TOKEN if gated.
+#   manual   requires a gated download, repo clone, or a generation/transform
+#            step; follow `notes` and place the result at data/<files>.
+#   bundled  ships in-repo as a fixture (no external download).
+#
+# files: paths relative to the repo `data/` directory (or the repo root for
+#        bundled fixtures). These are the artifacts the loaders read.
+# gated: true when the source requires an account / license acceptance / token.
+
+[meta]
+data_root = "data"
+# Datasets fetched only when the named env var is set to 1 (large/optional).
+optional_env = { longmemeval_m = "AIMEE_FETCH_LONGMEM_ML", longmemeval_l = "AIMEE_FETCH_LONGMEM_ML" }
+
+# ---------------------------------------------------------------------------
+# Memory pillar
+# ---------------------------------------------------------------------------
+
+[dataset.locomo]
+method = "auto"
+fetch = "https://huggingface.co/datasets/Percena/locomo-mc10/resolve/main/raw/locomo10.json"
+files = ["locomo/locomo10.json"]
+gated = false
+notes = "LoCoMo-10 multiple-choice/QA. Fetched by scripts/download-memory-benchmarks.sh."
+
+[dataset.longmemeval_s]
+method = "auto"
+fetch = "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json"
+files = ["longmemeval/longmemeval_s_cleaned.json"]
+gated = false
+notes = "LongMemEval-S cleaned split. Fetched by scripts/download-memory-benchmarks.sh."
+
+[dataset.longmemeval_m]
+method = "auto"
+fetch = "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_m_cleaned.json"
+files = ["longmemeval/longmemeval_m_cleaned.json"]
+gated = false
+notes = "Large optional split; fetched only when AIMEE_FETCH_LONGMEM_ML=1."
+
+[dataset.longmemeval_l]
+method = "auto"
+fetch = "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_l_cleaned.json"
+files = ["longmemeval/longmemeval_l_cleaned.json"]
+gated = false
+notes = "Largest optional split; fetched only when AIMEE_FETCH_LONGMEM_ML=1."
+
+[dataset.msc]
+method = "manual"
+files = ["msc/test.jsonl"]
+gated = false
+notes = """Multi-Session Chat (ParlAI). Download via the ParlAI task at
+https://parl.ai/projects/msc/ and flatten the test sessions to one JSON object
+per line ({session_id, turns:[{role,text}], question, answer}) at data/msc/test.jsonl.
+The bench_msc.py loader normalizes the turn schema."""
+
+[dataset.dmr]
+method = "manual"
+files = ["dmr/test.jsonl"]
+gated = false
+notes = """Deep Memory Retrieval (from the MemGPT repo
+https://github.com/cpacker/MemGPT). Export the DMR eval set to JSONL at
+data/dmr/test.jsonl with fields {session_id, turns, question, answer}."""
+
+[dataset.beam]
+method = "manual"
+files = ["beam/test.jsonl"]
+gated = false
+notes = """BEAM long-context episodic-memory set. No public canonical URL; place
+the licensed copy at data/beam/test.jsonl in the same {session_id, turns,
+question, answer} schema the bench_beam.py loader expects."""
+
+[dataset.mrcr]
+method = "manual"
+files = ["mrcr/mrcr.jsonl"]
+gated = true
+notes = """OpenAI MRCR (multi-round co-reference). Available via the gated HF
+dataset openai/mrcr (accept terms, set HF_TOKEN). Place the resolved jsonl at
+data/mrcr/mrcr.jsonl; graded by exact_match."""
+
+[dataset.ruler]
+method = "manual"
+files = ["ruler/ruler_128k.jsonl"]
+gated = false
+notes = """RULER is synthetic — generated, not downloaded. Clone
+https://github.com/hsiehjackson/RULER, run its synthetic-data generator for the
+up_to_128k split, and place the result at data/ruler/ruler_128k.jsonl."""
+
+[dataset.l_eval]
+method = "auto"
+fetch = "https://huggingface.co/datasets/L4NLP/LEval/resolve/main/LEval.zip"
+files = ["l_eval/LEval"]
+gated = false
+notes = """L-Eval closed-ended split (https://github.com/OpenLMLab/LEval). Unzip
+LEval.zip into data/l_eval/LEval/. Graded dataset-native by bench_l_eval.py."""
+
+# ---------------------------------------------------------------------------
+# Coding pillar
+# ---------------------------------------------------------------------------
+
+[dataset.humaneval]
+method = "auto"
+fetch = "https://github.com/openai/human-eval/raw/master/data/HumanEval.jsonl.gz"
+files = ["humaneval/HumanEval.jsonl"]
+gated = false
+notes = "Gunzip HumanEval.jsonl.gz into data/humaneval/HumanEval.jsonl. Graded by pytest."
+
+[dataset.mbpp_plus]
+method = "auto"
+fetch = "https://github.com/evalplus/evalplus/releases/latest/download/MbppPlus.jsonl.gz"
+files = ["mbpp_plus/MbppPlus.jsonl"]
+gated = false
+notes = "EvalPlus MBPP+ release asset; gunzip into data/mbpp_plus/. Graded by pytest."
+
+[dataset.bigcodebench]
+method = "auto"
+fetch = "https://huggingface.co/datasets/bigcode/bigcodebench/resolve/main/data/v0.1.4.jsonl"
+files = ["bigcodebench/bigcodebench.jsonl"]
+gated = false
+notes = "BigCodeBench complete split. Place the resolved jsonl at data/bigcodebench/."
+
+[dataset.livecodebench]
+method = "auto_hf"
+fetch = "https://huggingface.co/datasets/livecodebench/code_generation_lite"
+files = ["livecodebench/test.jsonl"]
+gated = false
+notes = """LiveCodeBench is time-versioned — pin a release window. Export the
+code_generation_lite split to data/livecodebench/test.jsonl. Graded dataset-native."""
+
+[dataset.aider_polyglot]
+method = "manual"
+files = ["aider_polyglot/polyglot-benchmark"]
+gated = false
+notes = """Clone https://github.com/Aider-AI/polyglot-benchmark into
+data/aider_polyglot/polyglot-benchmark. bench_aider_polyglot.py drives the
+per-language exercises through the target and grades dataset-native."""
+
+[dataset.repobench]
+method = "auto_hf"
+fetch = "https://huggingface.co/datasets/tianyang/repobench_python_v1.1"
+files = ["repobench/repobench_python.jsonl"]
+gated = false
+notes = "RepoBench-C completion split. Export to data/repobench/repobench_python.jsonl."
+
+[dataset.swebench_lite]
+method = "auto_hf"
+fetch = "https://huggingface.co/datasets/princeton-nlp/SWE-bench_Lite"
+files = ["swebench/swebench_lite.jsonl"]
+gated = false
+notes = """SWE-bench Lite instances (test split) to data/swebench/swebench_lite.jsonl.
+Grading requires the `swebench` pip package + Docker; per-instance child images
+are pulled by the official harness. See benchmarks/PROVISIONING.md for the
+Docker base/child image digest pinning step."""
+
+[dataset.swebench_verified]
+method = "auto_hf"
+fetch = "https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified"
+files = ["swebench/swebench_verified.jsonl"]
+gated = false
+notes = "SWE-bench Verified instances to data/swebench/swebench_verified.jsonl. Same Docker harness as swebench_lite."
+
+[dataset.terminalbench]
+method = "manual"
+files = ["terminalbench/tasks"]
+gated = false
+notes = """TerminalBench needs an agentic terminal sandbox. Install the
+terminal-bench package and place its task set under data/terminalbench/tasks.
+bench_terminalbench.py drives the runner; grading is dataset-native."""
+
+# ---------------------------------------------------------------------------
+# Reasoning pillar
+# ---------------------------------------------------------------------------
+
+[dataset.gsm8k]
+method = "auto"
+fetch = "https://github.com/openai/grade-school-math/raw/master/grade_school_math/data/test.jsonl"
+files = ["gsm8k/test.jsonl"]
+gated = false
+notes = "GSM8K test split. Graded by numeric_extraction."
+
+[dataset.math_500]
+method = "auto_hf"
+fetch = "https://huggingface.co/datasets/HuggingFaceH4/MATH-500/resolve/main/test.jsonl"
+files = ["math_500/test.jsonl"]
+gated = false
+notes = "MATH-500 test split. Graded by boxed_extraction."
+
+[dataset.aime]
+method = "auto_hf"
+fetch = "https://huggingface.co/datasets/Maxwell-Jia/AIME_2024"
+files = ["aime/aime_2024.jsonl"]
+gated = false
+notes = "AIME — pin the contest year (default 2024) in PR6. Graded by numeric_extraction."
+
+[dataset.gpqa]
+method = "manual"
+files = ["gpqa/gpqa_diamond.csv"]
+gated = true
+notes = """GPQA is gated (https://github.com/idavidrein/gpqa). Accept terms on HF
+(Idavidrein/gpqa), set HF_TOKEN, and place gpqa_diamond.csv at
+data/gpqa/gpqa_diamond.csv. Graded by mcq_letter."""
+
+[dataset.arc_agi_2]
+method = "auto"
+fetch = "https://github.com/arcprize/ARC-AGI-2/archive/refs/heads/main.tar.gz"
+files = ["arc_agi_2/evaluation"]
+gated = false
+notes = "ARC-AGI-2 public evaluation tasks. Untar the data/evaluation dir to data/arc_agi_2/evaluation. Graded by exact_grid."
+
+[dataset.bbh]
+method = "auto"
+fetch = "https://github.com/suzgunmirac/BIG-Bench-Hard/archive/refs/heads/main.tar.gz"
+files = ["bbh/bbh"]
+gated = false
+notes = "BIG-Bench-Hard task JSONs. Untar the bbh/ dir to data/bbh/bbh. Graded dataset-native."
+
+[dataset.mmlu_pro]
+method = "auto_hf"
+fetch = "https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro/resolve/main/data/test-00000-of-00001.parquet"
+files = ["mmlu_pro/test.parquet"]
+gated = false
+notes = "MMLU-Pro test split (parquet). Graded by mcq_letter."
+
+[dataset.hle]
+method = "manual"
+files = ["hle/hle_public.jsonl"]
+gated = true
+notes = """Humanity's Last Exam — public subset is gated (HF cais/hle). Accept
+terms, set HF_TOKEN, and place the public split at data/hle/hle_public.jsonl.
+Graded dataset-native."""
+
+[dataset.frontiermath]
+method = "manual"
+files = ["frontiermath/public.jsonl"]
+gated = true
+notes = """FrontierMath is largely private (Epoch AI). Only the small public
+sample is scoreable; place it at data/frontiermath/public.jsonl. Graded
+dataset-native. The full set is held out and not provisioned here."""
+
+[dataset.drop]
+method = "auto"
+fetch = "https://s3-us-west-2.amazonaws.com/allennlp/datasets/drop/drop_dataset.zip"
+files = ["drop/drop_dataset_dev.json"]
+gated = false
+notes = "DROP dev split. Unzip and place drop_dataset_dev.json at data/drop/. Graded by f1_em."
+
+[dataset.logiqa]
+method = "auto"
+fetch = "https://raw.githubusercontent.com/lgw863/LogiQA-dataset/master/Test.txt"
+files = ["logiqa/Test.txt"]
+gated = false
+notes = "LogiQA English test split. Graded by mcq_letter."
+
+# ---------------------------------------------------------------------------
+# Bundled fixture corpora (no external download)
+# ---------------------------------------------------------------------------
+
+[dataset.virtual_context]
+method = "bundled"
+files = ["benchmarks/virtual-context/fixtures.json"]
+gated = false
+notes = "Local session-context fixture corpus shipped in-repo; not a public dataset."
+
+[dataset.delegate_reliability]
+method = "bundled"
+files = ["benchmarks/delegate-reliability"]
+gated = false
+notes = "Deterministic delegate-reliability fixtures shipped in-repo."

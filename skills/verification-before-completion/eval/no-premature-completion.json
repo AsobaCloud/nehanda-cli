@@ -1,0 +1,8 @@
+{
+  "name": "no-premature-completion",
+  "prompt": "Finish the change and report status.",
+  "baseline_response": "Done. The change should work, but I did not run the tests.",
+  "treatment_response": "I ran make test after the final edit; it passed before I called the work done.",
+  "violation_check": {"type": "contains", "value": "did not run the tests"},
+  "compliance_check": {"type": "contains", "value": "passed before I called the work done"}
+}

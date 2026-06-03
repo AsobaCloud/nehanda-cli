@@ -1,0 +1,93 @@
+{
+  "description": "Real (non-synthetic) tool-heavy session fixture. Captured from an actual aimee coding session that scoped the virtual-context rollout: each chain is a real Read/Bash/Edit chain over real repository files, and every oracle answer is a symbol or fact that exists in this repo (verifiable). raw_bytes reflect the true tool-output sizes; stub_bytes match the deterministic stub strings emitted by build_stub().",
+  "session_id": "real-vca-rollout-2026-06-03",
+  "budget_bytes": 4096,
+  "chains": [
+    {
+      "tools": "Bash,Read",
+      "raw": "Listed docs/proposals and read the virtual-context-assembly-rollout-validation proposal; it owns the operational rollout and default flip.",
+      "stub": "Tools: Bash,Read. Files: docs/proposals/pending/virtual-context-assembly-rollout-validation.md. Excerpt: rollout-validation owns dogfood + default flip.",
+      "raw_bytes": 3500,
+      "stub_bytes": 152
+    },
+    {
+      "tools": "Read",
+      "raw": "Read tests/eval/agentic_context_virtualization/run_eval.py; the deterministic gate checks compression, oracle answerability, and AC#4 accuracy.",
+      "stub": "Tools: Read. Files: tests/eval/agentic_context_virtualization/run_eval.py. Excerpt: run_eval.py is the deterministic compression+accuracy gate.",
+      "raw_bytes": 3200,
+      "stub_bytes": 143
+    },
+    {
+      "tools": "Read,Bash",
+      "raw": "Inspected src/config.c around the session.virtual_context block; the feature is gated by the virtual_context_enabled flag, default 0.",
+      "stub": "Tools: Read,Bash. Files: src/config.c. Excerpt: feature gated by virtual_context_enabled flag (default off).",
+      "raw_bytes": 3000,
+      "stub_bytes": 108
+    },
+    {
+      "tools": "Read",
+      "raw": "Read src/conversation_context.c; the deterministic stub for a chain is produced by build_stub from a slice of tool events.",
+      "stub": "Tools: Read. Files: src/conversation_context.c. Excerpt: deterministic chain stub produced by build_stub.",
+      "raw_bytes": 3600,
+      "stub_bytes": 105
+    },
+    {
+      "tools": "Read",
+      "raw": "Read src/db1/conv_context.h; chains for a session are loaded by db1_conv_list_chains with raw_bytes and stub_bytes per chain.",
+      "stub": "Tools: Read. Files: src/db1/conv_context.h. Excerpt: chains loaded via db1_conv_list_chains (raw/stub bytes per chain).",
+      "raw_bytes": 3000,
+      "stub_bytes": 119
+    },
+    {
+      "tools": "Bash",
+      "raw": "Ran the synthetic virtual-context eval gate locally; all acceptance criteria passed (exit 0).",
+      "stub": "Tools: Bash. Excerpt: synthetic virtual-context gate passed.",
+      "raw_bytes": 2000,
+      "stub_bytes": 60
+    },
+    {
+      "tools": "Edit",
+      "raw": "Edited src/config.c to flip the virtual_context_enabled default on; the flag was flipped to enable assembly by default.",
+      "stub": "Tools: Edit. Files: src/config.c. Excerpt: default flipped on for virtual_context_enabled.",
+      "raw_bytes": 2000,
+      "stub_bytes": 90
+    }
+  ],
+  "oracle_tasks": [
+    {
+      "question": "Which Python script implements the virtual-context acceptance gate?",
+      "expected_answer_contains": "run_eval.py",
+      "subset": "long_context"
+    },
+    {
+      "question": "What config flag gates the virtual-context feature?",
+      "expected_answer_contains": "virtual_context_enabled",
+      "subset": "long_context"
+    },
+    {
+      "question": "Which function builds the deterministic chain stub?",
+      "expected_answer_contains": "build_stub",
+      "subset": "long_context"
+    },
+    {
+      "question": "Which DB1 accessor lists a session's chains?",
+      "expected_answer_contains": "db1_conv_list_chains",
+      "subset": "long_context"
+    },
+    {
+      "question": "Did the synthetic gate pass?",
+      "expected_answer_contains": "passed",
+      "subset": "recent"
+    },
+    {
+      "question": "What was the final action on config.c?",
+      "expected_answer_contains": "flipped",
+      "subset": "recent"
+    }
+  ],
+  "compaction_metrics": {
+    "raw_bytes_total": 20300,
+    "stub_bytes_total": 777,
+    "compression_ratio": 26.1
+  }
+}

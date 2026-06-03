@@ -1,0 +1,34 @@
+# Persistent embedding service for aimee-kb: holds all-MiniLM-L6-v2 resident and
+# serves /embed over HTTP, so the kb container embeds without reloading the model
+# per call. Kept separate from the kb image so torch/sentence-transformers never
+# bloat the slim kb runtime.
+FROM python:3.11-slim AS embedder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/opt/models \
+    EMBEDDER_MODEL=all-MiniLM-L6-v2 \
+    EMBEDDER_PORT=8080
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# CPU-only torch keeps the image off the CUDA wheels.
+RUN pip install --index-url https://download.pytorch.org/whl/cpu torch \
+    && pip install sentence-transformers
+
+# Pre-download the model at build time so runtime needs no network.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
+COPY scripts/embedder-server.py /opt/aimee/scripts/embedder-server.py
+
+RUN useradd --system --home-dir /opt/aimee --shell /usr/sbin/nologin embedder \
+    && chown -R embedder:embedder /opt/models /opt/aimee
+USER embedder
+WORKDIR /opt/aimee
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8080/health >/dev/null || exit 1
+
+ENTRYPOINT ["python", "/opt/aimee/scripts/embedder-server.py"]

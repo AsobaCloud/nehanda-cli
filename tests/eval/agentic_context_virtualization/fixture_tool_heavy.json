@@ -1,0 +1,20 @@
+{
+  "description": "Tool-heavy long-session fixture for virtual context assembly (compression + late-turn accuracy gate).",
+  "session_id": "eval-vc-001",
+  "budget_bytes": 4096,
+  "chains": [
+    { "tools": "Read,Bash", "raw": "Investigated auth middleware in src/auth.c; bearer token normalization traced to normalize_bearer_token.", "stub": "Tools: Read,Bash. Files: src/auth.c. Excerpt: bearer normalization in normalize_bearer_token.", "raw_bytes": 3000, "stub_bytes": 95 },
+    { "tools": "Read", "raw": "Config parsing lives in config.c via parse_config; reviewed option handling.", "stub": "Tools: Read. Files: config.c. Excerpt: parse_config handles options.", "raw_bytes": 3000, "stub_bytes": 68 },
+    { "tools": "Read,Bash", "raw": "Inspected DB1 schema_version and pending migrations directory.", "stub": "Tools: Read,Bash. Excerpt: checked schema_version and migrations.", "raw_bytes": 3000, "stub_bytes": 66 },
+    { "tools": "Edit", "raw": "Refactored helper in util.c to share buffer logic.", "stub": "Tools: Edit. Files: util.c. Excerpt: shared buffer helper.", "raw_bytes": 3000, "stub_bytes": 56 },
+    { "tools": "Bash", "raw": "Ran the unit suite; all tests passed after the auth patch.", "stub": "Tools: Bash. Excerpt: unit suite passed.", "raw_bytes": 2000, "stub_bytes": 40 },
+    { "tools": "Bash", "raw": "Built release artifact and deployed via update script.", "stub": "Tools: Bash. Excerpt: artifact built and deployed.", "raw_bytes": 2000, "stub_bytes": 50 }
+  ],
+  "oracle_tasks": [
+    { "question": "Which function normalizes the bearer token?", "expected_answer_contains": "normalize_bearer_token", "subset": "long_context" },
+    { "question": "What file holds config parsing?", "expected_answer_contains": "config.c", "subset": "long_context" },
+    { "question": "Did the tests pass?", "expected_answer_contains": "passed", "subset": "recent" },
+    { "question": "What was the final action?", "expected_answer_contains": "deployed", "subset": "recent" }
+  ],
+  "compaction_metrics": { "raw_bytes_total": 16000, "stub_bytes_total": 375, "compression_ratio": 42.7 }
+}

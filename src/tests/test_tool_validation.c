@@ -1,0 +1,251 @@
+/* test_tool_validation.c: unit tests for tool call validation and recovery
+ *
+ * Covers: tool_suggest (nearest-match), tool_validate (unknown tool,
+ * disabled tool, missing required field, wrong type, malformed JSON,
+ * alias normalization, type coercion, valid call, recovery hint).
+ */
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "../headers/aimee.h"
+#include "../headers/agent_exec.h"
+#include "../db1/db.h"
+#include "../db1/db1.h"
+#include "../db2/db2.h"
+#include "../db2/db2_test_shim.h"
+#include "../db2/db2_internal.h"
+#include "../db2/db_postgres.h"
+
+/* --- helpers --- */
+
+static void setup_db(void)
+{
+   db2_test_shim_close();
+   assert(db1_init(":memory:") == 0);
+   db2_test_shim_open();
+}
+
+static void teardown_db(void)
+{
+   db2_test_shim_close();
+   db1_shutdown();
+}
+
+/* --- tool_suggest --- */
+
+static void test_suggest_exact_match(void)
+{
+   const char *s = tool_suggest("bash");
+   assert(s != NULL);
+   assert(strcmp(s, "bash") == 0);
+   printf("  PASS: tool_suggest exact 'bash'\n");
+}
+
+static void test_suggest_one_edit(void)
+{
+   /* 'red_file' differs from 'read_file' by 1 insertion */
+   const char *s = tool_suggest("red_file");
+   assert(s != NULL);
+   assert(strcmp(s, "read_file") == 0);
+   printf("  PASS: tool_suggest 'red_file' -> 'read_file'\n");
+}
+
+static void test_suggest_two_edits(void)
+{
+   /* 'read_flie' differs from 'read_file' by 2 substitutions */
+   const char *s = tool_suggest("read_flie");
+   assert(s != NULL);
+   assert(strcmp(s, "read_file") == 0);
+   printf("  PASS: tool_suggest 'read_flie' -> 'read_file'\n");
+}
+
+static void test_suggest_no_match(void)
+{
+   /* Completely different string — no close match within threshold */
+   const char *s = tool_suggest("xyzabcdefghijklmn");
+   assert(s == NULL);
+   printf("  PASS: tool_suggest returns NULL for distant name\n");
+}
+
+/* --- tool_validate: error cases --- */
+
+static void test_validate_unknown_tool_with_suggestion(void)
+{
+   setup_db();
+   char err[256] = {0};
+   /* 'read_flie' is close to 'read_file' */
+   int rc = tool_validate("read_flie", "{\"path\":\"/tmp/x\"}", err, sizeof(err));
+   assert(rc == -1);
+   assert(strstr(err, "unknown") != NULL);
+   assert(strstr(err, "read_file") != NULL);
+   teardown_db();
+   printf("  PASS: unknown tool returns -1 with nearest-match suggestion\n");
+}
+
+static void test_validate_unknown_tool_no_suggestion(void)
+{
+   setup_db();
+   char err[256] = {0};
+   int rc = tool_validate("zzz_completely_unknown_tool", "{}", err, sizeof(err));
+   assert(rc == -1);
+   assert(strstr(err, "unknown") != NULL);
+   teardown_db();
+   printf("  PASS: unknown tool with no close match returns -1\n");
+}
+
+static void test_validate_disabled_tool(void)
+{
+   setup_db();
+   (void)aimee_pg_exec(db2_conn(), "UPDATE tool_registry SET enabled = 0 WHERE name = 'bash'", NULL,
+                       0);
+   char err[256] = {0};
+   int rc = tool_validate("bash", "{\"command\":\"ls\"}", err, sizeof(err));
+   assert(rc == -1);
+   assert(strstr(err, "disabled") != NULL);
+   teardown_db();
+   printf("  PASS: disabled tool returns -1\n");
+}
+
+static void test_validate_missing_required_field(void)
+{
+   setup_db();
+   char err[256] = {0};
+   /* read_file requires 'path' */
+   int rc = tool_validate("read_file", "{}", err, sizeof(err));
+   assert(rc == -1);
+   assert(strstr(err, "path") != NULL);
+   teardown_db();
+   printf("  PASS: missing required field returns -1\n");
+}
+
+static void test_validate_wrong_type(void)
+{
+   setup_db();
+   char err[256] = {0};
+   /* 'path' should be string; passing integer should fail */
+   int rc = tool_validate("read_file", "{\"path\":42}", err, sizeof(err));
+   assert(rc == -1);
+   teardown_db();
+   printf("  PASS: wrong field type returns -1\n");
+}
+
+static void test_validate_malformed_json(void)
+{
+   setup_db();
+   char err[256] = {0};
+   int rc = tool_validate("read_file", "{not valid json", err, sizeof(err));
+   assert(rc == -1);
+   teardown_db();
+   printf("  PASS: malformed JSON returns -1\n");
+}
+
+static void test_validate_write_file_missing_content(void)
+{
+   setup_db();
+   char err[256] = {0};
+   /* write_file requires both path and content */
+   int rc = tool_validate("write_file", "{\"path\":\"/tmp/out.txt\"}", err, sizeof(err));
+   assert(rc == -1);
+   assert(strstr(err, "content") != NULL);
+   teardown_db();
+   printf("  PASS: write_file missing 'content' returns -1\n");
+}
+
+/* --- tool_validate: success cases --- */
+
+static void test_validate_valid_read_file(void)
+{
+   setup_db();
+   char err[256] = {0};
+   int rc = tool_validate("read_file", "{\"path\":\"/tmp/test.txt\"}", err, sizeof(err));
+   assert(rc == 0);
+   assert(err[0] == '\0');
+   teardown_db();
+   printf("  PASS: valid read_file call returns 0\n");
+}
+
+static void test_validate_valid_write_file(void)
+{
+   setup_db();
+   char err[256] = {0};
+   int rc = tool_validate("write_file", "{\"path\":\"/tmp/out.txt\",\"content\":\"hello\"}", err,
+                          sizeof(err));
+   assert(rc == 0);
+   teardown_db();
+   printf("  PASS: valid write_file call returns 0\n");
+}
+
+static void test_validate_valid_bash(void)
+{
+   setup_db();
+   char err[256] = {0};
+   int rc = tool_validate("bash", "{\"command\":\"echo hello\"}", err, sizeof(err));
+   assert(rc == 0);
+   teardown_db();
+   printf("  PASS: valid bash call returns 0\n");
+}
+
+/* --- alias normalization in tool_validate --- */
+
+static void test_validate_alias_filepath_normalized(void)
+{
+   setup_db();
+   char err[256] = {0};
+   /* 'filepath' is an alias for 'path'; validation should normalize and pass */
+   int rc = tool_validate("read_file", "{\"filepath\":\"/tmp/x\"}", err, sizeof(err));
+   assert(rc == 0);
+   teardown_db();
+   printf("  PASS: alias 'filepath' normalized to 'path' in validation\n");
+}
+
+static void test_validate_alias_file_normalized(void)
+{
+   setup_db();
+   char err[256] = {0};
+   int rc = tool_validate("read_file", "{\"file\":\"/tmp/x\"}", err, sizeof(err));
+   assert(rc == 0);
+   teardown_db();
+   printf("  PASS: alias 'file' normalized to 'path' in validation\n");
+}
+
+static void test_validate_alias_cmd_normalized(void)
+{
+   setup_db();
+   char err[256] = {0};
+   /* 'cmd' is an alias for 'command' */
+   int rc = tool_validate("bash", "{\"cmd\":\"ls\"}", err, sizeof(err));
+   assert(rc == 0);
+   teardown_db();
+   printf("  PASS: alias 'cmd' normalized to 'command' in validation\n");
+}
+
+int main(void)
+{
+   printf("test_tool_validation\n");
+
+   test_suggest_exact_match();
+   test_suggest_one_edit();
+   test_suggest_two_edits();
+   test_suggest_no_match();
+
+   test_validate_unknown_tool_with_suggestion();
+   test_validate_unknown_tool_no_suggestion();
+   test_validate_disabled_tool();
+   test_validate_missing_required_field();
+   test_validate_wrong_type();
+   test_validate_malformed_json();
+   test_validate_write_file_missing_content();
+
+   test_validate_valid_read_file();
+   test_validate_valid_write_file();
+   test_validate_valid_bash();
+
+   test_validate_alias_filepath_normalized();
+   test_validate_alias_file_normalized();
+   test_validate_alias_cmd_normalized();
+
+   printf("All tool_validation tests passed.\n");
+   return 0;
+}

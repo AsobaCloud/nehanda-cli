@@ -1,0 +1,2801 @@
+openapi: 3.1.0
+info:
+  title: aimee-server API
+  version: "1"
+  description: >
+    Native HTTP surface for aimee-server. Exposes liveness/discovery
+    endpoints, an OpenAI-compatible shaping layer
+    (models / chat.completions / completions / embeddings), and persona
+    management. The same operations are also available over the NDJSON
+    socket; this `/v1` surface is the contract-first HTTP transport.
+servers:
+  - url: http://127.0.0.1:{port}/v1
+    variables:
+      port:
+        default: "8910"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Required for `/v1/*` over TCP. Unix-domain-socket access is
+        authorised by filesystem permissions and needs no token.
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+        service: { type: string, example: aimee-server }
+    VersionResponse:
+      type: object
+      properties:
+        version: { type: string }
+        service: { type: string, example: aimee-server }
+    CapabilitiesResponse:
+      type: object
+      properties:
+        capabilities:
+          type: array
+          items: { type: string }
+        version: { type: string }
+        service: { type: string, example: aimee-server }
+    ModelsList:
+      type: object
+      properties:
+        object: { type: string, example: list }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              object: { type: string, example: model }
+              owned_by: { type: string }
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, enum: [system, user, assistant] }
+        content: { type: string }
+    ChatCompletionRequest:
+      type: object
+      required: [messages]
+      properties:
+        model: { type: string, default: aimee }
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/ChatMessage' }
+        temperature: { type: number }
+        max_tokens: { type: integer }
+        stream: { type: boolean, default: false }
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: chat.completion }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              message: { $ref: '#/components/schemas/ChatMessage' }
+              finish_reason: { type: string }
+        usage: { $ref: '#/components/schemas/Usage' }
+    CompletionRequest:
+      type: object
+      required: [prompt]
+      properties:
+        model: { type: string, default: aimee }
+        prompt: { type: string }
+        temperature: { type: number }
+        max_tokens: { type: integer }
+        stream: { type: boolean, default: false }
+    CompletionResponse:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: text_completion }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              text: { type: string }
+              finish_reason: { type: string }
+        usage: { $ref: '#/components/schemas/Usage' }
+    EmbeddingsRequest:
+      type: object
+      required: [input]
+      properties:
+        model: { type: string, default: aimee }
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+    EmbeddingsResponse:
+      type: object
+      properties:
+        object: { type: string, example: list }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              object: { type: string, example: embedding }
+              index: { type: integer }
+              embedding:
+                type: array
+                items: { type: number }
+        model: { type: string }
+        usage: { $ref: '#/components/schemas/Usage' }
+    Usage:
+      type: object
+      properties:
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        total_tokens: { type: integer }
+    ResponsesRequest:
+      type: object
+      required: [input]
+      properties:
+        model: { type: string, default: aimee }
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                oneOf:
+                  - type: string
+                  - type: object
+                    properties:
+                      role: { type: string }
+                      content: {}
+        previous_response_id: { type: string }
+        temperature: { type: number }
+        max_tokens: { type: integer }
+        stream: { type: boolean, default: false }
+    ResponseObject:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: response }
+        created_at: { type: integer }
+        model: { type: string }
+        status: { type: string, example: completed }
+        output:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              type: { type: string, example: message }
+              status: { type: string }
+              role: { type: string, example: assistant }
+              content:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type: { type: string, example: output_text }
+                    text: { type: string }
+                    annotations:
+                      type: array
+                      items: {}
+        usage:
+          type: object
+          properties:
+            input_tokens: { type: integer }
+            output_tokens: { type: integer }
+            total_tokens: { type: integer }
+    Persona:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+    PersonaList:
+      type: object
+      properties:
+        personas:
+          type: array
+          items: { $ref: '#/components/schemas/Persona' }
+    PersonaWrite:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, description: "Filename-safe name (letters, digits, '.', '_', '-')" }
+        description: { type: string }
+        persona: { type: string, description: "Identity prose; may contain one %s for the cwd" }
+        principles: { type: string }
+        brief: { type: string }
+        delegates: { type: string, enum: [full, readonly, none] }
+        check_role: { type: string }
+        check_marker: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+    RoleTemplate:
+      type: object
+      properties:
+        role: { type: string }
+        content: { type: string, description: "Raw template body with {{TASK}}/{{CONTEXT}}" }
+    SessionPersonaRequest:
+      type: object
+      required: [persona]
+      properties:
+        persona: { type: string }
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message: { type: string }
+            type: { type: string }
+    Presence:
+      type: object
+      description: A live presence (a session shared across one or more attached surfaces).
+      properties:
+        session_id: { type: string }
+        owner: { type: string }
+        attachments: { type: integer }
+        turn_in_flight: { type: boolean }
+        turn_id: { type: string }
+    AttachRequest:
+      type: object
+      required: [surface]
+      properties:
+        surface: { type: string, description: "Surface label, e.g. cli / webchat / telegram / acp" }
+        owner: { type: string, description: "Owner principal the presence is scoped to (first attach fixes it)" }
+        target: { type: string, description: "Optional delivery-target spec for outbound routing, e.g. telegram:-100:42" }
+        subscribe_mask: { type: integer, description: "OR of presence event classes to route to this surface" }
+        persistent: { type: boolean, description: "Keep delivering routed async events after the live stream detaches" }
+    AttachResponse:
+      type: object
+      properties:
+        session_id: { type: string }
+        attach_id: { type: string }
+        events_url: { type: string }
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthResponse' }
+  /version:
+    get:
+      summary: Build version
+      security: []
+      responses:
+        "200":
+          description: Version info
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VersionResponse' }
+  /capabilities:
+    get:
+      summary: Resources this HTTP surface serves
+      security: []
+      responses:
+        "200":
+          description: Capability list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CapabilitiesResponse' }
+  /openapi.json:
+    get:
+      summary: This OpenAPI document (JSON content type)
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI spec
+  /openapi.yaml:
+    get:
+      summary: This OpenAPI document (YAML content type)
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI spec
+  /models:
+    get:
+      summary: List available models
+      responses:
+        "200":
+          description: OpenAI-shaped model list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelsList' }
+  /rules:
+    get:
+      summary: List active collaboration rules
+      responses:
+        "200":
+          description: Active collaboration rules ({epoch, rules[]})
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  epoch: { type: integer }
+                  rules: { type: array, items: { type: object } }
+        "502":
+          description: Rules backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: Rules not available on this server
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /kb/search:
+    post:
+      summary: Search the knowledge base (proxied to aimee-kb)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+                project: { type: string }
+                max_results: { type: integer }
+                format: { type: string, enum: [json, text] }
+      responses:
+        "200":
+          description: Knowledge search result envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing query
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "502":
+          description: Knowledge backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: Knowledge search not available on this server
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /curiosity:
+    get:
+      summary: List open curiosity items (proxied to aimee-kb)
+      responses:
+        "200":
+          description: Curiosity items
+          content:
+            application/json:
+              schema: { type: object }
+        "502":
+          description: Curiosity backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: Curiosity not available on this server
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /roadmap:
+    get:
+      summary: List roadmaps (proxied to aimee-kb)
+      responses:
+        "200":
+          description: Roadmap list
+          content:
+            application/json:
+              schema: { type: object }
+        "502":
+          description: Roadmap backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: Roadmap not available on this server
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /runs:
+    post:
+      summary: Create and run an inference run (synchronous); retrievable by id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input]
+              properties:
+                model: { type: string }
+                input: {}
+                temperature: { type: number }
+                max_tokens: { type: integer }
+      responses:
+        "200":
+          description: Completed run object
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Invalid run request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "502":
+          description: Inference failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: Runs not available on this server
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /runs/{id}:
+    get:
+      summary: Retrieve a previously created run
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The run object
+          content:
+            application/json:
+              schema: { type: object }
+        "404":
+          description: No such run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /runs/{id}/events:
+    get:
+      summary: Stream a run's output as SSE (replay for completed runs)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: text/event-stream of response.output_text.delta events + a terminal done event
+        "404":
+          description: No such run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /runs/{id}/stop:
+    post:
+      summary: Stop a run (no-op for already-completed synchronous runs)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The (already-completed) run object
+          content:
+            application/json:
+              schema: { type: object }
+        "404":
+          description: No such run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /agents:
+    get:
+      summary: List configured agents and the default agent
+      responses:
+        "200":
+          description: Configured agents ({default, agents[]})
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  default: { type: string }
+                  agents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        provider: { type: string }
+                        model: { type: string }
+                        enabled: { type: boolean }
+                        roles: { type: array, items: { type: string } }
+        "502":
+          description: Agent configuration unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: Agents not available on this server
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /kb/status:
+    get:
+      summary: Knowledge-base / vector status (proxied to aimee-kb)
+      responses:
+        "200":
+          description: KB / vector status
+          content:
+            application/json:
+              schema: { type: object }
+        "502":
+          description: Knowledge backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: KB status not available on this server
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /memory/recall:
+    post:
+      summary: Recall relevant memories (proxied to aimee-kb)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task_hint]
+              properties:
+                task_hint: { type: string }
+                query: { type: string }
+                limit_tokens: { type: integer }
+                session_start: { type: boolean }
+      responses:
+        "200":
+          description: Memory recall envelope ({recall:...})
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing task_hint
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "502":
+          description: Memory backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: Memory recall not available on this server
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /notes:
+    get:
+      summary: List notes (proxied to aimee-kb)
+      responses:
+        "200":
+          description: Notes list
+          content:
+            application/json:
+              schema: { type: object }
+        "502":
+          description: Notes backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: Notes not available on this server
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /index/find:
+    post:
+      summary: Find indexed code symbols by identifier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [identifier]
+              properties:
+                identifier: { type: string }
+      responses:
+        "200":
+          description: Index hits envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing identifier or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "502":
+          description: Index backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /index/list:
+    post:
+      summary: List indexed projects
+      responses:
+        "200":
+          description: Indexed projects envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "502":
+          description: Index backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /index/structure:
+    post:
+      summary: List the definitions in an indexed file
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project, file_path]
+              properties:
+                project: { type: string }
+                file_path: { type: string }
+      responses:
+        "200":
+          description: File structure envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing project/file_path or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "502":
+          description: Index backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /index/find_callers:
+    post:
+      summary: Find callers of an indexed symbol
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [symbol]
+              properties:
+                symbol: { type: string }
+                project: { type: string }
+      responses:
+        "200":
+          description: Caller hits envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing symbol or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "502":
+          description: Index backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /index/blast_radius:
+    post:
+      summary: Dependency blast radius for an indexed file
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project, file_path]
+              properties:
+                project: { type: string }
+                file_path: { type: string }
+      responses:
+        "200":
+          description: Blast radius envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing project/file_path or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "502":
+          description: Index backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /skills:
+    get:
+      summary: List available skills
+      responses:
+        "200":
+          description: Skills envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /skills/show:
+    post:
+      summary: Show a skill's definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                file_path: { type: string }
+      responses:
+        "200":
+          description: Skill definition envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing name or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /work:
+    get:
+      summary: List work-queue items
+      responses:
+        "200":
+          description: Work items envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /work/stats:
+    get:
+      summary: Work-queue counts by state
+      responses:
+        "200":
+          description: Work stats envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /hud:
+    get:
+      summary: Session HUD status snapshot
+      responses:
+        "200":
+          description: HUD status envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /trajectory/export:
+    post:
+      summary: Export a session trajectory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id]
+              properties:
+                session_id: { type: string }
+                compress: { type: boolean }
+                max_result_bytes: { type: integer }
+      responses:
+        "200":
+          description: Trajectory export envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing session_id or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /toolsets:
+    get:
+      summary: List effective toolsets
+      responses:
+        "200":
+          description: Toolsets envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /toolsets/show:
+    post:
+      summary: Show a toolset's resolved tools
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "200":
+          description: Toolset envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing name or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /collab_rules:
+    get:
+      summary: List collaboration rules
+      responses:
+        "200":
+          description: Collaboration rules envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /collab_rules/active:
+    get:
+      summary: List active collaboration rules
+      responses:
+        "200":
+          description: Active collaboration rules envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /wm/list:
+    post:
+      summary: List working-memory entries for a session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id]
+              properties:
+                session_id: { type: string }
+      responses:
+        "200":
+          description: Working-memory envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing session_id or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /attempts/list:
+    post:
+      summary: List attempt-log entries for a session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id]
+              properties:
+                session_id: { type: string }
+      responses:
+        "200":
+          description: Attempt-log envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing session_id or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /aux/config:
+    get:
+      summary: Show auxiliary-model configuration
+      responses:
+        "200":
+          description: Auxiliary model config envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /cron:
+    get:
+      summary: List cron jobs
+      responses:
+        "200":
+          description: Cron job list
+          content:
+            application/json:
+              schema: { type: object }
+  /cron/add:
+    post:
+      summary: Add a cron job
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Cron job created
+          content:
+            application/json:
+              schema: { type: object }
+  /cron/show:
+    post:
+      summary: Show a cron job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [job_id]
+              properties:
+                job_id: { type: string }
+      responses:
+        "200":
+          description: Cron job
+          content:
+            application/json:
+              schema: { type: object }
+  /cron/history:
+    post:
+      summary: Show cron job run history
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [job_id]
+              properties:
+                job_id: { type: string }
+                limit: { type: integer }
+      responses:
+        "200":
+          description: Cron run history
+          content:
+            application/json:
+              schema: { type: object }
+  /cron/run:
+    post:
+      summary: Run a cron job now
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [job_id]
+              properties:
+                job_id: { type: string }
+      responses:
+        "200":
+          description: Cron run result
+          content:
+            application/json:
+              schema: { type: object }
+  /cron/enable:
+    post:
+      summary: Enable a cron job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [job_id]
+              properties:
+                job_id: { type: string }
+      responses:
+        "200":
+          description: Cron job enabled
+          content:
+            application/json:
+              schema: { type: object }
+  /cron/disable:
+    post:
+      summary: Disable a cron job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [job_id]
+              properties:
+                job_id: { type: string }
+      responses:
+        "200":
+          description: Cron job disabled
+          content:
+            application/json:
+              schema: { type: object }
+  /cron/remove:
+    post:
+      summary: Remove a cron job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [job_id]
+              properties:
+                job_id: { type: string }
+      responses:
+        "200":
+          description: Cron job removed
+          content:
+            application/json:
+              schema: { type: object }
+  /delegate/log:
+    get:
+      summary: Tail the delegate log
+      responses: { "200": { description: Delegate log, content: { application/json: { schema: { type: object } } } } }
+  /delegate/backend_list:
+    get:
+      summary: List delegate backends
+      responses: { "200": { description: Backend list, content: { application/json: { schema: { type: object } } } } }
+  /delegate/status:
+    post:
+      summary: Status of a delegate job
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Delegate status, content: { application/json: { schema: { type: object } } } } }
+  /delegate/reply:
+    post:
+      summary: Reply to a delegate
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Reply accepted, content: { application/json: { schema: { type: object } } } } }
+  /delegate/launch:
+    post:
+      summary: Launch a delegate job (async, returns job_id)
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Launched, content: { application/json: { schema: { type: object } } } } }
+  /delegate/backend_exec:
+    post:
+      summary: Execute via a delegate backend
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Exec result, content: { application/json: { schema: { type: object } } } } }
+  /job/list:
+    get:
+      summary: List jobs
+      responses: { "200": { description: Job list, content: { application/json: { schema: { type: object } } } } }
+  /job/start:
+    post:
+      summary: Start a job (async, returns job_id)
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Started, content: { application/json: { schema: { type: object } } } } }
+  /job/status:
+    post:
+      summary: Job status
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Job status, content: { application/json: { schema: { type: object } } } } }
+  /job/cancel:
+    post:
+      summary: Cancel a job
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Cancelled, content: { application/json: { schema: { type: object } } } } }
+  /jobs/list:
+    get:
+      summary: List durable background jobs
+      responses: { "200": { description: Job list, content: { application/json: { schema: { type: object } } } } }
+  /jobs/status:
+    post:
+      summary: Durable job status
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Job status, content: { application/json: { schema: { type: object } } } } }
+  /jobs/logs:
+    post:
+      summary: Durable job logs
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Job logs, content: { application/json: { schema: { type: object } } } } }
+  /jobs/cancel:
+    post:
+      summary: Cancel a durable job
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Cancelled, content: { application/json: { schema: { type: object } } } } }
+  /agent/list:
+    get:
+      summary: List configured agents
+      responses: { "200": { description: Agent list, content: { application/json: { schema: { type: object } } } } }
+  /agent/local:
+    get:
+      summary: List local agents
+      responses: { "200": { description: Local agent list, content: { application/json: { schema: { type: object } } } } }
+  /agent/add:
+    post:
+      summary: Add an agent
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Agent added, content: { application/json: { schema: { type: object } } } } }
+  /agent/remove:
+    post:
+      summary: Remove an agent
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Agent removed, content: { application/json: { schema: { type: object } } } } }
+  /agent/enable:
+    post:
+      summary: Enable an agent
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Agent enabled, content: { application/json: { schema: { type: object } } } } }
+  /agent/disable:
+    post:
+      summary: Disable an agent
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Agent disabled, content: { application/json: { schema: { type: object } } } } }
+  /agent/probe:
+    post:
+      summary: Probe an agent/provider
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Probe result, content: { application/json: { schema: { type: object } } } } }
+  /agent/setup:
+    post:
+      summary: Set up an agent (async)
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Setup started, content: { application/json: { schema: { type: object } } } } }
+  /agent/setup_poll:
+    post:
+      summary: Poll agent setup progress
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Setup status, content: { application/json: { schema: { type: object } } } } }
+  /agent/episodes:
+    post:
+      summary: List an agent's episodes
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Episode list, content: { application/json: { schema: { type: object } } } } }
+  /episode/list:
+    get:
+      summary: List episodes
+      responses: { "200": { description: Episode list, content: { application/json: { schema: { type: object } } } } }
+  /provider/list:
+    get:
+      summary: List providers
+      responses: { "200": { description: Provider list, content: { application/json: { schema: { type: object } } } } }
+  /provider/models:
+    get:
+      summary: List provider models
+      responses: { "200": { description: Provider models, content: { application/json: { schema: { type: object } } } } }
+  /provider/get:
+    post:
+      summary: Get a provider
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Provider, content: { application/json: { schema: { type: object } } } } }
+  /provider/show:
+    post:
+      summary: Show a provider
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Provider, content: { application/json: { schema: { type: object } } } } }
+  /provider/set:
+    post:
+      summary: Set provider configuration
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Updated, content: { application/json: { schema: { type: object } } } } }
+  /provider/quota:
+    post:
+      summary: Provider quota
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Quota, content: { application/json: { schema: { type: object } } } } }
+  /provider/test:
+    post:
+      summary: Test a provider
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Test result, content: { application/json: { schema: { type: object } } } } }
+  /provider/slot_acquire:
+    post:
+      summary: Acquire a provider slot
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Slot, content: { application/json: { schema: { type: object } } } } }
+  /provider/slot_release:
+    post:
+      summary: Release a provider slot
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Released, content: { application/json: { schema: { type: object } } } } }
+  /model/list:
+    get:
+      summary: List models (provider catalog)
+      responses: { "200": { description: Model list, content: { application/json: { schema: { type: object } } } } }
+  /model/show:
+    get:
+      summary: Show the current model
+      responses: { "200": { description: Model, content: { application/json: { schema: { type: object } } } } }
+  /model/refresh:
+    post:
+      summary: Refresh the model catalog
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Refreshed, content: { application/json: { schema: { type: object } } } } }
+  /api/status:
+    get:
+      summary: HTTP API status
+      responses: { "200": { description: API status, content: { application/json: { schema: { type: object } } } } }
+  /api/enable:
+    post:
+      summary: Enable the HTTP API
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Enabled, content: { application/json: { schema: { type: object } } } } }
+  /api/disable:
+    post:
+      summary: Disable the HTTP API
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Disabled, content: { application/json: { schema: { type: object } } } } }
+  /dashboard/all:
+    get:
+      summary: Full dashboard snapshot
+      responses: { "200": { description: Dashboard, content: { application/json: { schema: { type: object } } } } }
+  /dashboard/delegations:
+    get:
+      summary: Delegation dashboard
+      responses: { "200": { description: Delegations, content: { application/json: { schema: { type: object } } } } }
+  /dashboard/logs:
+    get:
+      summary: Dashboard logs
+      responses: { "200": { description: Logs, content: { application/json: { schema: { type: object } } } } }
+  /dashboard/memory_stats:
+    get:
+      summary: Memory statistics dashboard
+      responses: { "200": { description: Memory stats, content: { application/json: { schema: { type: object } } } } }
+  /dashboard/metrics:
+    get:
+      summary: Metrics dashboard
+      responses: { "200": { description: Metrics, content: { application/json: { schema: { type: object } } } } }
+  /dashboard/onboard:
+    get:
+      summary: Onboarding dashboard
+      responses: { "200": { description: Onboarding, content: { application/json: { schema: { type: object } } } } }
+  /dashboard/plans:
+    get:
+      summary: Plans dashboard
+      responses: { "200": { description: Plans, content: { application/json: { schema: { type: object } } } } }
+  /dashboard/plugins:
+    get:
+      summary: Plugins dashboard
+      responses: { "200": { description: Plugins, content: { application/json: { schema: { type: object } } } } }
+  /dashboard/traces:
+    get:
+      summary: Traces dashboard
+      responses: { "200": { description: Traces, content: { application/json: { schema: { type: object } } } } }
+  /insights/overview:
+    get:
+      summary: Insights overview
+      responses: { "200": { description: Insights, content: { application/json: { schema: { type: object } } } } }
+  /identity/show:
+    get:
+      summary: Show current identity
+      responses: { "200": { description: Identity, content: { application/json: { schema: { type: object } } } } }
+  /identity/diff:
+    post:
+      summary: Diff identity snapshots
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Identity diff, content: { application/json: { schema: { type: object } } } } }
+  /identity/snapshot:
+    post:
+      summary: Snapshot current identity
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Snapshot, content: { application/json: { schema: { type: object } } } } }
+  /dogfood/report:
+    get:
+      summary: Dogfood report
+      responses: { "200": { description: Report, content: { application/json: { schema: { type: object } } } } }
+  /dogfood/review:
+    post:
+      summary: Dogfood review
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Review, content: { application/json: { schema: { type: object } } } } }
+  /dogfood/tag:
+    post:
+      summary: Tag a dogfood item
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Tagged, content: { application/json: { schema: { type: object } } } } }
+  /lsp/diagnostics_summary:
+    post:
+      summary: LSP diagnostics summary
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Diagnostics, content: { application/json: { schema: { type: object } } } } }
+  /curator/contradictions:
+    post:
+      summary: Curator contradictions for an entity
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Contradictions, content: { application/json: { schema: { type: object } } } } }
+  /curator/implements:
+    post:
+      summary: Curator implements relations
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Implements, content: { application/json: { schema: { type: object } } } } }
+  /curator/invalidated:
+    post:
+      summary: Curator invalidated claims
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Invalidated, content: { application/json: { schema: { type: object } } } } }
+  /graph/explain:
+    post:
+      summary: Explain a graph relationship
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Explanation, content: { application/json: { schema: { type: object } } } } }
+  /trajectory/batch:
+    post:
+      summary: Batch trajectory export
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Batch result, content: { application/json: { schema: { type: object } } } } }
+  /work/add_batch:
+    post:
+      summary: Add a batch of work items
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Added, content: { application/json: { schema: { type: object } } } } }
+  /work/board:
+    get:
+      summary: Work board view
+      responses: { "200": { description: Board, content: { application/json: { schema: { type: object } } } } }
+  /work/cancel:
+    post:
+      summary: Cancel a work item
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Cancelled, content: { application/json: { schema: { type: object } } } } }
+  /work/clear:
+    post:
+      summary: Clear work items
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Cleared, content: { application/json: { schema: { type: object } } } } }
+  /work/gc:
+    post:
+      summary: Garbage-collect work items
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Collected, content: { application/json: { schema: { type: object } } } } }
+  /work/release:
+    post:
+      summary: Release a claimed work item
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Released, content: { application/json: { schema: { type: object } } } } }
+  /work/sync_proposals:
+    post:
+      summary: Sync work items from proposals
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Synced, content: { application/json: { schema: { type: object } } } } }
+  /wm/context:
+    post:
+      summary: Working-memory context
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Context, content: { application/json: { schema: { type: object } } } } }
+  /wm/get:
+    post:
+      summary: Get a working-memory entry
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Entry, content: { application/json: { schema: { type: object } } } } }
+  /skills/autostub:
+    post:
+      summary: Autostub a skill
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Stubbed, content: { application/json: { schema: { type: object } } } } }
+  /skills/eval:
+    post:
+      summary: Evaluate a skill
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Eval result, content: { application/json: { schema: { type: object } } } } }
+  /skills/lifecycle:
+    post:
+      summary: Skill lifecycle action
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Lifecycle result, content: { application/json: { schema: { type: object } } } } }
+  /skills/lint:
+    post:
+      summary: Lint a skill
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Lint result, content: { application/json: { schema: { type: object } } } } }
+  /skills/patch:
+    post:
+      summary: Patch a skill
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Patched, content: { application/json: { schema: { type: object } } } } }
+  /skills/unpin:
+    post:
+      summary: Unpin a skill
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Unpinned, content: { application/json: { schema: { type: object } } } } }
+  /sessions/create:
+    post:
+      summary: Create a session
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Session, content: { application/json: { schema: { type: object } } } } }
+  /sessions/close:
+    post:
+      summary: Close a session
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Closed, content: { application/json: { schema: { type: object } } } } }
+  /sessions/get:
+    post:
+      summary: Get a session
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Session, content: { application/json: { schema: { type: object } } } } }
+  /sessions/brief:
+    post:
+      summary: Session startup brief
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Brief, content: { application/json: { schema: { type: object } } } } }
+  /sessions/presence:
+    get:
+      summary: Presence overview across sessions
+      responses: { "200": { description: Presence, content: { application/json: { schema: { type: object } } } } }
+  /toolsets/resolve:
+    post:
+      summary: Resolve a toolset
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Resolved toolset, content: { application/json: { schema: { type: object } } } } }
+  /blast_radius/preview:
+    post:
+      summary: Preview the blast radius of a change
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Blast radius, content: { application/json: { schema: { type: object } } } } }
+  /mcp/tools_list:
+    get:
+      summary: List MCP tools
+      responses: { "200": { description: MCP tools, content: { application/json: { schema: { type: object } } } } }
+  /mcp/audit:
+    post:
+      summary: Audit MCP servers
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Audit, content: { application/json: { schema: { type: object } } } } }
+  /mcp/recheck:
+    post:
+      summary: Recheck MCP servers
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Rechecked, content: { application/json: { schema: { type: object } } } } }
+  /mcp/call:
+    post:
+      summary: Call an MCP tool
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Call result, content: { application/json: { schema: { type: object } } } } }
+  /workspaces/context:
+    post:
+      summary: Workspace context
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Context, content: { application/json: { schema: { type: object } } } } }
+  /worktree/gc:
+    post:
+      summary: Garbage-collect delegate worktrees
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Collected, content: { application/json: { schema: { type: object } } } } }
+  /aux/test:
+    post:
+      summary: Test the auxiliary model
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Test result, content: { application/json: { schema: { type: object } } } } }
+  /eval/results:
+    get:
+      summary: Evaluation results
+      responses: { "200": { description: Eval results, content: { application/json: { schema: { type: object } } } } }
+  /trigger/list:
+    get:
+      summary: List triggers
+      responses: { "200": { description: Trigger list, content: { application/json: { schema: { type: object } } } } }
+  /trigger/status:
+    post:
+      summary: Trigger status
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Status, content: { application/json: { schema: { type: object } } } } }
+  /trigger/fire:
+    post:
+      summary: Fire a trigger
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Fired, content: { application/json: { schema: { type: object } } } } }
+  /trigger/cancel:
+    post:
+      summary: Cancel a trigger
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Cancelled, content: { application/json: { schema: { type: object } } } } }
+  /init/run:
+    post:
+      summary: Run project initialization
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Init result, content: { application/json: { schema: { type: object } } } } }
+  /launch/run:
+    post:
+      summary: Run a launch configuration
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Launch result, content: { application/json: { schema: { type: object } } } } }
+  /server/info:
+    get:
+      summary: Server info
+      responses: { "200": { description: Server info, content: { application/json: { schema: { type: object } } } } }
+  /server/health:
+    get:
+      summary: Server health (RPC twin)
+      responses: { "200": { description: Health, content: { application/json: { schema: { type: object } } } } }
+  /kb/build:
+    post:
+      summary: Build the knowledge base (async; poll GET /runs/{id})
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Queued op run, content: { application/json: { schema: { type: object } } } } }
+  /kb/ingest:
+    post:
+      summary: Ingest a corpus into the knowledge base (async; poll GET /runs/{id})
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Queued op run, content: { application/json: { schema: { type: object } } } } }
+  /kb/update:
+    post:
+      summary: Update the knowledge base (async; poll GET /runs/{id})
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Queued op run, content: { application/json: { schema: { type: object } } } } }
+  /graph/sync_code:
+    post:
+      summary: Sync the code graph (async; poll GET /runs/{id})
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Queued op run, content: { application/json: { schema: { type: object } } } } }
+  /index/scan:
+    post:
+      summary: Scan/re-index the codebase (async; poll GET /runs/{id})
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Queued op run, content: { application/json: { schema: { type: object } } } } }
+  /memory/benchmark:
+    post:
+      summary: Run a memory retrieval benchmark (async; poll GET /runs/{id})
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Queued op run, content: { application/json: { schema: { type: object } } } } }
+  /curator/synthesize:
+    post:
+      summary: Run curator synthesis/extraction (async; poll GET /runs/{id})
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Queued op run, content: { application/json: { schema: { type: object } } } } }
+  /rules/generate:
+    post:
+      summary: Generate collaboration rules via LLM (async; poll GET /runs/{id})
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Queued op run, content: { application/json: { schema: { type: object } } } } }
+  /eval/run:
+    post:
+      summary: Run an evaluation (async; poll GET /runs/{id})
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Queued op run, content: { application/json: { schema: { type: object } } } } }
+  /memory/search:
+    post:
+      summary: Keyword-search memories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [keywords]
+              properties:
+                keywords: { type: array, items: { type: string } }
+                limit: { type: integer }
+      responses:
+        "200":
+          description: Memory search envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing keywords or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /memory/list:
+    post:
+      summary: List memories by tier/kind
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tier: { type: string }
+                kind: { type: string }
+                limit: { type: integer }
+      responses:
+        "200":
+          description: Memory list envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /memory/stats:
+    get:
+      summary: Memory store statistics
+      responses:
+        "200":
+          description: Memory stats envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /memory/get:
+    post:
+      summary: Get a memory by id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: integer }
+      responses:
+        "200":
+          description: Memory envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing id or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /memory/read:
+    get:
+      summary: Assemble the memory context
+      responses:
+        "200":
+          description: Memory context envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /hooks/pre:
+    post:
+      summary: Pre-tool-call harness hook (privileged)
+      description: >-
+        Runs the pre-tool-call guard. CAP_TOOL_EXECUTE: reachable on the local
+        Unix-domain socket (the co-located AI-tool integration) or, over TCP,
+        only with aimee.api.remote_writes=full.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Hook decision envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /hooks/post:
+    post:
+      summary: Post-tool-call harness hook (privileged)
+      description: >-
+        Runs the post-tool-call learning/guard pass. CAP_TOOL_EXECUTE; local
+        UDS or remote_writes=full over TCP.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Hook decision envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /hooks/session_start:
+    post:
+      summary: Session-start harness hook (privileged)
+      description: >-
+        Emits the session-start brief. CAP_TOOL_EXECUTE; local UDS or
+        remote_writes=full over TCP.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Session-start brief envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /tools/execute:
+    post:
+      summary: Execute a tool via the workspace plane (privileged)
+      description: >-
+        Internal tool-execution bridge. CAP_TOOL_EXECUTE; local UDS or
+        remote_writes=full over TCP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Tool result envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /memory/store:
+    post:
+      summary: Store a memory (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, content]
+              properties:
+                key: { type: string }
+                content: { type: string }
+      responses:
+        "200":
+          description: Stored memory envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing key/content or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /work/add:
+    post:
+      summary: Add a work-queue item (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                desc: { type: string }
+                source: { type: string }
+      responses:
+        "200":
+          description: Work item envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing title or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /work/claim:
+    post:
+      summary: Claim a work-queue item (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: string }
+                lane: { type: string }
+                effort: { type: string }
+      responses:
+        "200":
+          description: Claimed work item envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /work/complete:
+    post:
+      summary: Mark a work-queue item done (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+      responses:
+        "200":
+          description: Updated work item envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing id or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /work/fail:
+    post:
+      summary: Mark a work-queue item failed (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+      responses:
+        "200":
+          description: Updated work item envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing id or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /wm/set:
+    post:
+      summary: Set a working-memory entry (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, key, value]
+              properties:
+                session_id: { type: string }
+                key: { type: string }
+                value: { type: string }
+      responses:
+        "200":
+          description: Working-memory entry envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing fields or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /attempts/record:
+    post:
+      summary: Record an attempt-log entry (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, approach, outcome]
+              properties:
+                session_id: { type: string }
+                approach: { type: string }
+                outcome: { type: string }
+      responses:
+        "200":
+          description: Attempt-log entry envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing fields or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /rules/delete:
+    post:
+      summary: Delete a rule by id (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: integer }
+      responses:
+        "200":
+          description: Deletion envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing id or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /collab_rules/approve:
+    post:
+      summary: Approve a collaboration rule by id (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: integer }
+      responses:
+        "200":
+          description: Collaboration rule action envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing id or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /collab_rules/reject:
+    post:
+      summary: Reject a collaboration rule by id (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: integer }
+      responses:
+        "200":
+          description: Collaboration rule action envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing id or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /collab_rules/retire:
+    post:
+      summary: Retire a collaboration rule by id (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: integer }
+      responses:
+        "200":
+          description: Collaboration rule action envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing id or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /skills/create:
+    post:
+      summary: Create a skill (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, content]
+              properties:
+                name: { type: string }
+                content: { type: string }
+      responses:
+        "200":
+          description: Skill mutation envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing fields, lint failure, or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /skills/edit:
+    post:
+      summary: Edit a skill (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, content]
+              properties:
+                name: { type: string }
+                content: { type: string }
+      responses:
+        "200":
+          description: Skill mutation envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing fields, lint failure, or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /skills/archive:
+    post:
+      summary: Archive a skill (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                absorbed_into: { type: string }
+      responses:
+        "200":
+          description: Skill mutation envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing name or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /skills/pin:
+    post:
+      summary: Pin or unpin a skill (local-only)
+      description: Mutating route; reachable only on the local Unix-domain socket.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                pinned: { type: boolean }
+      responses:
+        "200":
+          description: Skill mutation envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing name or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /notes/search:
+    post:
+      summary: Search notes (proxied to aimee-kb)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+                limit: { type: integer }
+      responses:
+        "200":
+          description: Notes search envelope
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing query
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "502":
+          description: Notes backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: Notes search not available on this server
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /dashboard/reminders:
+    get:
+      summary: Active reminders (proxied to aimee-kb)
+      responses:
+        "200":
+          description: Reminders list
+          content:
+            application/json:
+              schema: { type: object }
+        "502":
+          description: Dashboard backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: Dashboard not available on this server
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /dashboard/memory:
+    get:
+      summary: Memory subsystem stats (proxied to aimee-kb)
+      responses:
+        "200":
+          description: Memory dashboard stats
+          content:
+            application/json:
+              schema: { type: object }
+        "502":
+          description: Dashboard backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: Dashboard not available on this server
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /chat/completions:
+    post:
+      summary: Create a chat completion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChatCompletionRequest' }
+      responses:
+        "200":
+          description: Chat completion
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatCompletionResponse' }
+        "400":
+          description: Invalid request (e.g. stream not yet supported)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /chat/stream:
+    post:
+      summary: Native streaming chat (aimee event stream)
+      description: >
+        Stream a chat turn as newline-delimited aimee events
+        (turn_start / text / thinking / turn_end / session / usage / done /
+        error), the same event shape the NDJSON socket emits. Used by the
+        first-party webchat UI; distinct from the OpenAI-shaped
+        /chat/completions. Requires CAP_CHAT (UDS, or an unscoped TCP bearer).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string }
+                aimee_session_id: { type: string }
+                claude_session_id: { type: string }
+                cwd: { type: string }
+      responses:
+        "200":
+          description: Newline-delimited aimee chat events (read until close)
+          content:
+            application/x-ndjson:
+              schema: { type: string }
+        "403":
+          description: Caller lacks CAP_CHAT (e.g. a scoped bearer)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /completions:
+    post:
+      summary: Create a text completion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompletionRequest' }
+      responses:
+        "200":
+          description: Text completion
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompletionResponse' }
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /embeddings:
+    post:
+      summary: Create embeddings for one or more inputs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmbeddingsRequest' }
+      responses:
+        "200":
+          description: Embeddings list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmbeddingsResponse' }
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "502":
+          description: Embedder unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /responses:
+    post:
+      summary: Create a model response (OpenAI Responses API; non-streaming)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResponsesRequest' }
+      responses:
+        "200":
+          description: A response object
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResponseObject' }
+        "400":
+          description: Invalid request (e.g. stream not yet supported)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /persona:
+    get:
+      summary: Current active persona
+      responses:
+        "200":
+          description: The active persona
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Persona' }
+  /personas:
+    get:
+      summary: List configured personas
+      responses:
+        "200":
+          description: Persona list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PersonaList' }
+    post:
+      summary: Create a persona (name in body)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PersonaWrite' }
+      responses:
+        "200":
+          description: The created persona (reloaded from config)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Persona' }
+        "400":
+          description: Missing or invalid persona name
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /personas/{name}:
+    get:
+      summary: Show a persona by name
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The named persona
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Persona' }
+        "404":
+          description: No such persona
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    put:
+      summary: Create or edit the named persona
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PersonaWrite' }
+      responses:
+        "200":
+          description: The persona after the write (reloaded from config)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Persona' }
+        "400":
+          description: Invalid persona name or body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    delete:
+      summary: Remove the user-level persona file (reset a built-in, delete a custom)
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  deleted: { type: boolean }
+        "404":
+          description: No user-level persona file to remove
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /role_templates:
+    get:
+      summary: List delegate role templates
+      responses:
+        "200":
+          description: Role template names
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  role_templates:
+                    type: array
+                    items: { type: string }
+  /role_templates/{name}:
+    get:
+      summary: Show a role template's raw body
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The role template
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleTemplate' }
+        "404":
+          description: No such role template
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    put:
+      summary: Create or edit a role template
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+      responses:
+        "200":
+          description: The role template after the write
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RoleTemplate' }
+        "400":
+          description: Invalid role name or missing content
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    delete:
+      summary: Remove the user-level role template (reset a built-in, delete a custom)
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  role: { type: string }
+                  deleted: { type: boolean }
+        "404":
+          description: No user-level role template to remove
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /sessions:
+    get:
+      summary: List the owner's live presences (sessions)
+      responses:
+        "200":
+          description: Live presences
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Presence' }
+  /sessions/{id}/attach:
+    post:
+      summary: Attach a surface to a session (creates the presence on first attach)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AttachRequest' }
+      responses:
+        "200":
+          description: Surface attached
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttachResponse' }
+        "409":
+          description: Attach refused (owner mismatch or registry full)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /sessions/{id}/detach:
+    post:
+      summary: Detach a surface from a session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attach_id]
+              properties:
+                attach_id: { type: string }
+      responses:
+        "200":
+          description: Surface detached
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detached: { type: boolean }
+        "404":
+          description: No such attachment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /sessions/{id}/events:
+    get:
+      summary: Stream presence events as Server-Sent Events
+      description: >
+        text/event-stream of presence events
+        (turn_started / turn_delta / turn_done / busy and routed async events
+        such as delegate/cron/reflection completions).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: text/event-stream of presence events
+        "404":
+          description: No such session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /sessions/{id}/persona:
+    get:
+      summary: Get the persona bound to a session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The session persona
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Persona' }
+    post:
+      summary: Set the persona for a session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SessionPersonaRequest' }
+      responses:
+        "200":
+          description: Persona updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Persona' }
+  /workspaces:
+    get:
+      summary: List registered workspaces (instance-scoped)
+      description: >
+        The workspaces registered on this instance, each with its provider
+        (shared|detached) and the projects discovered under it. Capability:
+        index:read.
+      responses:
+        "200":
+          description: Workspace registry
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workspaces:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path: { type: string }
+                        provider: { type: string, enum: [shared, detached] }
+                        projects: { type: array, items: { type: string } }
+    post:
+      summary: Register a workspace (instance-scoped)
+      description: >
+        Register a working tree as an instance-scoped workspace. The optional
+        provider selects co-located (shared) or marshalled (detached) access.
+        Capability: tool:execute.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [root_hint]
+              properties:
+                root_hint:
+                  type: string
+                  description: Absolute path to the workspace root
+                provider: { type: string, enum: [shared, detached] }
+      responses:
+        "200":
+          description: Workspace registered (with discovered projects)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path: { type: string }
+                  project_count: { type: integer }
+                  projects: { type: array, items: { type: object } }
+        "400":
+          description: Missing or invalid root_hint / provider
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /workspaces/{id}:
+    get:
+      summary: Workspace handle manifest
+      description: >
+        The manifest for one workspace handle — provider, root, existence and
+        VCS state. `id` is the percent-encoded absolute workspace path.
+        Capability: index:read.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: Percent-encoded absolute workspace path
+      responses:
+        "200":
+          description: Workspace manifest
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  manifest:
+                    type: object
+                    properties:
+                      root: { type: string }
+                      provider: { type: string, enum: [shared, detached] }
+                      exists: { type: boolean }
+                      is_dir: { type: boolean }
+                      vcs:
+                        type: object
+                        properties:
+                          remote: { type: string }
+                          head: { type: string }
+                          branch: { type: string }
+    delete:
+      summary: Remove a workspace registration
+      description: >
+        Deregister a workspace. `id` is the percent-encoded absolute workspace
+        path. Capability: tool:execute.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: Percent-encoded absolute workspace path
+      responses:
+        "200":
+          description: Workspace removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  removed: { type: string }
+        "404":
+          description: No such workspace
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /workspaces/{id}/forge-token:
+    post:
+      summary: Install a short-lived brokered forge token for a workspace
+      description: >
+        A filesystem-rich client hands the hub a short-lived, scoped forge token
+        (GitHub/GitLab App installation token, fine-grained PAT, or
+        `gh auth token`) for this workspace. The hub holds it in memory only —
+        never written to disk or logged — injects it into the git/gh exec
+        environment (GH_TOKEN + a GIT_ASKPASS shim), and revokes it when the
+        workspace closes. `id` is the percent-encoded absolute workspace path.
+        Capability: tool:execute.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: Percent-encoded absolute workspace path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string, description: Short-lived forge token }
+                scope: { type: string, enum: [global, workspace, project, user] }
+                ttl_seconds: { type: integer, description: Lifetime in seconds (default 3600) }
+      responses:
+        "200":
+          description: Token installed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "400":
+          description: Missing/invalid token, scope, or ttl
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /runner/poll:
+    post:
+      summary: Poll for the next detached-workspace op to execute (reverse channel)
+      description: >
+        The filesystem-authority client serving a `detached` workspace polls for
+        the next op the server needs run against its working tree. Returns
+        immediately with have_op:false when nothing is pending (bounded wait);
+        the client re-polls. Capability: tool:execute.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspace_id]
+              properties:
+                workspace_id: { type: string }
+      responses:
+        "200":
+          description: An op to execute, or have_op:false
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  have_op: { type: boolean }
+                  op: { type: object }
+        "400":
+          description: Missing workspace_id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /runner/respond:
+    post:
+      summary: Post the result of a detached-workspace op (reverse channel)
+      description: >
+        The serving client posts the result of the op it just executed back to
+        the server-side transport blocked on this workspace's queue. Capability:
+        tool:execute.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspace_id, response]
+              properties:
+                workspace_id: { type: string }
+                response: { type: object }
+      responses:
+        "200":
+          description: Result delivered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "404":
+          description: No runner registered for the workspace
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+security:
+  - bearerAuth: []

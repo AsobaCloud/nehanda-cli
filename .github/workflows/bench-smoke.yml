@@ -1,0 +1,83 @@
+name: Benchmark Smoke
+
+on:
+  pull_request:
+    branches: [main, testing]
+    paths:
+      - 'src/memory*'
+      - 'src/kb*'
+      - 'benchmarks/**'
+      - 'docs/BENCHMARKS.md'
+  workflow_dispatch:
+
+# Smoke regression threshold: the PR branch must not drop overall_accuracy by
+# more than this fraction compared to the base branch smoke run.
+# Set to 0 to require exact parity; increase to tolerate small noise.
+env:
+  SMOKE_REGRESSION_THRESHOLD: '0.05'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need full history for base-branch comparison
+
+      - name: Provisioning coverage gate
+        # Deterministic, no datasets required: every catalog dataset must have a
+        # documented provisioning path in benchmarks/provisioning.toml.
+        run: python3 benchmarks/check_provisioning.py --require-coverage
+
+      - name: Benchmark suite unit tests
+        run: python3 -m unittest discover -s benchmarks/tests -p 'test_*.py'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc make \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev
+
+      - name: Build (PR branch)
+        run: cd src && make -j$(nproc) all server
+
+      - name: Prepare fixture benchmark data
+        run: |
+          mkdir -p /tmp/bench-data/locomo /tmp/bench-data/longmemeval
+          cp tests/benchmarks/fixtures/locomo-mini.json /tmp/bench-data/locomo/locomo10.json
+          cp tests/benchmarks/fixtures/longmemeval-mini.json /tmp/bench-data/longmemeval/longmemeval_s_cleaned.json
+
+      - name: Run smoke harness (PR branch)
+        env:
+          AIMEE_BENCH_DATA_DIR: /tmp/bench-data
+          AIMEE_BENCH_RESULTS_DIR: /tmp/bench-results/pr
+          AIMEE_BENCH_FAKE_AGENT: '1'
+          AIMEE_BENCH_MAX_SAMPLES: '1'
+          AIMEE_BENCH_MAX_CASES: '1'
+          AIMEE_BENCH_TOP_K: '5'
+        run: ./benchmarks/smoke.sh
+
+      - name: Run smoke harness (base branch)
+        env:
+          AIMEE_BENCH_DATA_DIR: /tmp/bench-data
+          AIMEE_BENCH_RESULTS_DIR: /tmp/bench-results/base
+          AIMEE_BENCH_FAKE_AGENT: '1'
+          AIMEE_BENCH_MAX_SAMPLES: '1'
+          AIMEE_BENCH_MAX_CASES: '1'
+          AIMEE_BENCH_TOP_K: '5'
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          git worktree add /tmp/smoke-base-wt origin/${{ github.base_ref }}
+          cd /tmp/smoke-base-wt/src && make -j$(nproc) all server
+          cd "$GITHUB_WORKSPACE"
+          export AIMEE_BENCH_ROOT=/tmp/smoke-base-wt
+          export AIMEE_BENCH_CLIENT=/tmp/smoke-base-wt/aimee
+          ./benchmarks/smoke.sh
+          git worktree remove /tmp/smoke-base-wt --force
+
+      - name: Compare smoke accuracy (regression gate)
+        run: |
+          PYTHONPATH=. python3 benchmarks/smoke_compare.py \
+            --pr-dir   /tmp/bench-results/pr \
+            --base-dir /tmp/bench-results/base \
+            --threshold "${SMOKE_REGRESSION_THRESHOLD}"

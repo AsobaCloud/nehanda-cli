@@ -1,0 +1,1 @@
+{"suite":"code-graph-fusion","arm":"structural_graph_only","fusion_state":"shadow","utility_scoring":0,"code_projection":1,"queries":108,"labelled":0,"errors":0,"metrics":{"mrr":0,"ndcg_5":0,"ndcg_10":0,"recall_5":0,"recall_10":0,"cases":108},"latency":{"p50_ms":150.974919,"p95_ms":189.989369,"p99_ms":217.010286,"min_ms":121.014964,"max_ms":256.742483,"queries":108}}

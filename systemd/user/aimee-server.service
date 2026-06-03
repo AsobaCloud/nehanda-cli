@@ -1,0 +1,36 @@
+[Unit]
+Description=aimee server (DB1, MCP, delegate dispatch)
+After=network.target aimee-kb.service
+# Wants (not Requires) so a misconfigured kb doesn't block server startup;
+# server's kb_ensure_server has a fork-and-exec fallback for that case
+# (kb_client.c::kb_ensure_server). Long-term aimee-kb may live on a separate
+# host and this dependency disappears entirely.
+Wants=aimee-kb.service
+PartOf=aimee.slice
+
+[Service]
+Type=simple
+Slice=aimee.slice
+# aimee-server serves its /v1 HTTP surface over %h/.config/aimee/aimee-http.sock
+# (the legacy NDJSON --socket flag was removed; it is accepted-but-ignored).
+ExecStart=%h/.local/bin/aimee-server
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Server holds DB1, Codex/OpenCode app-server sessions, tool subprocesses, and
+# the in-process compute pools. Two active TUIs plus a build/verify subprocess
+# can exceed 6G in normal use, which forces direct reclaim and makes the UI
+# crawl even when the host has idle CPU and free memory.
+MemoryHigh=12G
+MemoryMax=16G
+TasksMax=512
+LimitNOFILE=65536
+# Threads inherit the 8 MB RLIMIT_STACK default; the kb inotify watch
+# thread needs more headroom. 64 MB is a safe guardrail against large
+# per-thread frames (see server_kb_workers.c watch table).
+LimitSTACK=67108864
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,500 @@
+/* cmd_hooks.c: the `aimee hooks` pre/post tool hook command.
+ *
+ * Session-start / launch / wrapup live in cmd_session_lifecycle.c; scope-aware
+ * section building (shared with that file) lives in cmd_hooks_scope.c. */
+#include "aimee.h"
+#include "db1.h"
+#include "headers/cmd_hooks_scope.h"
+#include "headers/plugin.h"
+#include "platform_process.h"
+#include "agent_config.h"
+#include "agent_coord.h"
+#include "agent_eval.h"
+#include "log.h"
+#include "trace_analysis.h"
+#include "workspace.h"
+#include "commands.h"
+#include "cmd_hooks_platform.h"
+#include "platform_random.h"
+#include "slop_detect.h"
+#include "git_verify.h"
+#include "cJSON.h"
+#include "headers/conversation_context.h"
+#include <dirent.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+/* Returns 1 if the tool writes file content that can be slop-scanned. */
+static int is_write_tool(const char *tool)
+{
+   return strcmp(tool, "Write") == 0 || strcmp(tool, "Edit") == 0 ||
+          strcmp(tool, "MultiEdit") == 0 || strcmp(tool, "write_file") == 0;
+}
+
+/* Emit slop findings to stderr (advisory). */
+static void slop_emit_stderr(const char *file_path, slop_finding_t *findings, int n)
+{
+   fprintf(stderr, "\naimee: slop advisory (%d finding(s) in %s):\n", n,
+           file_path ? file_path : "<content>");
+   for (int i = 0; i < n; i++)
+      fprintf(stderr, "  %s:%d [%s] %s\n", file_path ? file_path : "<content>",
+              findings[i].line_number, slop_category_label(findings[i].category),
+              findings[i].excerpt);
+   if (file_path)
+      fprintf(stderr, "  (run 'aimee slop %s' for full report)\n", file_path);
+}
+
+/* Build a JSON array of slop findings (caller owns returned object). */
+static cJSON *slop_findings_to_json(const char *file_path, slop_finding_t *findings, int n)
+{
+   cJSON *arr = cJSON_CreateArray();
+   for (int i = 0; i < n; i++)
+   {
+      cJSON *obj = cJSON_CreateObject();
+      if (file_path)
+         cJSON_AddStringToObject(obj, "file", file_path);
+      cJSON_AddNumberToObject(obj, "line", findings[i].line_number);
+      cJSON_AddStringToObject(obj, "category", slop_category_label(findings[i].category));
+      cJSON_AddStringToObject(obj, "excerpt", findings[i].excerpt);
+      cJSON_AddItemToArray(arr, obj);
+   }
+   return arr;
+}
+
+static int hook_client_uses_pretool_json(void)
+{
+   const char *client = getenv("AIMEE_HOOK_CLIENT");
+   if (client)
+      return strcmp(client, "claude") == 0 || strcmp(client, "codex") == 0 ||
+             strcmp(client, "copilot") == 0;
+   return getenv("CODEX_THREAD_ID") || getenv("CODEX_SANDBOX") || getenv("CODEX_HOME") ||
+          getenv("CODEX_CWD") || getenv("CLAUDE_SESSION_ID");
+}
+
+static int hook_client_supports_updated_input(void)
+{
+   const char *client = getenv("AIMEE_HOOK_CLIENT");
+   if (client)
+      return strcmp(client, "claude") == 0;
+   return getenv("CLAUDE_SESSION_ID") != NULL;
+}
+
+static void emit_pretool_deny_json(const char *reason)
+{
+   cJSON *out = cJSON_CreateObject();
+   cJSON *hook_out = cJSON_AddObjectToObject(out, "hookSpecificOutput");
+   cJSON_AddStringToObject(hook_out, "hookEventName", "PreToolUse");
+   cJSON_AddStringToObject(hook_out, "permissionDecision", "deny");
+   cJSON_AddStringToObject(hook_out, "permissionDecisionReason",
+                           reason && reason[0] ? reason : "Blocked by aimee guardrails.");
+
+   char *js = cJSON_PrintUnformatted(out);
+   if (js)
+   {
+      fputs(js, stdout);
+      fputc('\n', stdout);
+      free(js);
+   }
+   cJSON_Delete(out);
+}
+
+static void emit_pretool_rewrite_unsupported_json(int rewrite_rc, const char *rewritten)
+{
+   char reason[2048];
+   snprintf(reason, sizeof(reason),
+            "BLOCKED: Aimee would rewrite this %s to the session worktree, but this client does "
+            "not support PreToolUse input rewrites. Retry with rewritten %s: %s",
+            rewrite_rc == 3 ? "command" : "path", rewrite_rc == 3 ? "command" : "path",
+            rewritten && rewritten[0] ? rewritten : "<unknown>");
+   emit_pretool_deny_json(reason);
+}
+
+/* --- cmd_hooks --- */
+
+void cmd_hooks(app_ctx_t *ctx, int argc, char **argv)
+{
+   if (argc < 1)
+      fatal("hooks requires 'pre' or 'post'");
+
+   const char *phase = argv[0];
+   argc--;
+   argv++;
+
+   config_t cfg;
+   config_load(&cfg);
+   audit_log_open();
+
+   /* Read JSON from stdin -- hook input is small (tool name + args) */
+   char input[65536];
+   size_t total = 0;
+   while (total < sizeof(input) - 1)
+   {
+      ssize_t n = read(STDIN_FILENO, input + total, sizeof(input) - 1 - total);
+      if (n <= 0)
+         break;
+      total += (size_t)n;
+   }
+   input[total] = '\0';
+
+   cJSON *json = cJSON_Parse(input);
+
+   char hook_sid[64] = "";
+   if (hook_payload_session_id(json, hook_sid, sizeof(hook_sid)))
+      session_id_set_override(hook_sid);
+
+   const char *tool_name = "";
+   char *tool_input_heap = NULL;
+   const char *tool_input = "{}";
+
+   if (json)
+   {
+      cJSON *tn = cJSON_GetObjectItemCaseSensitive(json, "tool_name");
+      if (cJSON_IsString(tn))
+         tool_name = tn->valuestring;
+
+      cJSON *ti = cJSON_GetObjectItemCaseSensitive(json, "tool_input");
+      if (cJSON_IsString(ti))
+         tool_input = ti->valuestring;
+      else if (cJSON_IsObject(ti) || cJSON_IsArray(ti))
+      {
+         tool_input_heap = cJSON_PrintUnformatted(ti);
+         tool_input = tool_input_heap;
+      }
+   }
+
+   /* DB1 owns its own connection; session_state_load/save delegate to DB1. */
+   if (db1_init(cfg.db1_path) != 0)
+      fatal("cannot open database");
+
+   /* Run enabled plugin hooks for this phase.
+    * Plugin hook failures are advisory: warn but don't block execution. */
+   {
+      const char *event = (strcmp(phase, "pre") == 0) ? "PreToolUse" : "PostToolUse";
+      plugin_t plugins[PLUGIN_MAX_PLUGINS];
+      int pcount = plugin_registry_load(plugins, PLUGIN_MAX_PLUGINS);
+      const char *roots[64];
+      for (int ri = 0; ri < cfg.workspace_count && ri < 64; ri++)
+         roots[ri] = cfg.workspaces[ri];
+      plugin_discover_local(roots, cfg.workspace_count, plugins, &pcount, PLUGIN_MAX_PLUGINS);
+
+      static char hook_cmds[PLUGIN_MAX_PLUGINS * PLUGIN_MAX_HOOKS][512];
+      int hook_count = plugin_collect_hooks(plugins, pcount, event, hook_cmds,
+                                            PLUGIN_MAX_PLUGINS * PLUGIN_MAX_HOOKS);
+      for (int hi = 0; hi < hook_count; hi++)
+      {
+         char *out = NULL;
+         size_t out_len = 0;
+         int rc = platform_exec_pipe(hook_cmds[hi], input, strlen(input), &out, &out_len);
+         audit_log("plugin-hook", "phase=%s rc=%d hook=%s", event, rc, hook_cmds[hi]);
+         if (rc != 0)
+            LOG_WARN("plugin-hook", "%s hook '%s' exited with code %d", event, hook_cmds[hi], rc);
+         free(out);
+      }
+   }
+
+   if (strcmp(phase, "pre") == 0)
+   {
+      /* Load session state from DB1 */
+      const char *sid = hook_sid[0] ? hook_sid : session_id();
+      session_state_t state;
+      session_state_load(&state, sid);
+
+      char cwd[MAX_PATH_LEN];
+      if (!getcwd(cwd, sizeof(cwd)))
+         cwd[0] = '\0';
+      char payload_cwd[MAX_PATH_LEN];
+      if (hook_payload_cwd(json, payload_cwd, sizeof(payload_cwd)))
+      {
+         snprintf(cwd, sizeof(cwd), "%s", payload_cwd);
+      }
+      if (!is_aimee_worktree_path(cwd))
+      {
+         const char *pwd = getenv("PWD");
+         if (pwd && pwd[0] && is_aimee_worktree_path(pwd))
+            snprintf(cwd, sizeof(cwd), "%s", pwd);
+      }
+
+      /* Write CWD to session-scoped tracking file so MCP server follows session CWD */
+      if (cwd[0])
+      {
+         char cwd_path[MAX_PATH_LEN];
+         snprintf(cwd_path, sizeof(cwd_path), "%s/git-cwd-%s", config_output_dir(), session_id());
+         FILE *fp = fopen(cwd_path, "w");
+         if (fp)
+         {
+            fputs(cwd, fp);
+            fclose(fp);
+         }
+      }
+
+      char msg[1024] = "";
+      int rc = pre_tool_check(tool_name, tool_input, &state, config_guardrail_mode(&cfg), cwd, msg,
+                              sizeof(msg));
+
+      session_state_save(&state, sid);
+
+      /* Auto-delegation detection (#2):
+       * If the tool is a shell tool and the command looks like a remote operation
+       * that a sub-agent could handle, suggest delegation on stderr.
+       * Check tool_input as raw string (contains the command JSON). */
+      if (rc == 0 && is_shell_tool(tool_name) && tool_input && tool_input[0])
+      {
+         const char *role = NULL;
+         if (strstr(tool_input, "ssh ") &&
+             (strstr(tool_input, "deploy") || strstr(tool_input, "192.168") ||
+              strstr(tool_input, "10.0.") || strstr(tool_input, "10.1.")))
+            role = "deploy";
+         else if (strstr(tool_input, "curl ") && strstr(tool_input, "/health"))
+            role = "validate";
+         else if (strstr(tool_input, "systemctl restart") || strstr(tool_input, "systemctl stop"))
+            role = "deploy";
+
+         if (role)
+         {
+            agent_config_t acfg;
+            if (agent_load_config(&acfg) == 0)
+            {
+               int has_tools = 0;
+               for (int i = 0; i < acfg.agent_count; i++)
+               {
+                  if (acfg.agents[i].tools_enabled && agent_has_role(&acfg.agents[i], role))
+                     has_tools = 1;
+               }
+               if (has_tools)
+               {
+                  fprintf(stderr,
+                          "aimee: this looks like a %s task that a sub-agent could handle. "
+                          "Consider: aimee delegate %s \"<task>\"\n",
+                          role, role);
+               }
+            }
+         }
+      }
+
+      /* Worktree path rewrite: emit hookSpecificOutput with updatedInput so
+       * Claude Code silently re-targets the tool call at the worktree path.
+       * rc==1: edit tool file_path rewrite, rc==3: bash command rewrite. */
+      if ((rc == 1 || rc == 3) && msg[0])
+      {
+         if (!hook_client_supports_updated_input())
+         {
+            emit_pretool_rewrite_unsupported_json(rc, msg);
+            db1_shutdown();
+            free(tool_input_heap);
+            cJSON_Delete(json);
+            exit(0);
+         }
+
+         cJSON *orig = cJSON_Parse(tool_input);
+         if (orig)
+         {
+            if (rc == 1)
+            {
+               cJSON *file_path = cJSON_GetObjectItemCaseSensitive(orig, "file_path");
+               if (file_path)
+                  cJSON_ReplaceItemInObject(orig, "file_path", cJSON_CreateString(msg));
+               else if (cJSON_GetObjectItemCaseSensitive(orig, "path"))
+                  cJSON_ReplaceItemInObject(orig, "path", cJSON_CreateString(msg));
+               else
+                  cJSON_AddStringToObject(orig, "path", msg);
+            }
+            else
+            {
+               cJSON *command = cJSON_GetObjectItemCaseSensitive(orig, "command");
+               cJSON *cmd = cJSON_GetObjectItemCaseSensitive(orig, "cmd");
+               if (command)
+                  cJSON_ReplaceItemInObject(orig, "command", cJSON_CreateString(msg));
+               else if (cmd)
+                  cJSON_ReplaceItemInObject(orig, "cmd", cJSON_CreateString(msg));
+               else
+                  cJSON_AddStringToObject(orig, "command", msg);
+            }
+
+            cJSON *output = cJSON_CreateObject();
+            cJSON *hook_out = cJSON_AddObjectToObject(output, "hookSpecificOutput");
+            cJSON_AddStringToObject(hook_out, "hookEventName", "PreToolUse");
+            cJSON_AddStringToObject(hook_out, "permissionDecision", "allow");
+            cJSON_AddItemToObject(hook_out, "updatedInput", orig);
+
+            char *js = cJSON_PrintUnformatted(output);
+            if (js)
+            {
+               fputs(js, stdout);
+               fputc('\n', stdout);
+               free(js);
+            }
+            cJSON_Delete(output);
+         }
+         db1_shutdown();
+         free(tool_input_heap);
+         cJSON_Delete(json);
+         exit(0);
+      }
+
+      /* Slop scan on incoming Write/Edit content (advisory, never blocks). */
+      {
+         slop_finding_t slop[16];
+         int nslop = 0;
+         const char *scan_content = NULL;
+         const char *scan_file = NULL;
+
+         if (is_write_tool(tool_name) && json)
+         {
+            cJSON *ti_obj = cJSON_GetObjectItemCaseSensitive(json, "tool_input");
+            cJSON *parsed = cJSON_IsObject(ti_obj) ? ti_obj : cJSON_Parse(tool_input);
+            cJSON *content_item = cJSON_GetObjectItem(parsed, "content");
+            if (!content_item)
+               content_item = cJSON_GetObjectItem(parsed, "new_string");
+            if (content_item && cJSON_IsString(content_item))
+               scan_content = content_item->valuestring;
+            cJSON *fp_item = cJSON_GetObjectItem(parsed, "file_path");
+            if (fp_item && cJSON_IsString(fp_item))
+               scan_file = fp_item->valuestring;
+            if (!cJSON_IsObject(ti_obj) && parsed)
+               cJSON_Delete(parsed);
+         }
+
+         if (scan_content)
+            nslop = slop_detect_buf(scan_content, 0, slop, 16);
+
+         if (nslop > 0)
+         {
+            slop_emit_stderr(scan_file, slop, nslop);
+
+            if (ctx->json_output)
+            {
+               cJSON *j = cJSON_CreateObject();
+               cJSON_AddNumberToObject(j, "exit_code", rc);
+               if (msg[0])
+                  cJSON_AddStringToObject(j, "message", msg);
+               cJSON_AddItemToObject(j, "slop_warnings",
+                                     slop_findings_to_json(scan_file, slop, nslop));
+               emit_json_ctx(j, ctx->json_fields, ctx->response_profile);
+               db1_shutdown();
+               free(tool_input_heap);
+               cJSON_Delete(json);
+               exit(rc);
+            }
+         }
+      }
+
+      if (ctx->json_output)
+      {
+         cJSON *j = cJSON_CreateObject();
+         cJSON_AddNumberToObject(j, "exit_code", rc);
+         if (msg[0])
+            cJSON_AddStringToObject(j, "message", msg);
+         emit_json_ctx(j, ctx->json_fields, ctx->response_profile);
+      }
+      else if (rc == 2 && msg[0] && hook_client_uses_pretool_json())
+      {
+         emit_pretool_deny_json(msg);
+      }
+      else if (rc != 0 && msg[0])
+      {
+         fprintf(stderr, "aimee: %s\n", msg);
+      }
+
+      db1_shutdown();
+      free(tool_input_heap);
+      cJSON_Delete(json);
+      exit((rc == 2 && msg[0] && hook_client_uses_pretool_json()) ? 0 : rc);
+   }
+   else if (strcmp(phase, "post") == 0)
+   {
+      /* Update CWD tracking (catches worktree CWD changes via PostToolUse) */
+      {
+         char cwd[MAX_PATH_LEN];
+         if (getcwd(cwd, sizeof(cwd)) && cwd[0])
+         {
+            char payload_cwd[MAX_PATH_LEN];
+            if (hook_payload_cwd(json, payload_cwd, sizeof(payload_cwd)))
+               snprintf(cwd, sizeof(cwd), "%s", payload_cwd);
+            if (!is_aimee_worktree_path(cwd))
+            {
+               const char *pwd = getenv("PWD");
+               if (pwd && pwd[0] && is_aimee_worktree_path(pwd))
+                  snprintf(cwd, sizeof(cwd), "%s", pwd);
+            }
+            char cwd_path[MAX_PATH_LEN];
+            snprintf(cwd_path, sizeof(cwd_path), "%s/git-cwd-%s", config_output_dir(),
+                     session_id());
+            FILE *fp = fopen(cwd_path, "w");
+            if (fp)
+            {
+               fputs(cwd, fp);
+               fclose(fp);
+            }
+         }
+      }
+
+      {
+         const char *sid = session_id();
+         session_state_t post_state;
+         session_state_load(&post_state, sid);
+         post_tool_update(tool_name, tool_input, &post_state);
+         post_state.dirty = 1;
+         session_state_save(&post_state, sid);
+      }
+
+      /* Record tool event for virtual context assembly (no-op when disabled). */
+      {
+         cJSON *tr = json ? cJSON_GetObjectItemCaseSensitive(json, "tool_response") : NULL;
+         cJSON *tr_content = tr ? cJSON_GetObjectItemCaseSensitive(tr, "content") : NULL;
+         const char *result_str =
+             (tr_content && cJSON_IsString(tr_content)) ? tr_content->valuestring : "";
+         int result_bytes = (int)strlen(result_str);
+         conv_ctx_record_event(session_id(), tool_name, tool_input, result_str, result_bytes);
+      }
+
+      if (ctx->json_output)
+      {
+         /* Attach structured diff fields from tool_response if present.
+          * Hook consumers can read unified_diff / additions / deletions
+          * without re-reading the file. */
+         cJSON *tr = json ? cJSON_GetObjectItemCaseSensitive(json, "tool_response") : NULL;
+         cJSON *tr_content = tr ? cJSON_GetObjectItemCaseSensitive(tr, "content") : NULL;
+         const char *tr_str =
+             (tr_content && cJSON_IsString(tr_content)) ? tr_content->valuestring : NULL;
+         cJSON *diff_j = tr_str ? cJSON_Parse(tr_str) : NULL;
+         cJSON *ud = diff_j ? cJSON_GetObjectItem(diff_j, "unified_diff") : NULL;
+
+         if (ud && cJSON_IsString(ud) && ud->valuestring[0])
+         {
+            cJSON *j = cJSON_CreateObject();
+            cJSON_AddStringToObject(j, "status", "ok");
+            /* Copy diff fields so hook scripts can consume them */
+            cJSON *path_j = cJSON_GetObjectItem(diff_j, "path");
+            if (path_j && cJSON_IsString(path_j))
+               cJSON_AddStringToObject(j, "path", path_j->valuestring);
+            cJSON *summ_j = cJSON_GetObjectItem(diff_j, "summary");
+            if (summ_j && cJSON_IsString(summ_j))
+               cJSON_AddStringToObject(j, "summary", summ_j->valuestring);
+            cJSON *add_j = cJSON_GetObjectItem(diff_j, "additions");
+            if (add_j && cJSON_IsNumber(add_j))
+               cJSON_AddNumberToObject(j, "additions", add_j->valuedouble);
+            cJSON *del_j = cJSON_GetObjectItem(diff_j, "deletions");
+            if (del_j && cJSON_IsNumber(del_j))
+               cJSON_AddNumberToObject(j, "deletions", del_j->valuedouble);
+            cJSON_AddStringToObject(j, "unified_diff", ud->valuestring);
+            emit_json_ctx(j, ctx->json_fields, ctx->response_profile);
+         }
+         else
+         {
+            emit_ok_ctx(ctx->json_fields, ctx->response_profile);
+         }
+         cJSON_Delete(diff_j);
+      }
+   }
+   else
+   {
+      fatal("hooks requires 'pre' or 'post', got: %s", phase);
+   }
+
+   db1_shutdown();
+   cJSON_Delete(json);
+   if (tool_input_heap)
+      free(tool_input_heap);
+}

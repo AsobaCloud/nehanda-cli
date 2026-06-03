@@ -1,0 +1,14 @@
+{
+  "network": {
+    "networks": [
+      {"name": "bad1", "cidr": "not-a-cidr"},
+      {"name": "bad2", "cidr": "999.999.999.999/99"},
+      {"name": "bad3", "cidr": ""},
+      {"name": "bad4", "cidr": "/"},
+      {"name": "bad5", "cidr": "::1/128"},
+      {"name": "overflow", "cidr": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+      {"name": "special", "cidr": "0.0.0.0/0"},
+      {"name": "loopback", "cidr": "127.0.0.1/32"}
+    ]
+  }
+}

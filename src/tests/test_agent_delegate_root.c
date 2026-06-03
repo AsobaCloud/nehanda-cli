@@ -1,0 +1,363 @@
+/* test_agent_delegate_root.c: focused delegate root-cause regressions. */
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <pthread.h>
+
+#include "db1.h"
+#include "agent_tasks.h"
+#include "agent_tools.h"
+#include "cJSON.h"
+#include "platform_path.h"
+#include "platform_test_util.h"
+#include "util.h"
+
+void test_cancelled_durable_job_blocks_tool_dispatch(void)
+{
+   db1_shutdown();
+   assert(db1_init(":memory:") == 0);
+
+   int job_id = db1_agent_job_create("code", "write a file", "unit-agent", "unit-test");
+   assert(job_id > 0);
+   assert(db1_agent_job_take_lease(job_id, "unit-test") == 0);
+   assert(db1_agent_job_cancel_by_id(job_id, "unit test") > 0);
+   agent_set_durable_job(job_id);
+
+   char path[512];
+   snprintf(path, sizeof(path), "%s/aimee-cancelled-dispatch-%ld.txt", platform_tmpdir(),
+            (long)getpid());
+   unlink(path);
+
+   char args[1024];
+   snprintf(args, sizeof(args), "{\"path\":\"%s\",\"content\":\"should not write\"}", path);
+   char *result = dispatch_tool_call("write_file", args, 1000);
+   assert(result != NULL);
+   assert(strstr(result, "delegate cancelled") != NULL);
+   assert(access(path, F_OK) != 0);
+
+   free(result);
+   agent_set_durable_job(0);
+   db1_shutdown();
+   printf("  PASS: test_cancelled_durable_job_blocks_tool_dispatch\n");
+}
+
+void test_parent_write_guard_readonly_pipeline(void)
+{
+   char root[512];
+   snprintf(root, sizeof(root), "%s/aimee_parent_guard_pipe_XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(root) != NULL);
+
+   char worktree[512];
+   snprintf(worktree, sizeof(worktree), "%s/.aimee/worktrees/delegate/main", root);
+   assert(platform_mkdir_p(worktree, 0700) == 0 || access(worktree, F_OK) == 0);
+
+   char source[512];
+   snprintf(source, sizeof(source), "%s/pipe-source.txt", worktree);
+   FILE *f = fopen(source, "w");
+   assert(f != NULL);
+   fputs("first\nsecond\n", f);
+   fclose(f);
+
+   agent_tools_parent_write_guard_set(root, worktree);
+   run_cmd_set_cwd(worktree);
+   char *result = tool_bash("cat pipe-source.txt | head -n 1", 5000);
+   run_cmd_set_cwd(NULL);
+   agent_tools_parent_write_guard_clear();
+
+   assert(result != NULL);
+   cJSON *json = cJSON_Parse(result);
+   assert(json != NULL);
+   cJSON *stdout_item = cJSON_GetObjectItem(json, "stdout");
+   cJSON *ec = cJSON_GetObjectItem(json, "exit_code");
+   assert(stdout_item && cJSON_IsString(stdout_item));
+   assert(strcmp(stdout_item->valuestring, "first\n") == 0);
+   assert(ec && ec->valueint == 0);
+
+   cJSON_Delete(json);
+   free(result);
+   platform_test_rmrf(root);
+   printf("  PASS: test_parent_write_guard_readonly_pipeline\n");
+}
+
+void test_parent_write_guard_readonly_large_find(void)
+{
+   char root[512];
+   snprintf(root, sizeof(root), "%s/aimee_parent_guard_find_XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(root) != NULL);
+
+   char worktree[512];
+   snprintf(worktree, sizeof(worktree), "%s/.aimee/worktrees/delegate/main", root);
+   assert(platform_mkdir_p(worktree, 0700) == 0 || access(worktree, F_OK) == 0);
+
+   char many_dir[512];
+   snprintf(many_dir, sizeof(many_dir), "%s/many", worktree);
+   assert(platform_mkdir_p(many_dir, 0700) == 0);
+   for (int i = 0; i < 300; i++)
+   {
+      char path[512];
+      snprintf(path, sizeof(path), "%s/file-%04d.txt", many_dir, i);
+      FILE *f = fopen(path, "w");
+      assert(f != NULL);
+      fputs("x", f);
+      fclose(f);
+   }
+
+   agent_tools_parent_write_guard_set(root, worktree);
+   run_cmd_set_cwd(worktree);
+   char cmd[1024];
+   /* Sort the listing so the highest-numbered file is deterministically last.
+    * tool_bash compacts large output to a head + tail window, so an unsorted
+    * `find` (filesystem order) could leave file-0299.txt in the omitted middle;
+    * sorting puts it in the preserved tail and keeps the assertion stable. */
+   snprintf(cmd, sizeof(cmd), "find %s -maxdepth 2 | sort", worktree);
+   char *result = tool_bash(cmd, 5000);
+   run_cmd_set_cwd(NULL);
+   agent_tools_parent_write_guard_clear();
+
+   assert(result != NULL);
+   cJSON *json = cJSON_Parse(result);
+   assert(json != NULL);
+   cJSON *stdout_item = cJSON_GetObjectItem(json, "stdout");
+   cJSON *ec = cJSON_GetObjectItem(json, "exit_code");
+   assert(stdout_item && cJSON_IsString(stdout_item));
+   /* The read-only find must be allowed (not blocked) and complete: its
+    * highest-numbered entry survives in the compacted tail. */
+   assert(strstr(stdout_item->valuestring, "file-0299.txt") != NULL);
+   assert(ec && ec->valueint == 0);
+   cJSON_Delete(json);
+   free(result);
+   platform_test_rmrf(root);
+   printf("  PASS: test_parent_write_guard_readonly_large_find\n");
+}
+
+typedef struct cancel_job_args
+{
+   int job_id;
+} cancel_job_args_t;
+
+static void *cancel_job_soon(void *arg)
+{
+   cancel_job_args_t *args = (cancel_job_args_t *)arg;
+   usleep(150000);
+   db1_agent_job_cancel_by_id(args->job_id, "unit test running cancel");
+   return NULL;
+}
+
+void test_delegate_bash_cancel_kills_running_tool(void)
+{
+   db1_shutdown();
+   assert(db1_init(":memory:") == 0);
+
+   int job_id = db1_agent_job_create("diagnose", "run sleep", "unit-agent", "unit-test");
+   assert(job_id > 0);
+   assert(db1_agent_job_take_lease(job_id, "unit-test") == 0);
+   agent_set_durable_job(job_id);
+
+   cancel_job_args_t args = {.job_id = job_id};
+   pthread_t tid;
+   assert(pthread_create(&tid, NULL, cancel_job_soon, &args) == 0);
+   char *result = tool_bash("sleep 5", 5000);
+   pthread_join(tid, NULL);
+   agent_set_durable_job(0);
+
+   assert(result != NULL);
+   cJSON *json = cJSON_Parse(result);
+   assert(json != NULL);
+   cJSON *ec = cJSON_GetObjectItem(json, "exit_code");
+   cJSON *stderr_item = cJSON_GetObjectItem(json, "stderr");
+   assert(ec && ec->valueint == -1);
+   assert(stderr_item && cJSON_IsString(stderr_item));
+   assert(strstr(stderr_item->valuestring, "delegate cancelled") != NULL);
+   cJSON_Delete(json);
+   free(result);
+   db1_shutdown();
+   printf("  PASS: test_delegate_bash_cancel_kills_running_tool\n");
+}
+
+void test_parent_write_guard_allows_mkdir_in_delegate_worktree(void)
+{
+   char root[512];
+   snprintf(root, sizeof(root), "%s/aimee_parent_guard_mkdir_XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(root) != NULL);
+
+   char worktree[512];
+   snprintf(worktree, sizeof(worktree), "%s/.aimee/worktrees/delegate/main", root);
+   assert(platform_mkdir_p(worktree, 0700) == 0 || access(worktree, F_OK) == 0);
+
+   agent_tools_parent_write_guard_set(root, worktree);
+   run_cmd_set_cwd(worktree);
+   char *result = tool_bash("mkdir -p new-fixtures/subdir", 5000);
+   run_cmd_set_cwd(NULL);
+   agent_tools_parent_write_guard_clear();
+
+   assert(result != NULL);
+   cJSON *json = cJSON_Parse(result);
+   assert(json != NULL);
+   cJSON *ec = cJSON_GetObjectItem(json, "exit_code");
+   assert(ec && ec->valueint == 0);
+   cJSON_Delete(json);
+   free(result);
+
+   char created[512];
+   snprintf(created, sizeof(created), "%s/new-fixtures/subdir", worktree);
+   assert(access(created, F_OK) == 0);
+
+   platform_test_rmrf(root);
+   printf("  PASS: test_parent_write_guard_allows_mkdir_in_delegate_worktree\n");
+}
+
+void test_parent_write_guard_allows_workspace_file_ops(void)
+{
+   char root[512];
+   snprintf(root, sizeof(root), "%s/aimee_parent_guard_file_ops_XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(root) != NULL);
+
+   char worktree[512];
+   snprintf(worktree, sizeof(worktree), "%s/.aimee/worktrees/delegate/main", root);
+   assert(platform_mkdir_p(worktree, 0700) == 0 || access(worktree, F_OK) == 0);
+
+   agent_tools_parent_write_guard_set(root, worktree);
+   run_cmd_set_cwd(worktree);
+   char *result = tool_bash("touch marker.txt", 5000);
+   run_cmd_set_cwd(NULL);
+
+   assert(result != NULL);
+   cJSON *json = cJSON_Parse(result);
+   assert(json != NULL);
+   cJSON *ec = cJSON_GetObjectItem(json, "exit_code");
+   assert(ec && ec->valueint == 0);
+   cJSON_Delete(json);
+   free(result);
+
+   char marker[512];
+   snprintf(marker, sizeof(marker), "%s/marker.txt", worktree);
+   assert(access(marker, F_OK) == 0);
+
+   run_cmd_set_cwd(worktree);
+   result = tool_bash("cp marker.txt marker-copy.txt", 5000);
+   run_cmd_set_cwd(NULL);
+   assert(result != NULL);
+   json = cJSON_Parse(result);
+   assert(json != NULL);
+   ec = cJSON_GetObjectItem(json, "exit_code");
+   assert(ec && ec->valueint == 0);
+   cJSON_Delete(json);
+   free(result);
+
+   char marker_copy[512];
+   snprintf(marker_copy, sizeof(marker_copy), "%s/marker-copy.txt", worktree);
+   assert(access(marker_copy, F_OK) == 0);
+
+   run_cmd_set_cwd(worktree);
+   result = tool_bash("mv marker-copy.txt marker-moved.txt", 5000);
+   run_cmd_set_cwd(NULL);
+   assert(result != NULL);
+   json = cJSON_Parse(result);
+   assert(json != NULL);
+   ec = cJSON_GetObjectItem(json, "exit_code");
+   assert(ec && ec->valueint == 0);
+   cJSON_Delete(json);
+   free(result);
+
+   char marker_moved[512];
+   snprintf(marker_moved, sizeof(marker_moved), "%s/marker-moved.txt", worktree);
+   assert(access(marker_moved, F_OK) == 0);
+
+   run_cmd_set_cwd(worktree);
+   result = tool_bash("rm marker-moved.txt", 5000);
+   run_cmd_set_cwd(NULL);
+   assert(result != NULL);
+   json = cJSON_Parse(result);
+   assert(json != NULL);
+   ec = cJSON_GetObjectItem(json, "exit_code");
+   assert(ec && ec->valueint == 0);
+   cJSON_Delete(json);
+   free(result);
+   assert(access(marker_moved, F_OK) != 0);
+
+   char outside[512];
+   snprintf(outside, sizeof(outside), "%s/outside.txt", root);
+   char command[1024];
+   snprintf(command, sizeof(command), "touch %s", outside);
+   run_cmd_set_cwd(worktree);
+   result = tool_bash(command, 5000);
+   run_cmd_set_cwd(NULL);
+   agent_tools_parent_write_guard_clear();
+
+   assert(result != NULL);
+   json = cJSON_Parse(result);
+   assert(json != NULL);
+   ec = cJSON_GetObjectItem(json, "exit_code");
+   assert(ec && ec->valueint == -1);
+   cJSON_Delete(json);
+   free(result);
+   assert(access(outside, F_OK) != 0);
+
+   platform_test_rmrf(root);
+   printf("  PASS: test_parent_write_guard_allows_workspace_file_ops\n");
+}
+
+void test_parent_write_guard_allows_workspace_chain(void)
+{
+   char root[512];
+   snprintf(root, sizeof(root), "%s/aimee_parent_guard_chain_XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(root) != NULL);
+
+   char worktree[512];
+   snprintf(worktree, sizeof(worktree), "%s/.aimee/worktrees/delegate/main", root);
+   assert(platform_mkdir_p(worktree, 0700) == 0 || access(worktree, F_OK) == 0);
+
+   agent_tools_parent_write_guard_set(root, worktree);
+   run_cmd_set_cwd(worktree);
+   char *result = tool_bash("mkdir -p chain && touch chain/ok.txt", 5000);
+   run_cmd_set_cwd(NULL);
+   agent_tools_parent_write_guard_clear();
+
+   assert(result != NULL);
+   cJSON *json = cJSON_Parse(result);
+   assert(json != NULL);
+   cJSON *ec = cJSON_GetObjectItem(json, "exit_code");
+   assert(ec && ec->valueint == 0);
+   cJSON_Delete(json);
+   free(result);
+
+   char marker[512];
+   snprintf(marker, sizeof(marker), "%s/chain/ok.txt", worktree);
+   assert(access(marker, F_OK) == 0);
+
+   platform_test_rmrf(root);
+   printf("  PASS: test_parent_write_guard_allows_workspace_chain\n");
+}
+
+void test_parent_write_guard_allows_readonly_printf(void)
+{
+   char root[512];
+   snprintf(root, sizeof(root), "%s/aimee_parent_guard_printf_XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(root) != NULL);
+
+   char worktree[512];
+   snprintf(worktree, sizeof(worktree), "%s/.aimee/worktrees/delegate/main", root);
+   assert(platform_mkdir_p(worktree, 0700) == 0 || access(worktree, F_OK) == 0);
+
+   agent_tools_parent_write_guard_set(root, worktree);
+   run_cmd_set_cwd(worktree);
+   char *result = tool_bash("printf LOCAL254_TOOLS_OK", 5000);
+   run_cmd_set_cwd(NULL);
+   agent_tools_parent_write_guard_clear();
+
+   assert(result != NULL);
+   cJSON *json = cJSON_Parse(result);
+   assert(json != NULL);
+   cJSON *stdout_item = cJSON_GetObjectItem(json, "stdout");
+   cJSON *ec = cJSON_GetObjectItem(json, "exit_code");
+   assert(stdout_item && cJSON_IsString(stdout_item));
+   assert(strcmp(stdout_item->valuestring, "LOCAL254_TOOLS_OK") == 0);
+   assert(ec && ec->valueint == 0);
+
+   cJSON_Delete(json);
+   free(result);
+   platform_test_rmrf(root);
+   printf("  PASS: test_parent_write_guard_allows_readonly_printf\n");
+}

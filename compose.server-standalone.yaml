@@ -1,0 +1,45 @@
+# Standalone aimee-server.
+#
+# No aimee-kb and no Postgres: the server runs against a self-contained SQLite
+# DB1 and serves its DB1-backed /v1 endpoints. With no AIMEE_KB_API_URL set, the
+# kb-backed shared / vector operations are simply unavailable until a kb is wired
+# in (see compose.server.yaml for the full server + kb stack).
+#
+#   docker compose -f compose.server-standalone.yaml up --build
+#
+# The /v1 API requires a bearer token (baked default: "aimee-local-dev"):
+#   curl -H "Authorization: Bearer aimee-local-dev" http://localhost:8740/v1/health
+#
+# Plain `docker run` must pass the stack ulimit explicitly; mount a volume at
+# AIMEE_WORKSPACES_DIR to persist the mirror-tier checkouts across recreations:
+#   docker run --rm --ulimit stack=67108864 -p 8740:8740 \
+#     -v aimee-workspaces:/var/lib/aimee-workspaces aimee-server
+services:
+  aimee-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    image: aimee-server
+    # The server's worker threads need a 64 MB stack (the 8 MB container default
+    # overflows during startup — matches systemd's LimitSTACK=67108864).
+    ulimits:
+      stack: 67108864
+    ports:
+      - "8740:8740"
+    # An unauthenticated probe gets 401, which still proves the listener is up;
+    # treat 200/401 as healthy so this stays correct if the bearer is overridden.
+    healthcheck:
+      test: ["CMD-SHELL",
+             "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8740/v1/health | grep -qE '^(200|401)$$'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - aimee-server-home:/var/lib/aimee
+      # Durable mirror-tier state (AIMEE_WORKSPACES_DIR): bare mirrors +
+      # reconstructed worktrees, persisted across recreations on their own volume.
+      - aimee-server-workspaces:/var/lib/aimee-workspaces
+
+volumes:
+  aimee-server-home:
+  aimee-server-workspaces:
