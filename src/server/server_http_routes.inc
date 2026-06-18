@@ -15,6 +15,13 @@
  * their rows carry handler == NULL so they still participate in the capability
  * gate and the conformance scan without being dispatched here. */
 
+/* Route-handler deps used below but not needed by server_http.c's own body
+ * (kept here, not in server_http.c, to respect its 2000-line limit). */
+#include "git_ops.h"        /* git_ops_run for /v1/workspace/git (WP-E) */
+#include "git_project.h"    /* git_project_clone for /v1/workspace/clone (WP-D) */
+#include "webuser_editor.h" /* webuser_editor_ensure for /v1/workspace/editor (WP-I) */
+#include "index.h"       /* index_scan_project after a webuser clone (WP-D) */
+
 /* Per-request context handed to a route handler. `id` holds the extracted
  * dynamic path segment (persona / role-template name, session id, run id) for
  * RM_PREFIX routes, or "" for fixed routes. */
@@ -814,6 +821,154 @@ static int rh_workspace_forge_token(const route_req_t *rq, char *resp, int cap)
    return 200;
 }
 
+/* POST /v1/workspace/clone {url, name?} — clone a repo as a project under the
+ * calling webchat user's scoped workspace (webchat-git WP-D). The caller
+ * principal comes from the attested identity (server.token-gated X-Aimee-Webuser),
+ * NOT the body — a user can only clone into their own tree. Credentials are
+ * injected from the user's sealed vault (WP-C); never accepted in the body. */
+static int rh_workspace_clone(const route_req_t *rq, char *resp, int cap)
+{
+   const char *principal = server_http_identity_principal();
+   if (!principal || strncmp(principal, "webuser:", 8) != 0)
+      return err_json(resp, cap, 403, "git projects require a webchat user");
+
+   cJSON *body = (rq->body && rq->body[0]) ? cJSON_Parse(rq->body) : NULL;
+   if (!body || !cJSON_IsObject(body))
+   {
+      cJSON_Delete(body);
+      return err_json(resp, cap, 400, "invalid JSON body");
+   }
+   const cJSON *jurl = cJSON_GetObjectItemCaseSensitive(body, "url");
+   const cJSON *jname = cJSON_GetObjectItemCaseSensitive(body, "name");
+   const char *url = (cJSON_IsString(jurl) && jurl->valuestring) ? jurl->valuestring : NULL;
+   const char *name = (cJSON_IsString(jname) && jname->valuestring) ? jname->valuestring : NULL;
+
+   char dest[MAX_PATH_LEN], pname[128], err[256];
+   int rc = git_project_clone(principal, url, name, dest, sizeof(dest), pname, sizeof(pname), err,
+                              sizeof(err));
+   cJSON_Delete(body);
+   if (rc != 0)
+      return err_json(resp, cap, 400, err);
+
+   /* Best-effort index so the new project is searchable by the agent + listed. */
+   index_scan_project(pname, dest, 0);
+
+   cJSON *out = cJSON_CreateObject();
+   cJSON_AddBoolToObject(out, "ok", 1);
+   cJSON_AddStringToObject(out, "name", pname);
+   char *s = cJSON_PrintUnformatted(out);
+   int n = s ? snprintf(resp, (size_t)cap, "%s", s) : -1;
+   free(s);
+   cJSON_Delete(out);
+   return (n > 0 && n < cap) ? 200 : err_json(resp, cap, 500, "response too large");
+}
+
+/* POST /v1/workspace/git {project, op, message?, branch?, n?} — run a git
+ * operation on the calling webchat user's project (webchat-git WP-E). Identity
+ * is the attested X-Aimee-Webuser principal; the project + op are scoped +
+ * allowlisted by git_ops, and remote ops use the user's vaulted creds. */
+static int rh_workspace_git(const route_req_t *rq, char *resp, int cap)
+{
+   const char *principal = server_http_identity_principal();
+   if (!principal || strncmp(principal, "webuser:", 8) != 0)
+      return err_json(resp, cap, 403, "git projects require a webchat user");
+
+   cJSON *body = (rq->body && rq->body[0]) ? cJSON_Parse(rq->body) : NULL;
+   if (!body || !cJSON_IsObject(body))
+   {
+      cJSON_Delete(body);
+      return err_json(resp, cap, 400, "invalid JSON body");
+   }
+   const cJSON *jproj = cJSON_GetObjectItemCaseSensitive(body, "project");
+   const cJSON *jop = cJSON_GetObjectItemCaseSensitive(body, "op");
+   const cJSON *jmsg = cJSON_GetObjectItemCaseSensitive(body, "message");
+   const cJSON *jbranch = cJSON_GetObjectItemCaseSensitive(body, "branch");
+   const cJSON *jn = cJSON_GetObjectItemCaseSensitive(body, "n");
+   const char *project = (cJSON_IsString(jproj) && jproj->valuestring) ? jproj->valuestring : NULL;
+   const char *op = (cJSON_IsString(jop) && jop->valuestring) ? jop->valuestring : NULL;
+   /* text_arg is the commit message (commit) or target branch (checkout). */
+   const char *text = NULL;
+   if (op && strcmp(op, "commit") == 0)
+      text = (cJSON_IsString(jmsg) && jmsg->valuestring) ? jmsg->valuestring : NULL;
+   else if (op && strcmp(op, "checkout") == 0)
+      text = (cJSON_IsString(jbranch) && jbranch->valuestring) ? jbranch->valuestring : NULL;
+   int num = (cJSON_IsNumber(jn)) ? (int)jn->valuedouble : 0;
+
+   char *git_out = NULL, err[256];
+   int rc = git_ops_run(principal, project, op, text, num, &git_out, err, sizeof(err));
+   cJSON_Delete(body);
+   if (rc != 0)
+   {
+      free(git_out);
+      return err_json(resp, cap, 400, err);
+   }
+   cJSON *out = cJSON_CreateObject();
+   cJSON_AddBoolToObject(out, "ok", 1);
+   cJSON_AddStringToObject(out, "output", git_out ? git_out : "");
+   free(git_out);
+   char *s = cJSON_PrintUnformatted(out);
+   int n = s ? snprintf(resp, (size_t)cap, "%s", s) : -1;
+   free(s);
+   cJSON_Delete(out);
+   return (n > 0 && n < cap) ? 200 : err_json(resp, cap, 500, "git output too large");
+}
+
+/* GET /v1/workspace/projects — list the calling webchat user's projects (the
+ * repos cloned under their scoped workspace). Identity is the attested
+ * X-Aimee-Webuser principal, so a user only ever sees their own. */
+static int rh_workspace_projects(const route_req_t *rq, char *resp, int cap)
+{
+   (void)rq;
+   const char *principal = server_http_identity_principal();
+   if (!principal || strncmp(principal, "webuser:", 8) != 0)
+      return err_json(resp, cap, 403, "git projects require a webchat user");
+
+   char names[256][GIT_PROJECT_NAME_MAX];
+   int count = git_project_list(principal, names, 256);
+   if (count < 0)
+      count = 0;
+   cJSON *out = cJSON_CreateObject();
+   cJSON *arr = cJSON_AddArrayToObject(out, "projects");
+   for (int i = 0; i < count; i++)
+      cJSON_AddItemToArray(arr, cJSON_CreateString(names[i]));
+   char *s = cJSON_PrintUnformatted(out);
+   int n = s ? snprintf(resp, (size_t)cap, "%s", s) : -1;
+   free(s);
+   cJSON_Delete(out);
+   return (n > 0 && n < cap) ? 200 : err_json(resp, cap, 500, "response too large");
+}
+
+/* POST /v1/workspace/editor — ensure the calling webchat user's code-server is
+ * running and return its loopback port (webchat-git WP-I). Identity is the
+ * attested X-Aimee-Webuser principal, so a user only ever drives their own
+ * editor, rooted at their scoped workspace and launched with their vault-backed
+ * git env. The port reaches only webchat (the trusted reverse-proxy, WP-J),
+ * never the browser. 503 when the feature is disabled / code-server absent. */
+static int rh_workspace_editor(const route_req_t *rq, char *resp, int cap)
+{
+   (void)rq;
+   const char *principal = server_http_identity_principal();
+   if (!principal || strncmp(principal, "webuser:", 8) != 0)
+      return err_json(resp, cap, 403, "the editor requires a webchat user");
+
+   int port = 0;
+   char err[256];
+   int rc = webuser_editor_ensure(principal, &port, err, sizeof(err));
+   if (rc == 0)
+      return err_json(resp, cap, 503, "editor not available");
+   if (rc < 0)
+      return err_json(resp, cap, 500, err[0] ? err : "failed to start editor");
+
+   cJSON *out = cJSON_CreateObject();
+   cJSON_AddBoolToObject(out, "ok", 1);
+   cJSON_AddNumberToObject(out, "port", port);
+   char *s = cJSON_PrintUnformatted(out);
+   int n = s ? snprintf(resp, (size_t)cap, "%s", s) : -1;
+   free(s);
+   cJSON_Delete(out);
+   return (n > 0 && n < cap) ? 200 : err_json(resp, cap, 500, "response too large");
+}
+
 /* ── detached-runner reverse channel over /v1 (workspace-resource-plane §3) ──
  * The filesystem-authority client serving a `detached` workspace polls for the
  * next op the server needs done against its working tree, executes it locally,
@@ -1283,6 +1438,10 @@ static const http_route_t g_v1_routes[] = {
      * percent-encoded absolute workspace path. */
     {"GET", "/v1/workspaces", NULL, RM_EXACT, "workspace.list", 0, rh_dispatch_op},
     {"POST", "/v1/workspaces", NULL, RM_EXACT, "workspace.add", 0, rh_workspaces_register},
+    {"POST", "/v1/workspace/clone", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_workspace_clone},
+    {"POST", "/v1/workspace/git", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_workspace_git},
+    {"GET", "/v1/workspace/projects", NULL, RM_EXACT, NULL, CAP_INDEX_READ, rh_workspace_projects},
+    {"POST", "/v1/workspace/editor", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_workspace_editor},
     {"POST", "/v1/workspaces/", "/forge-token", RM_PREFIX, NULL, CAP_TOOL_EXECUTE,
      rh_workspace_forge_token},
     {"GET", "/v1/workspaces/", NULL, RM_PREFIX, "workspace.get", 0, rh_workspace_get},

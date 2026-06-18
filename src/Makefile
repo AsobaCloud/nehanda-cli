@@ -334,7 +334,7 @@ AGENT_SRCS = server/agent_runtime.c server/agent_logging.c server/agent_parallel
              server/delegate_backend.c server/delegate_backend_local.c server/delegate_backend_ssh.c server/delegate_backend_docker.c server/delegate_driver.c server/delegate_openai.c server/delegate_gemini.c server/delegate_xml_fallback.c \
              server/model_provider.c server/model_sampling.c server/openrouter_profile.c server/openai_profile.c server/anthropic_profile.c server/gemini_profile.c server/ollama_profile.c server/llama_native_profile.c server/mistral_profile.c server/minimax_profile.c server/aux_router.c \
              server/otel.c server/oauth_pkce.c server/oauth_tokens.c server/mcp_client.c server/mcp_client_registry.c \
-             server/agent_shell.c server/agent_cli_shell.c server/skill_review.c server/skill_curator.c
+             server/agent_shell.c server/agent_cli_shell.c server/skill_curator.c
 AGENT_OBJS = $(AGENT_SRCS:%.c=$(OBJDIR)/%.o) $(PLATFORM_AGENT_OBJS)
 
 # --- Layer 3: Commands + UI (cmd_*, webchat, dashboard) ---
@@ -369,14 +369,14 @@ CLIENT_COMPILE_OBJS = $(CLI_OBJS) $(CLIENT_PLATFORM_OBJS) $(OBJDIR)/dstr.o $(OBJ
 $(CLIENT_COMPILE_OBJS): C_FLAGS := $(CLIENT_C_FLAGS)
 
 # --- Server ---
-SERVER_SRCS = server/server_main.c server/server.c server/server_http.c server/server_conn_io.c server/server_tls.c server/server_http_reqctx.c server/server_http_identity.c server/request_context.c server/response_dedup.c server/anthropic_shape.c server/anthropic_ingress.c server/anthropic_http.c server/openai_shape.c server/openai_chat.c server/ingress_preinject.c server/fidelity_check.c server/openai_responses_store.c server/openai_runs_store.c server/server_api.c server/server_auth.c server/server_session.c server/server_hooks.c server/server_state.c server/server_plugin.c server/server_memory_benchmark.c server/server_work.c server/workspace_provider_detached.c server/workspace_runner_queue.c server/workspace_runner_registry.c server/workspace_turn.c \
+SERVER_SRCS = server/server_main.c server/server.c server/server_http.c server/server_conn_io.c server/server_tls.c server/server_http_reqctx.c server/server_http_identity.c server/request_context.c server/response_dedup.c server/anthropic_shape.c server/anthropic_ingress.c server/anthropic_http.c server/openai_shape.c server/openai_chat.c server/ingress_preinject.c server/fidelity_check.c server/openai_responses_store.c server/openai_runs_store.c server/server_api.c server/server_auth.c server/server_session.c server/server_hooks.c server/server_state.c server/server_plugin.c server/server_memory_benchmark.c server/server_work.c server/workspace_provider_detached.c server/workspace_runner_queue.c server/workspace_runner_registry.c server/workspace_turn.c server/workspace_scope.c server/webuser_runtime.c \
               server/server_delegate_monitor.c server/server_coord_dispatcher.c server/server_session_pools.c server/presence.c \
               server/server_agent.c server/server_cli_oauth.c server/server_compute.c server/server_delegate_ondemand.c server/server_skill_jobs.c server/server_delegate_status.c server/server_compute_async.c server/server_jobs_aux.c server/server_skill.c server/server_mcp.c server/server_mcp_tools.c server/server_mcp_delegate.c server/server_mcp_process.c server/server_mcp_skill.c server/server_mcp_learning.c server/server_mcp_workflows.c server/server_mcp_gateway.c server/session_search_tool.c server/compute_pool.c cli_client.c \
               server/roundtable_pipeline_eval.c server/roundtable_pipeline_capture.c server/roundtable_pipeline_chunk.c server/server_pipeline.c \
               server/compute_concurrency.c server/provider_catalog.c \
               server/dashboard_server.c hud.c cmd_identity.c prompts.c persona.c working_profile.c \
               server/delegate_role.c server/delegate_depth.c server/delegate_prompt.c server/delegate_run_phases.c server/delegate_routing.c server/delegate_launch.c server/delegate_source_authority.c server/delegate_economics.c server/delegate_credentials.c server/delegate_credential_retry.c server/delegate_patch_coordinator.c server/delegate_ensemble.c server/delegate_checkout.c cmd_init.c \
-              server/trigger_scheduler.c server/server_trigger.c server/server_cron.c server/server_trajectory.c server/server_config.c server/vault_principal.c server/vault_crypto.c server/vault_kek_cache.c server/vault_server_key.c server/vault_store.c server/vault_service.c server/vault_capability.c server/server_vault.c server/server_vault_bootstrap.c server/pki.c server/server_cert.c \
+              server/trigger_scheduler.c server/server_trigger.c server/server_cron.c server/server_trajectory.c server/server_config.c server/vault_principal.c server/vault_crypto.c server/vault_kek_cache.c server/vault_server_key.c server/vault_store.c server/vault_service.c server/git_forge_vault.c server/git_cred_inject.c server/git_ssh_agent.c server/git_project.c server/git_ops.c server/webuser_editor.c server/vault_capability.c server/server_vault.c server/server_vault_bootstrap.c server/pki.c server/server_cert.c \
               workflow/wfe_engine.c workflow/wfe_blocks.c workflow/wfe_approval.c \
               workflow/wfe_verdict.c workflow/wfe_roundtable.c workflow/wfe_autonomy.c \
               server/server_workflow_api.c
@@ -1003,13 +1003,14 @@ proposal-links-check:
 	@python3 ../scripts/check-proposal-links.py
 
 # Regenerate the day-one client SDKs (api/sdks/<lang>/) from the OpenAPI spec.
-# Self-bootstrapping (portable JRE + openapi-generator); output is committed
-# and regeneration on an unchanged spec is a byte-for-byte no-op.
+# Self-bootstrapping (portable JRE + openapi-generator); output is gitignored and
+# regenerated on demand / in CI (see .github/workflows/sdk-gen.yml), not committed.
 gen-sdks:
 	@../scripts/gen-sdks.sh
 
-# CI gate: every operation in api/openapi-v1.yaml is covered by every committed
-# SDK under api/sdks/. Pure-python; does not require the generator toolchain.
+# Parity gate: every operation in api/openapi-v1.yaml is covered by every generated
+# SDK under api/sdks/. Pure-python; runs in the SDK-gen CI workflow after gen-sdks
+# (the SDKs are no longer committed, so this is not part of the fast `lint` target).
 sdk-parity-check:
 	@python3 ../scripts/check-sdk-parity.py
 	@python3 ../scripts/check-sdk-parity.py --plant-test
@@ -1054,7 +1055,7 @@ clean:
 # you genuinely need a different binary.
 CLANG_FORMAT ?= clang-format-19
 
-lint: line-check schema-sync-check charter-tables-check tier-deps-check module-boundary-check dispatch-caps-check kb-v1-coverage-check kb-target-isolation-check kb-container-packaging-check sidecar-clients-check docs-gen-check api-conformance-check server-api-conformance-check v1-method-coverage-check cli-v1-routes-check kb-intelligence-surfaced-check sdk-parity-check curator-story-check aimee-home-check code-vector-graph-corpus-check proposal-links-check
+lint: line-check schema-sync-check charter-tables-check tier-deps-check module-boundary-check dispatch-caps-check kb-v1-coverage-check kb-target-isolation-check kb-container-packaging-check sidecar-clients-check docs-gen-check api-conformance-check server-api-conformance-check v1-method-coverage-check cli-v1-routes-check kb-intelligence-surfaced-check curator-story-check aimee-home-check code-vector-graph-corpus-check proposal-links-check
 
 # Structural guard for the code-vector-graph fusion eval corpus + ablation
 # matrix (>=100 queries, all categories, well-formed; baseline+full_fusion arms).

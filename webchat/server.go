@@ -120,6 +120,16 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/chat", s.requireAuth(s.handleSPA))
 	mux.HandleFunc("/dashboard", s.requireAuth(s.handleSPA))
 	mux.HandleFunc("/workflows", s.requireAuth(s.handleSPA))
+	mux.HandleFunc("/projects", s.requireAuth(s.handleSPA))
+	// The Editor tab is a SPA page that embeds the in-app VSCode in an iframe, so
+	// the nav shell stays visible. The iframe's src is the /vscode proxy below.
+	mux.HandleFunc("/editor", s.requireAuth(s.handleSPA))
+	// In-app VSCode (code-server) reverse-proxy (WP-J): the iframe document and
+	// all its assets/WebSocket traffic go through /vscode -> aimee-server's
+	// per-user editor port. Not an /api path, so requireAuth redirects to /login
+	// on an expired session (correct for the iframe).
+	mux.HandleFunc("/vscode", s.requireAuth(s.handleVSCode))
+	mux.HandleFunc("/vscode/", s.requireAuth(s.handleVSCode))
 
 	// Chat API (session required)
 	mux.HandleFunc("/api/chat/send", s.requireAuth(s.handleChatSend))
@@ -130,6 +140,7 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/chat/skills", s.requireAuth(s.handleChatSkills))
 	mux.HandleFunc("/api/chat/skill", s.requireAuth(s.handleChatSkill))
 	mux.HandleFunc("/api/chat/personas", s.requireAuth(s.handleChatPersonas))
+	mux.HandleFunc("/api/chat/personas/", s.requireAuth(s.handleChatPersonaItem))
 	mux.HandleFunc("/api/chat/persona", s.requireAuth(s.handleChatPersona))
 	mux.HandleFunc("/api/chat/attach", s.requireAuth(s.handleChatAttach))
 	mux.HandleFunc("/api/chat/detach", s.requireAuth(s.handleChatDetach))
@@ -167,6 +178,12 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/vault/unlock", s.requireAuth(s.handleVaultUnlock))
 	mux.HandleFunc("/api/vault/password", s.requireAuth(s.handleVaultPassword))
 	mux.HandleFunc("/api/vault/credentials", s.requireAuth(s.handleVaultCredentials))
+
+	// Git projects (webchat-git WP-F): clone + per-project ops + listing,
+	// forwarded to /v1/workspace/* with the user's webuser: assertion.
+	mux.HandleFunc("/api/git/projects", s.requireAuth(s.handleGitProjects))
+	mux.HandleFunc("/api/git/clone", s.requireAuth(s.handleGitClone))
+	mux.HandleFunc("/api/git/op", s.requireAuth(s.handleGitOp))
 
 	// Live endpoints backed by aimee-server socket
 	mux.HandleFunc("/api/agents", s.requireAuth(s.handleAgents))

@@ -134,7 +134,7 @@ Structured options (arrays, nested objects — e.g. `ensemble.reference_models`)
 | `virtual_context_assembly_budget` | int | Token budget for virtual-context assembly. |
 | `virtual_context_enabled` | bool | Enable virtual-context assembly. |
 
-## Config-file sections (48)
+## Config-file sections (49)
 
 Set in the config JSON as `{"<section>": {"<key>": ...}}`. Keys are derived from the section parsers in `src/config*.c`; a key shown as a bare name that is itself a nested object is noted in the section description (see *Coverage & limitations*).
 
@@ -186,6 +186,7 @@ Set in the config JSON as `{"<section>": {"<key>": ...}}`. Keys are derived from
 - **`trigger`** — _Trigger listener (auth, concurrency)._ Keys: `auth_token`, `max_concurrent`
 - **`trigger_rules`** — _Trigger rule definitions (array of objects)._ Keys: `event`, `pipeline`, `schedule`, `source`
 - **`workspaces`** — _Workspace definitions (array of objects)._ Keys: `head`, `path`, `provider`, `remote`
+- **`worktree_gc`** — `enabled`, `max_age_days`
 
 ## Other top-level config-file keys (5)
 
@@ -195,7 +196,7 @@ Scalar keys read directly from the config root (not via the CLI allowlist above)
 
 ## Environment variables
 
-The binaries read 109 `AIMEE_*` environment variables (scanned from `getenv()` in `src/`, excluding tests). They override config-store values and are mostly for deployment/runtime wiring. Secrets/tokens should be supplied via the environment or the credential vault, never committed.
+The binaries read 113 `AIMEE_*` environment variables (scanned from `getenv()` in `src/`, excluding tests). They override config-store values and are mostly for deployment/runtime wiring. Secrets/tokens should be supplied via the environment or the credential vault, never committed.
 
 ### Paths & assets
 
@@ -245,6 +246,9 @@ The binaries read 109 `AIMEE_*` environment variables (scanned from `getenv()` i
 | `AIMEE_SERVER_STARTUP_FD` | Inherited fd for startup-readiness signalling (service launch). |
 | `AIMEE_SESSION_THREADS` | Per-session worker thread count. |
 | `AIMEE_SOCK` | Sandbox helper socket path. |
+| `AIMEE_WEBCHAT_EDITOR` | Per-webuser in-browser code-server editor (on by default; set to 0 to disable; needs a code-server binary, shipped by WITH_VSCODE images). |
+| `AIMEE_WEBCHAT_EDITOR_BIN` | Override path to the code-server binary used for the in-browser editor. |
+| `AIMEE_WEBCHAT_EDITOR_UID` | Dedicated service user the per-webuser code-server drops to (defence in depth; only honoured when aimee-server runs as root). |
 | `AIMEE_WORKTREE_GC` | Enable/disable delegate-worktree garbage collection. |
 | `AIMEE_WORKTREE_GC_DAYS` | Age threshold (days) for worktree GC. |
 
@@ -382,7 +386,7 @@ The binaries read 109 `AIMEE_*` environment variables (scanned from `getenv()` i
 
 > These are read by the code but have no description yet — the generator surfaces them so the reference can't silently fall behind.
 
-`AIMEE_DB2_POOL_SIZE`, `AIMEE_DELEGATE_MAX_INFLIGHT`, `AIMEE_TLS_CLIENT_P12_PASS`
+`AIMEE_DB2_POOL_SIZE`, `AIMEE_DELEGATE_MAX_INFLIGHT`, `AIMEE_RUNTIME_DIR`, `AIMEE_TLS_CLIENT_P12_PASS`
 
 ## External & provider environment
 

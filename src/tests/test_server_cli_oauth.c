@@ -9,12 +9,14 @@
 #include <string.h>
 
 /* --- stubs for the linked-but-unexercised deps of server_cli_oauth.o --- */
-int safe_exec_capture_env(const char *const argv[], char *const envp[], char **out_buf,
-                          size_t max_out)
+int safe_exec_capture_cwd_env_timeout(const char *const argv[], const char *cwd, char *const envp[],
+                                      char **out_buf, size_t max_out, int timeout_ms)
 {
    (void)argv;
+   (void)cwd;
    (void)envp;
    (void)max_out;
+   (void)timeout_ms;
    if (out_buf)
       *out_buf = NULL;
    return -1;
