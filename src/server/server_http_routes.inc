@@ -17,10 +17,12 @@
 
 /* Route-handler deps used below but not needed by server_http.c's own body
  * (kept here, not in server_http.c, to respect its 2000-line limit). */
-#include "git_ops.h"        /* git_ops_run for /v1/workspace/git (WP-E) */
-#include "git_project.h"    /* git_project_clone for /v1/workspace/clone (WP-D) */
-#include "webuser_editor.h" /* webuser_editor_ensure for /v1/workspace/editor (WP-I) */
-#include "index.h"       /* index_scan_project after a webuser clone (WP-D) */
+#include "git_host_cred.h"    /* per-host git credential store for /v1/git/credentials */
+#include "git_oauth_github.h" /* GitHub device-flow sign-in (/v1/git/oauth/github) */
+#include "git_ops.h"          /* git_ops_run for /v1/workspace/git (WP-E) */
+#include "git_project.h"      /* git_project_clone for /v1/workspace/clone (WP-D) */
+#include "webuser_editor.h"   /* webuser_editor_ensure for /v1/workspace/editor (WP-I) */
+#include "index.h"            /* index_scan_project after a webuser clone (WP-D) */
 
 /* Per-request context handed to a route handler. `id` holds the extracted
  * dynamic path segment (persona / role-template name, session id, run id) for
@@ -840,12 +842,14 @@ static int rh_workspace_clone(const route_req_t *rq, char *resp, int cap)
    }
    const cJSON *jurl = cJSON_GetObjectItemCaseSensitive(body, "url");
    const cJSON *jname = cJSON_GetObjectItemCaseSensitive(body, "name");
+   const cJSON *jtoken = cJSON_GetObjectItemCaseSensitive(body, "token");
    const char *url = (cJSON_IsString(jurl) && jurl->valuestring) ? jurl->valuestring : NULL;
    const char *name = (cJSON_IsString(jname) && jname->valuestring) ? jname->valuestring : NULL;
+   const char *token = (cJSON_IsString(jtoken) && jtoken->valuestring) ? jtoken->valuestring : NULL;
 
    char dest[MAX_PATH_LEN], pname[128], err[256];
-   int rc = git_project_clone(principal, url, name, dest, sizeof(dest), pname, sizeof(pname), err,
-                              sizeof(err));
+   int rc = git_project_clone(principal, url, name, token, dest, sizeof(dest), pname, sizeof(pname),
+                              err, sizeof(err));
    cJSON_Delete(body);
    if (rc != 0)
       return err_json(resp, cap, 400, err);
@@ -962,6 +966,125 @@ static int rh_workspace_editor(const route_req_t *rq, char *resp, int cap)
    cJSON *out = cJSON_CreateObject();
    cJSON_AddBoolToObject(out, "ok", 1);
    cJSON_AddNumberToObject(out, "port", port);
+   char *s = cJSON_PrintUnformatted(out);
+   int n = s ? snprintf(resp, (size_t)cap, "%s", s) : -1;
+   free(s);
+   cJSON_Delete(out);
+   return (n > 0 && n < cap) ? 200 : err_json(resp, cap, 500, "response too large");
+}
+
+/* Per-host git credentials (single-user server, many providers). The calling
+ * webchat user manages aimee-server's OWN stored tokens (one per host); the
+ * secret is write-only over the API — listing returns host names only, never
+ * tokens. Identity is the attested X-Aimee-Webuser principal. */
+static int rh_git_credentials(const route_req_t *rq, char *resp, int cap)
+{
+   const char *principal = server_http_identity_principal();
+   if (!principal || strncmp(principal, "webuser:", 8) != 0)
+      return err_json(resp, cap, 403, "git credentials require a webchat user");
+
+   /* GET → list configured hosts (no tokens). */
+   if (strcmp(rq->method, "GET") == 0)
+   {
+      char hosts[64][GIT_HOST_MAX];
+      int count = git_host_cred_list(hosts, 64);
+      if (count < 0)
+         count = 0;
+      cJSON *out = cJSON_CreateObject();
+      cJSON *arr = cJSON_AddArrayToObject(out, "hosts");
+      for (int i = 0; i < count; i++)
+         cJSON_AddItemToArray(arr, cJSON_CreateString(hosts[i]));
+      char *s = cJSON_PrintUnformatted(out);
+      int n = s ? snprintf(resp, (size_t)cap, "%s", s) : -1;
+      free(s);
+      cJSON_Delete(out);
+      return (n > 0 && n < cap) ? 200 : err_json(resp, cap, 500, "response too large");
+   }
+
+   cJSON *body = (rq->body && rq->body[0]) ? cJSON_Parse(rq->body) : NULL;
+   if (!body || !cJSON_IsObject(body))
+   {
+      cJSON_Delete(body);
+      return err_json(resp, cap, 400, "invalid JSON body");
+   }
+   const cJSON *jhost = cJSON_GetObjectItemCaseSensitive(body, "host");
+   const cJSON *jtoken = cJSON_GetObjectItemCaseSensitive(body, "token");
+   const char *host = (cJSON_IsString(jhost) && jhost->valuestring) ? jhost->valuestring : NULL;
+   const char *token = (cJSON_IsString(jtoken) && jtoken->valuestring) ? jtoken->valuestring : NULL;
+   /* Accept a full URL in `host` too (convenience) → reduce to its host. */
+   char hostbuf[GIT_HOST_MAX];
+   if (host && strstr(host, "://") && git_host_from_url(host, hostbuf, sizeof(hostbuf)))
+      host = hostbuf;
+   if (!host || !host[0])
+   {
+      cJSON_Delete(body);
+      return err_json(resp, cap, 400, "host required");
+   }
+
+   int rc;
+   if (strcmp(rq->method, "DELETE") == 0)
+      rc = git_host_cred_delete(host);
+   else /* POST → set */
+   {
+      if (!token || !token[0])
+      {
+         cJSON_Delete(body);
+         return err_json(resp, cap, 400, "token required");
+      }
+      rc = git_host_cred_set(host, token);
+   }
+   cJSON_Delete(body);
+   if (rc != 0)
+      return err_json(resp, cap, 500, "credential store failed");
+   return snprintf(resp, (size_t)cap, "{\"ok\":true}") < cap
+              ? 200
+              : err_json(resp, cap, 500, "too large");
+}
+
+/* POST /v1/git/oauth/github/start — begin GitHub device-flow sign-in. Returns
+ * {ok, user_code, verification_uri, interval}; 503 if not configured. */
+static int rh_git_oauth_github_start(const route_req_t *rq, char *resp, int cap)
+{
+   (void)rq;
+   const char *principal = server_http_identity_principal();
+   if (!principal || strncmp(principal, "webuser:", 8) != 0)
+      return err_json(resp, cap, 403, "git sign-in requires a webchat user");
+   if (!git_oauth_github_available())
+      return err_json(resp, cap, 503, "GitHub sign-in is not configured");
+
+   char user_code[64], verify_uri[256], err[256];
+   int interval = 5;
+   if (git_oauth_github_start(principal, user_code, sizeof(user_code), verify_uri,
+                              sizeof(verify_uri), &interval, err, sizeof(err)) != 0)
+      return err_json(resp, cap, 502, err[0] ? err : "GitHub sign-in failed to start");
+
+   cJSON *out = cJSON_CreateObject();
+   cJSON_AddBoolToObject(out, "ok", 1);
+   cJSON_AddStringToObject(out, "user_code", user_code);
+   cJSON_AddStringToObject(out, "verification_uri", verify_uri);
+   cJSON_AddNumberToObject(out, "interval", interval);
+   char *s = cJSON_PrintUnformatted(out);
+   int n = s ? snprintf(resp, (size_t)cap, "%s", s) : -1;
+   free(s);
+   cJSON_Delete(out);
+   return (n > 0 && n < cap) ? 200 : err_json(resp, cap, 500, "response too large");
+}
+
+/* POST /v1/git/oauth/github/poll — poll device-flow completion. Returns
+ * {status: "pending"|"done"|"error", error?}. On done the token is stored. */
+static int rh_git_oauth_github_poll(const route_req_t *rq, char *resp, int cap)
+{
+   (void)rq;
+   const char *principal = server_http_identity_principal();
+   if (!principal || strncmp(principal, "webuser:", 8) != 0)
+      return err_json(resp, cap, 403, "git sign-in requires a webchat user");
+
+   char err[256] = "";
+   int rc = git_oauth_github_poll(principal, err, sizeof(err));
+   cJSON *out = cJSON_CreateObject();
+   cJSON_AddStringToObject(out, "status", rc == 1 ? "done" : rc == 0 ? "pending" : "error");
+   if (rc < 0 && err[0])
+      cJSON_AddStringToObject(out, "error", err);
    char *s = cJSON_PrintUnformatted(out);
    int n = s ? snprintf(resp, (size_t)cap, "%s", s) : -1;
    free(s);
@@ -1442,6 +1565,13 @@ static const http_route_t g_v1_routes[] = {
     {"POST", "/v1/workspace/git", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_workspace_git},
     {"GET", "/v1/workspace/projects", NULL, RM_EXACT, NULL, CAP_INDEX_READ, rh_workspace_projects},
     {"POST", "/v1/workspace/editor", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_workspace_editor},
+    {"GET", "/v1/git/credentials", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_git_credentials},
+    {"POST", "/v1/git/credentials", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_git_credentials},
+    {"DELETE", "/v1/git/credentials", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_git_credentials},
+    {"POST", "/v1/git/oauth/github/start", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE,
+     rh_git_oauth_github_start},
+    {"POST", "/v1/git/oauth/github/poll", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE,
+     rh_git_oauth_github_poll},
     {"POST", "/v1/workspaces/", "/forge-token", RM_PREFIX, NULL, CAP_TOOL_EXECUTE,
      rh_workspace_forge_token},
     {"GET", "/v1/workspaces/", NULL, RM_PREFIX, "workspace.get", 0, rh_workspace_get},
