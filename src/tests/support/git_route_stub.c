@@ -4,6 +4,8 @@
  * only HTTP parsing / routing, not the real git-clone or indexer subsystems.
  * Binaries that need the real behavior (unit-test-git-project) link the real
  * objects and must NOT also link this TU. */
+#include "git_host_cred.h"
+#include "git_oauth_github.h"
 #include "git_ops.h"
 #include "git_project.h"
 #include "index.h"
@@ -11,12 +13,14 @@
 
 #include <stdio.h>
 
-int git_project_clone(const char *principal, const char *url, const char *name, char *out_path,
-                      size_t path_cap, char *out_name, size_t name_cap, char *err, size_t errlen)
+int git_project_clone(const char *principal, const char *url, const char *name, const char *token,
+                      char *out_path, size_t path_cap, char *out_name, size_t name_cap, char *err,
+                      size_t errlen)
 {
    (void)principal;
    (void)url;
    (void)name;
+   (void)token;
    if (out_path && path_cap)
       out_path[0] = '\0';
    if (out_name && name_cap)
@@ -65,4 +69,59 @@ int webuser_editor_ensure(const char *principal, int *out_port, char *err, size_
    if (err && errlen)
       err[0] = '\0';
    return 0; /* feature unavailable in the stub */
+}
+
+int git_host_cred_set(const char *host, const char *token)
+{
+   (void)host;
+   (void)token;
+   return -1;
+}
+
+int git_host_cred_delete(const char *host)
+{
+   (void)host;
+   return -1;
+}
+
+int git_host_cred_list(char out[][GIT_HOST_MAX], int max)
+{
+   (void)out;
+   (void)max;
+   return 0;
+}
+
+int git_host_from_url(const char *url, char *out, size_t out_len)
+{
+   (void)url;
+   if (out && out_len)
+      out[0] = '\0';
+   return 0;
+}
+
+int git_oauth_github_available(void)
+{
+   return 0;
+}
+
+int git_oauth_github_start(const char *principal, char *user_code, size_t uc_len, char *verify_uri,
+                           size_t vu_len, int *interval, char *err, size_t errlen)
+{
+   (void)principal;
+   (void)user_code;
+   (void)uc_len;
+   (void)verify_uri;
+   (void)vu_len;
+   (void)interval;
+   if (err && errlen)
+      err[0] = '\0';
+   return -1;
+}
+
+int git_oauth_github_poll(const char *principal, char *err, size_t errlen)
+{
+   (void)principal;
+   if (err && errlen)
+      err[0] = '\0';
+   return -1;
 }

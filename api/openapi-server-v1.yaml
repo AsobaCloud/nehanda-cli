@@ -3528,10 +3528,12 @@ paths:
         Clone `url` as a project under the authenticated `webuser:` principal's
         isolated workspace (`webusers/<name>/<project>`). The caller identity
         comes from the server.token-gated `X-Aimee-Webuser` assertion, NOT the
-        body, so a user can only clone into their own tree. Git credentials are
-        injected from the user's sealed vault (GH_TOKEN + a GIT_ASKPASS shim) —
-        never accepted in the body, never on disk. The project is then indexed.
-        Capability: tool:execute.
+        body, so a user can only clone into their own tree. The git credential is
+        resolved per host (single-user server, many providers): an optional inline
+        `token` (then persisted server-side, keyed by host) > the host's stored
+        token > the server identity (AIMEE_FORGE_TOKEN). It crosses only via a
+        GIT_ASKPASS shim, never on disk in plaintext or on the command line. The
+        project is then indexed. Capability: tool:execute.
       requestBody:
         required: true
         content:
@@ -3542,6 +3544,12 @@ paths:
               properties:
                 url: { type: string, description: Git remote URL (https or ssh) }
                 name: { type: string, description: Project name (default - the repo basename) }
+                token:
+                  type: string
+                  description: >
+                    Optional access token for a private repo (GitHub/Gitea/GitLab/...).
+                    Authenticates the clone and is persisted in the server vault keyed
+                    by the URL's host for future operations. Never echoed back.
       responses:
         "200":
           description: Cloned and indexed
@@ -3654,6 +3662,140 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         "503":
           description: Editor feature disabled or code-server absent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /git/credentials:
+    get:
+      summary: List the git hosts that have a stored credential
+      description: >
+        The git hosts (github.com, gitea.*, ...) for which aimee-server holds an
+        access token. Single-user server: credentials are keyed by host, not by
+        user, and stored in the server vault. Tokens are NEVER returned — only the
+        host names. Identity is the attested `webuser:` principal. Capability:
+        tool:execute.
+      responses:
+        "200":
+          description: Configured hosts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hosts: { type: array, items: { type: string } }
+        "403":
+          description: Not a webchat user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    post:
+      summary: Store (or replace) the git access token for a host
+      description: >
+        Persist `token` for `host` (a hostname or a full repo URL, reduced to its
+        host) in the server vault. Used by clones/ops on that host. Provider-
+        agnostic. Capability: tool:execute.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [host, token]
+              properties:
+                host: { type: string, description: Hostname (or a repo URL) }
+                token: { type: string, description: Access token (write-only) }
+      responses:
+        "200":
+          description: Stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+        "400":
+          description: Missing host/token
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "403":
+          description: Not a webchat user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    delete:
+      summary: Remove the stored git access token for a host
+      description: >
+        Delete the token aimee-server holds for `host`. Capability: tool:execute.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [host]
+              properties:
+                host: { type: string }
+      responses:
+        "200":
+          description: Removed (or absent)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+        "403":
+          description: Not a webchat user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /git/oauth/github/start:
+    post:
+      summary: Begin GitHub device-flow sign-in
+      description: >
+        Start the GitHub OAuth device flow to populate the github.com credential
+        without a hand-made PAT. Returns a user code + verification URI to show the
+        user; the opaque device_code is held server-side for the poll endpoint.
+        Requires AIMEE_GITHUB_OAUTH_CLIENT_ID. Capability: tool:execute.
+      responses:
+        "200":
+          description: Device code issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  user_code: { type: string }
+                  verification_uri: { type: string }
+                  interval: { type: integer }
+        "403":
+          description: Not a webchat user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "503":
+          description: GitHub sign-in not configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /git/oauth/github/poll:
+    post:
+      summary: Poll GitHub device-flow completion
+      description: >
+        Poll for the user completing the device flow. On completion the access
+        token is stored as the github.com credential. Capability: tool:execute.
+      responses:
+        "200":
+          description: Poll result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [pending, done, error] }
+                  error: { type: string }
+        "403":
+          description: Not a webchat user
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
