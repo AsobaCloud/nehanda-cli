@@ -21,7 +21,8 @@
 #include "server_pipeline.h" /* roundtable authoring pipeline (pipeline.*) */
 #include "commands.h"
 #include "agent.h"
-#include "agent_exec.h" /* agent_audit_async_flush — drain audit queue at shutdown */
+#include "agent_exec.h"     /* agent_audit_async_flush — drain audit queue at shutdown */
+#include "webuser_editor.h" /* webuser_editor_shutdown — reap editors at shutdown (WP-I) */
 #include "agent_config.h"
 #include "provider_catalog.h"
 #include "delegate_credentials.h"
@@ -839,8 +840,15 @@ static void *session_start_bg_worker(void *arg)
 
 static void session_start_worktree_gc(const char *hook_input)
 {
+   /* Auto-GC is gated on config (worktree_gc.enabled). The AIMEE_WORKTREE_GC
+    * env var, when present, overrides the config flag in either direction. */
+   config_t cfg;
+   config_load(&cfg);
+   int enabled = cfg.worktree_gc_enabled;
    const char *gc_env = getenv("AIMEE_WORKTREE_GC");
-   if (!gc_env || (gc_env[0] != '1' && gc_env[0] != 't' && gc_env[0] != 'T'))
+   if (gc_env && gc_env[0])
+      enabled = (gc_env[0] == '1' || gc_env[0] == 't' || gc_env[0] == 'T');
+   if (!enabled)
       return;
 
    cJSON *hi_json = hook_input && hook_input[0] ? cJSON_Parse(hook_input) : NULL;
@@ -862,6 +870,8 @@ static void session_start_worktree_gc(const char *hook_input)
          {
             worktree_gc_options_t opts;
             worktree_gc_options_init(&opts);
+            if (cfg.worktree_gc_max_age_days > 0)
+               opts.max_age_days = cfg.worktree_gc_max_age_days;
             const char *days_env = getenv("AIMEE_WORKTREE_GC_DAYS");
             if (days_env && days_env[0])
             {
@@ -1699,6 +1709,8 @@ void server_shutdown(server_ctx_t *ctx)
    trigger_scheduler_shutdown();
    server_delegate_monitor_shutdown();
    server_coord_dispatcher_shutdown();
+   /* Reap any per-webuser code-server editors so they don't outlive us (WP-I). */
+   webuser_editor_shutdown();
    /* Drain request handlers while compute/async lanes are still available for
     * any RPCs they dispatched. */
    server_request_pool_shutdown(ctx);
