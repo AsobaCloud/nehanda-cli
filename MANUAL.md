@@ -243,7 +243,7 @@ Go 1.25+ is required only to build `aimee-webchat`. Then `install.sh`, in order:
 2. **Build** (only if sources changed): `cd src && make all server`, producing
    `aimee`, `aimee-server`, and `aimee-kb` at the repo root, plus `aimee-webchat`
    when a Go toolchain is on `PATH` (otherwise `make` notes it was skipped and the
-   C services still build — webchat is optional for a source install).
+   C services still build, webchat is optional for a source install).
 3. **Stop any running server/KB** gracefully to avoid "text file busy".
 4. **Install binaries** to `~/.local/bin/` and remove retired binaries.
 5. **Install bundled skills** to `~/.local/share/aimee/skills/` (idempotent).
@@ -1016,7 +1016,7 @@ delegate for review. Full guide: [`docs/DELEGATES.md`](docs/DELEGATES.md).
 **Roundtable:** `aimee delegate roundtable` reuses `ensemble.enabled`,
 `ensemble.reference_models`, `ensemble.aggregator`, `ensemble.min_successful`,
 and `ensemble.max_cost_usd` (optional; unset or `0` means no cost cap, the
-default — set a positive value to cap a run). The panel and aggregator ship
+default, set a positive value to cap a run). The panel and aggregator ship
 configured, so the roundtable runs with no setup. `roundtable.max_rounds` defaults to `3`,
 `roundtable.converge_threshold` to `10`, `roundtable.deadline_ms` to `600000`,
 and `roundtable.turns` to `parallel`. Draft mode returns a shared artifact;
@@ -1118,7 +1118,17 @@ legacy command modules but is not currently routed by the thin CLI.
 `aimee identity show/snapshot/diff` inspects the working profile and tracks how
 it changes over time. **Personas** (see [`docs/personas.md`](docs/personas.md))
 let a session adopt a named voice/behavior profile, settable per session in chat
-and webchat.
+and webchat; the same personas staff roundtable review panels and
+[workflow](docs/WORKFLOWS.md) steps. aimee ships eight built-ins (`engineer`
+default, `novel`, `songwriter`, and the read-only reviewers `qa`, `security`,
+`reviewer`, `reviewer-constructive`, `architect`).
+
+**Workflows** (see [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md)) compose those
+delegates and gates into a declarative dev-lifecycle graph (propose → review →
+plan → implement → PR → merge). The default `build` workflow lives in
+`config/workflows/build.yaml`; author and validate your own with `aimee workflow
+new/validate/show` or the webchat **Workflows** tab. The execution engine is
+implemented but not yet wired to a user-facing run trigger.
 
 ---
 
@@ -1206,6 +1216,25 @@ and proxies dashboard panels, collab-rule review, and a local channel board.
 Treat it as a *semi-trusted*, same-host/trusted-LAN surface, see
 [`docs/SECURITY.md`](docs/SECURITY.md).
 
+The UI is organized as a **top navigation bar**, one tab per tool, and each tab
+selects its own git **project** to operate on:
+
+- **Chat**, the agent conversation (streamed over SSE). The selected project
+  becomes the agent's working directory; webchat scope-validates it to the
+  signed-in user's own workspace.
+- **Dashboard**, memory, reminders, and onboarding panels.
+- **Workflows**, a visual composer for [workflow](docs/WORKFLOWS.md)
+  definitions (blocks rail, graph canvas, per-step persona/delegate assignment,
+  plus a persona manager). Validate/Save persist server-side.
+- **Projects**, connect git repositories. Clone over HTTPS *or* SSH-form URLs
+  (normalized to HTTPS); manage **per-host** credentials in the server vault and
+  sign in to GitHub via OAuth device flow. aimee-server is single-user but talks
+  to many hosts/providers, so credentials are keyed by **host, never per user**.
+- **Editor**, an in-browser **VS Code** (a per-user `code-server`, supervised
+  by the server and reverse-proxied at `/vscode/`) opened on the selected
+  project. Enabled by default (`WITH_VSCODE=1` in the image, `AIMEE_WEBCHAT_
+  EDITOR=1`).
+
 ---
 
 ## 24. The HTTP /v1 API
@@ -1263,8 +1292,8 @@ explicit legacy routes (e.g. `codex-cli`) still use the provider CLI.
 
 aimee-server exposes the Anthropic Messages API at `POST /v1/messages` (with
 streaming and `/v1/messages/count_tokens`). Point Claude Code at it and every
-turn runs on aimee's configured **primary agent** — minimax, mistral, mimo,
-gemini, openai, or anthropic — instead of Anthropic's models. It is a stateless
+turn runs on aimee's configured **primary agent**, minimax, mistral, mimo,
+gemini, openai, or anthropic, instead of Anthropic's models. It is a stateless
 wire-format proxy: Claude Code keeps owning its own system prompt, history, and
 tools (tool execution stays client-side); aimee only translates the wire format
 and swaps the model. Switch models with `aimee primary <agent>`.
@@ -1287,7 +1316,7 @@ one-off session without touching settings, set the env vars inline instead:
 ANTHROPIC_BASE_URL=http://127.0.0.1:8910 ANTHROPIC_AUTH_TOKEN=<bearer> claude
 ```
 
-(The server must be reachable over HTTP — loopback TCP with a bearer, or a
+(The server must be reachable over HTTP, loopback TCP with a bearer, or a
 remote `AIMEE_SERVER_URL`.)
 
 ### Codex on any primary model (Responses ingress)
