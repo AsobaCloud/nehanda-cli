@@ -8,7 +8,10 @@
 #include "aimee.h"
 #include "memory_lint.h"
 #include "config.h"
-#include "fact_ingest.h" /* db2_typed_fact_ingress (typed-fact §4/§6/§7 ingress) */
+#include "fact_ingest.h"     /* db2_typed_fact_ingress (typed-fact §4/§6/§7 ingress) */
+#include "fact_recall.h"     /* db2_fact_recall_in_query (read-only §7 recall) */
+#include "memory_pii_gate.h" /* memory_pii_turn_requests_sensitive */
+#include "kb_payload.h"      /* db2_kb_async_enqueue (background memory_facts job) */
 #include "decision_log.h"
 #include "memory.h"
 #include "memory_export.h"
@@ -1185,6 +1188,18 @@ cJSON *db2_kb_service_memory_insert_ex_json(const char *tier, const char *kind, 
    }
    cJSON_AddStringToObject(resp, "status", "ok");
    cJSON_AddNumberToObject(resp, "id", (double)out.id);
+   /* typed-fact population on ingest (gated, best-effort): inline high-precision
+    * pattern write + a queued "memory_facts" job for the drain's LLM extractor. */
+   {
+      config_t tf_cfg;
+      config_load(&tf_cfg);
+      if (tf_cfg.typed_facts_enabled)
+      {
+         (void)db2_typed_fact_ingress(content ? content : "", NULL, 0);
+         if (out.id > 0)
+            (void)db2_kb_async_enqueue("memory_facts", out.id, "memory");
+      }
+   }
    cJSON *obj = kbs_memory_row_to_json(&out);
    if (obj)
       cJSON_AddItemToObject(resp, "memory", obj);
@@ -1216,9 +1231,8 @@ cJSON *db2_kb_service_memory_context_block_json(const char *query, const char *b
    if (!resp)
       return NULL;
 
-   /* typed-fact ingress (§4/§6/§7), KB-side where db2 is live — the server has no
-    * DB2 connection. Default-off via typed_facts_enabled; writes facts="" when off.
-    * Orchestration lives in fact_ingest so this handler stays focused + small. */
+   /* typed-fact ingress (§4/§6/§7), KB-side (db2 is live here). Default-off via
+    * typed_facts_enabled (writes facts="" when off); orchestration in fact_ingest. */
    char facts[2048] = "";
    (void)db2_typed_fact_ingress(query, facts, sizeof(facts));
 
@@ -1248,6 +1262,24 @@ cJSON *db2_kb_service_memory_context_block_json(const char *query, const char *b
       cJSON_AddStringToObject(resp, "block", block ? block : "");
    }
    free(block);
+   return resp;
+}
+
+/* Read-only typed-fact recall (§7), PII-gated: the cheap path ingress_preinject
+ * calls every turn. No write; no-op (facts="") when the layer is off. */
+cJSON *db2_kb_service_memory_facts_json(const char *query)
+{
+   cJSON *resp = cJSON_CreateObject();
+   if (!resp)
+      return NULL;
+   char facts[2048] = "";
+   config_t cfg;
+   config_load(&cfg);
+   if (cfg.typed_facts_enabled && query && query[0])
+      (void)db2_fact_recall_in_query(query, memory_pii_turn_requests_sensitive(query), facts,
+                                     sizeof(facts));
+   cJSON_AddStringToObject(resp, "status", "ok");
+   cJSON_AddStringToObject(resp, "facts", facts);
    return resp;
 }
 
