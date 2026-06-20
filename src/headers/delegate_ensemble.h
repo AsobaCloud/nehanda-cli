@@ -68,6 +68,29 @@ typedef struct
    const char *parent_session_id;
 } roundtable_opts_t;
 
+/* Replay-verification evidence (Part A of the replayable-verification proposal).
+ * A panelist attaches a STRUCTURED query — never a free-form command — so a fresh
+ * verifier can replay it deterministically over the read-only code index
+ * (index_find / index_find_callers / index_code_search) and re-ground the claim.
+ * Plain (no pointers): memset-zeroing and struct copy stay valid. */
+typedef enum
+{
+   EV_NONE = 0, /* no replayable evidence -> item is interpretive (caps at concern) */
+   EV_SYMBOL,   /* does symbol `target` exist? -> index_find */
+   EV_REFS,     /* how many call sites of `target`? -> index_find_callers (the workhorse) */
+   EV_SEARCH    /* lexical code search for `target` -> index_code_search */
+} ev_kind_t;
+
+typedef struct
+{
+   ev_kind_t kind;
+   char target[256];  /* symbol (EV_SYMBOL/EV_REFS) or search query (EV_SEARCH) */
+   char project[128]; /* index project scope ("" = all indexed projects) */
+   int count;         /* the count the panelist claims (EV_REFS/EV_SEARCH) */
+   char idkey[65];    /* sha256-hex[:64] of sorted "file:line", or "" if unset */
+   int factual;       /* 1 = replayable claim; 0 = interpretive (caps at concern) */
+} review_evidence_t;
+
 typedef struct
 {
    char severity[16];
@@ -78,6 +101,7 @@ typedef struct
    char identity_key[128];
    char sources[256];
    int count;
+   review_evidence_t evidence; /* Part A: structured replay evidence (zeroed = EV_NONE) */
 } roundtable_review_item_t;
 
 typedef struct
@@ -111,6 +135,15 @@ typedef struct
    int answered_question_count;
    char coverage_gaps[ROUNDTABLE_MAX_QUESTIONS][512];
    int coverage_gap_count;
+   /* Replay verification (Part A). Items whose structured evidence did not
+    * reproduce against the code index are moved here (not silently dropped), with
+    * a parallel reason code. Fixed arrays (no heap; no change to result_free). */
+   roundtable_review_item_t rejected[ROUNDTABLE_MAX_REVIEW_ITEMS];
+   char rejected_reason[ROUNDTABLE_MAX_REVIEW_ITEMS][24];
+   int rejected_count;
+   int verified_count; /* kept items whose factual evidence reproduced */
+   int degraded_count; /* kept but unverified (index unavailable) */
+   int capped_count;   /* interpretive items capped at suggestion */
 } roundtable_result_t;
 
 int delegate_roundtable_run(agent_config_t *acfg, const config_t *cfg, const char *task,
