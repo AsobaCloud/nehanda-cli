@@ -59,7 +59,8 @@ static void test_mcp_chdir_repairs_stale_delegate_tracked_cwd(void)
 
    char session_main[MAX_PATH_LEN];
    char stale_delegate[MAX_PATH_LEN];
-   snprintf(session_main, sizeof(session_main), "%s/.aimee/worktrees/102ee97d/main", g_tmpdir);
+   snprintf(session_main, sizeof(session_main), "%s/.aimee/worktrees/102ee97d-session/main",
+            g_tmpdir);
    snprintf(stale_delegate, sizeof(stale_delegate), "%s/.aimee/worktrees/deleg-24/37368447",
             g_tmpdir);
 
@@ -166,9 +167,10 @@ static void test_mcp_chdir_keeps_explicit_managed_worktree_despite_stale_session
 
    char active_worktree[MAX_PATH_LEN];
    char stale_worktree[MAX_PATH_LEN];
-   snprintf(active_worktree, sizeof(active_worktree), "%s/.aimee/worktrees/102ee97d/main",
+   snprintf(active_worktree, sizeof(active_worktree), "%s/.aimee/worktrees/102ee97d-session/main",
             g_tmpdir);
-   snprintf(stale_worktree, sizeof(stale_worktree), "%s/.aimee/worktrees/6ab82f0e/main", g_tmpdir);
+   snprintf(stale_worktree, sizeof(stale_worktree), "%s/.aimee/worktrees/6ab82f0e-session/main",
+            g_tmpdir);
    init_nested_git_repo(active_worktree, "active");
    init_nested_git_repo(stale_worktree, "stale");
 
