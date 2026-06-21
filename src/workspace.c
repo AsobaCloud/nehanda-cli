@@ -479,11 +479,35 @@ char *resolve_proposal_path(const char *proposal)
 /* --- Worktree Lifecycle --- */
 #include <unistd.h>
 
+/* Number of leading session-id characters used to key per-session worktree
+ * paths and branch names. Widened from 8: an 8-hex prefix is only 32 bits of
+ * entropy, so two independent sessions could draw the same key, land on the
+ * same worktree directory / session branch, and end up sharing a checkout.
+ * 16 chars lifts a well-minted id to 64 bits. Session ids shorter than this
+ * (legacy 8-hex launch ids) map to themselves, so worktrees created before the
+ * change keep their existing path. */
+#define WORKTREE_SID_KEY_LEN 16
+
+/* Derive the stable worktree key from a session id: its first
+ * WORKTREE_SID_KEY_LEN characters. All worktree path/branch derivations route
+ * through here so every call site agrees on the same key. out must hold at
+ * least WORKTREE_SID_KEY_LEN + 1 bytes. */
+static void worktree_session_key(const char *sid, char *out, size_t cap)
+{
+   if (!out || cap == 0)
+      return;
+   out[0] = '\0';
+   if (!sid)
+      return;
+   snprintf(out, cap, "%.*s", (int)WORKTREE_SID_KEY_LEN, sid);
+}
+
 /* Compute the expected aimee-managed worktree path for a git repo and session.
  * For git_root="/root/dev/aimee" and session "abc123...", produces
- * "/root/dev/aimee/.aimee/worktrees/abc12345/main".
+ * "/root/dev/aimee/.aimee/worktrees/<key>/main" where <key> is the session
+ * key (see worktree_session_key).
  * If work_name is non-NULL (e.g. "task01"), produces
- * "/root/dev/aimee/.aimee/worktrees/abc12345/task01" to avoid collisions
+ * "/root/dev/aimee/.aimee/worktrees/<key>/task01" to avoid collisions
  * when multiple delegates run in the same session. */
 int worktree_sibling_path(const char *git_root, const char *sid, const char *work_name,
                           char *wt_buf, size_t wt_len)
@@ -491,9 +515,8 @@ int worktree_sibling_path(const char *git_root, const char *sid, const char *wor
    if (!git_root || !sid || !wt_buf)
       return -1;
 
-   /* Use first 8 chars of session ID */
-   char short_id[12];
-   snprintf(short_id, sizeof(short_id), "%.8s", sid);
+   char short_id[WORKTREE_SID_KEY_LEN + 1];
+   worktree_session_key(sid, short_id, sizeof(short_id));
 
    if (work_name && work_name[0])
       snprintf(wt_buf, wt_len, "%s/.aimee/worktrees/%s/%s", git_root, short_id, work_name);
@@ -512,16 +535,16 @@ int worktree_sibling_path(const char *git_root, const char *sid, const char *wor
  * deterministically from the session id makes both paths resolve to the SAME
  * sibling worktree, so whichever runs second idempotently reuses the first's
  * worktree (worktree_create_sibling_at_ref returns the existing one) instead of
- * spawning a duplicate. The hash is over the first 8 chars of the sid — exactly
- * the component both paths already share as the worktree directory — so the two
- * call sites agree even if their full sid strings differ. */
+ * spawning a duplicate. The hash is over the session key (worktree_session_key)
+ * — exactly the component both paths already share as the worktree directory —
+ * so the two call sites agree even if their full sid strings differ. */
 int worktree_delegate_work_name(const char *sid, char *out, size_t cap)
 {
    if (!sid || !out || cap < 9)
       return -1;
-   char short_id[12];
-   snprintf(short_id, sizeof(short_id), "%.8s", sid);
-   /* FNV-1a (32-bit) over the short id — stable across processes and builds. */
+   char short_id[WORKTREE_SID_KEY_LEN + 1];
+   worktree_session_key(sid, short_id, sizeof(short_id));
+   /* FNV-1a (32-bit) over the session key — stable across processes and builds. */
    uint32_t h = 2166136261u;
    for (const char *p = short_id; *p; p++)
    {
@@ -819,51 +842,73 @@ int worktree_find_branch_registered(const char *branch, char *out_dir, size_t ou
    return found;
 }
 
-/* Detect the best base branch for a new worktree rooted at git_root.
- * Prefers the current checked-out branch; falls back to main/origin/main/HEAD. */
+/* Detect the base branch for a NEW worktree rooted at git_root.
+ *
+ * A fresh session must start from the repository's DEFAULT branch, not from
+ * whatever branch the source checkout happens to be sitting on — otherwise a
+ * session forks off a random feature branch and inherits unrelated WIP. Order:
+ *   1. origin/HEAD  — the remote default branch (e.g. "origin/main"); used as
+ *      the base ref directly so the worktree tracks the latest fetched default.
+ *   2. local main / master / trunk — common defaults when no remote HEAD is set.
+ *   3. current HEAD — last resort (detached/empty repo, or a default-less repo).
+ * Callers that want a specific base (delegates inheriting a parent, or the
+ * session-checkout path that bases on origin/<primary>) pass base_ref instead
+ * and never reach here. */
 void worktree_detect_base_branch(const char *git_root, char *buf, size_t buf_len)
 {
    if (!git_root || !buf || buf_len == 0)
       return;
    snprintf(buf, buf_len, "HEAD"); /* safe default */
 
-   int found = 0;
    char cmd[MAX_PATH_LEN + 128];
    int rc;
 
-   snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse --abbrev-ref HEAD 2>/dev/null", git_root);
+   /* 1. Remote default branch via origin/HEAD. symbolic-ref --short yields
+    * e.g. "origin/main"; base directly off that remote-tracking ref. */
+   snprintf(cmd, sizeof(cmd),
+            "git -C '%s' symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null", git_root);
    char *out = run_cmd(cmd, &rc);
    if (rc == 0 && out && out[0])
    {
-      /* Strip trailing newline */
       size_t len = strlen(out);
-      while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r'))
+      while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r' || out[len - 1] == ' '))
          out[--len] = '\0';
-      /* Use if it's a real branch, not a detached HEAD */
-      if (len > 0 && strcmp(out, "HEAD") != 0)
+      if (len > 0)
       {
          snprintf(buf, buf_len, "%s", out);
-         found = 1;
+         free(out);
+         return;
       }
    }
    free(out);
 
-   if (!found)
+   /* 2. Common local default branches. */
+   const char *candidates[] = {"main", "master", "trunk"};
+   for (int b = 0; b < 3; b++)
    {
-      const char *candidates[] = {"main", "origin/main", "HEAD"};
-      for (int b = 0; b < 3; b++)
+      snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse --verify --quiet '%s' >/dev/null 2>&1",
+               git_root, candidates[b]);
+      char *cand_out = run_cmd(cmd, &rc);
+      free(cand_out);
+      if (rc == 0)
       {
-         snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse --verify '%s' 2>/dev/null", git_root,
-                  candidates[b]);
-         char *cand_out = run_cmd(cmd, &rc);
-         free(cand_out);
-         if (rc == 0)
-         {
-            snprintf(buf, buf_len, "%s", candidates[b]);
-            break;
-         }
+         snprintf(buf, buf_len, "%s", candidates[b]);
+         return;
       }
    }
+
+   /* 3. Last resort: the current branch (may be detached -> stays "HEAD"). */
+   snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse --abbrev-ref HEAD 2>/dev/null", git_root);
+   out = run_cmd(cmd, &rc);
+   if (rc == 0 && out && out[0])
+   {
+      size_t len = strlen(out);
+      while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r'))
+         out[--len] = '\0';
+      if (len > 0 && strcmp(out, "HEAD") != 0)
+         snprintf(buf, buf_len, "%s", out);
+   }
+   free(out);
 }
 
 static int worktree_create_sibling_at_ref(const char *git_root, const char *sid,
@@ -877,8 +922,8 @@ static int worktree_create_sibling_at_ref(const char *git_root, const char *sid,
       return -1;
 
    /* Create branch name from session ID (and optional work name) */
-   char short_id[12];
-   snprintf(short_id, sizeof(short_id), "%.8s", sid);
+   char short_id[WORKTREE_SID_KEY_LEN + 1];
+   worktree_session_key(sid, short_id, sizeof(short_id));
    char branch_name[128];
    if (work_name && work_name[0])
       snprintf(branch_name, sizeof(branch_name), "aimee/session/%s/%s", short_id, work_name);
@@ -909,10 +954,10 @@ static int worktree_create_sibling_at_ref(const char *git_root, const char *sid,
       snprintf(base_branch, sizeof(base_branch), "%s", base_ref);
    else
    {
-      /* Detect base branch: prefer the workspace's current branch so worktrees
-       * are rooted there rather than always on main. Falls back to main /
-       * origin/main / HEAD when in a detached-HEAD state or when the lookup
-       * fails (e.g. empty repo). */
+      /* Detect base branch: root the worktree on the repository's DEFAULT
+       * branch so a fresh session always starts from there rather than from
+       * whatever branch the source checkout happens to have checked out.
+       * Falls back to main / master / trunk / HEAD when no default is known. */
       worktree_detect_base_branch(git_root, base_branch, sizeof(base_branch));
    }
 
@@ -925,11 +970,18 @@ static int worktree_create_sibling_at_ref(const char *git_root, const char *sid,
       platform_mkdir_p(wt_parent, 0755);
    }
 
-   /* Create the worktree */
+   /* Clear stale registrations: a worktree dir removed out-of-band (rmdir
+    * above, manual rm -rf, a crash) leaves an entry under .git/worktrees that
+    * makes `git worktree add` fail with "already exists". Pruning first lets
+    * the add below succeed instead of collapsing into the shared checkout. */
    char cmd[MAX_PATH_LEN * 2 + 256];
+   int rc;
+   snprintf(cmd, sizeof(cmd), "git -C '%s' worktree prune 2>/dev/null", git_root);
+   free(run_cmd(cmd, &rc));
+
+   /* Create the worktree on a fresh session branch. */
    snprintf(cmd, sizeof(cmd), "git -C '%s' worktree add '%s' -b '%s' '%s' 2>&1", git_root, wt_path,
             branch_name, base_branch);
-   int rc;
    char *out = run_cmd(cmd, &rc);
 
    if (rc == 0)
@@ -947,8 +999,54 @@ static int worktree_create_sibling_at_ref(const char *git_root, const char *sid,
       return 0;
    }
 
+   /* Recovery 1 — lost a creation race: another path (e.g. the SessionStart
+    * hook and the launch path both firing) may have just created this exact
+    * worktree. If the path is now a valid worktree, reuse it idempotently
+    * rather than reporting failure. */
+   if (stat(wt_path, &st) == 0 && S_ISDIR(st.st_mode))
+   {
+      char git_file[MAX_PATH_LEN];
+      snprintf(git_file, sizeof(git_file), "%s/.git", wt_path);
+      struct stat git_st;
+      if (stat(git_file, &git_st) == 0)
+      {
+         LOG_INFO("workspace", "worktree '%s' already present (creation race) - reusing", wt_path);
+         free(out);
+         worktree_registry_record(git_root, wt_path, branch_name, sid, work_name);
+         return 0;
+      }
+   }
+
+   /* Recovery 2 — the session branch already exists with no worktree attached
+    * (a prior worktree was force-removed by GC while still ahead, leaving its
+    * branch behind, and this session drew the same key). Attach the existing
+    * branch into a new worktree so the session still gets isolation instead of
+    * silently sharing the source checkout. Preserves the prior branch's work. */
+   snprintf(cmd, sizeof(cmd), "git -C '%s' worktree add '%s' '%s' 2>&1", git_root, wt_path,
+            branch_name);
+   char *out2 = run_cmd(cmd, &rc);
+   if (rc == 0)
+   {
+      LOG_WARN("workspace", "reattached pre-existing branch '%s' to new worktree '%s'", branch_name,
+               wt_path);
+      fprintf(stderr, "aimee: created worktree at %s (reused branch %s)\n", wt_path, branch_name);
+      free(out);
+      free(out2);
+      worktree_registry_record(git_root, wt_path, branch_name, sid, work_name);
+#ifndef AIMEE_DB1_DISABLED
+      mcp_git_branch_own_register(git_root, branch_name);
+#endif
+      return 0;
+   }
+
+   /* Hard failure: isolation could not be established. Log loudly — the caller
+    * continues without a per-session worktree, so writes fall to the guardrail
+    * that blocks edits outside a managed worktree. */
+   LOG_ERROR("workspace", "failed to create worktree '%s' (base=%s): %s; branch-attach retry: %s",
+             wt_path, base_branch, out ? out : "unknown", out2 ? out2 : "unknown");
    fprintf(stderr, "aimee: failed to create worktree at %s: %s\n", wt_path, out ? out : "unknown");
    free(out);
+   free(out2);
    return -1;
 }
 
