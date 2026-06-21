@@ -39,8 +39,15 @@ export function BootstrapBanner({ onGenerate, onDismiss, stacks }: BannerProps) 
  * the component, this means a streaming turn only re-parses the one message whose
  * text is growing — the other (unchanged) messages are skipped entirely, instead
  * of every message being re-parsed on every token. */
-export const Message = memo(function Message({ role, text }: { role: 'user' | 'assistant'; text: string }) {
-  const html = useMemo(() => (role === 'user' ? escHtml(text) : renderMd(text)), [role, text]);
+export const Message = memo(function Message({ role, text, streaming }: { role: 'user' | 'assistant'; text: string; streaming?: boolean }) {
+  // While an assistant bubble is the actively-growing tail, render its RAW text
+  // and SKIP the markdown parse: re-parsing the whole growing body on every
+  // streamed flush is the dominant streaming CPU cost. Markdown is rendered once,
+  // when the bubble stops streaming (the turn ends or another block follows it).
+  const html = useMemo(
+    () => (streaming ? '' : role === 'user' ? escHtml(text) : renderMd(text)),
+    [role, text, streaming],
+  );
   const styles: React.CSSProperties = {
     maxWidth: '80%',
     padding: '10px 14px',
@@ -58,6 +65,7 @@ export const Message = memo(function Message({ role, text }: { role: 'user' | 'a
     borderBottomRightRadius: role === 'user' ? 2 : 10,
     borderBottomLeftRadius: role === 'assistant' ? 2 : 10,
   };
+  if (streaming) return <div style={{ ...styles, whiteSpace: 'pre-wrap' }}>{text}</div>;
   return <div style={styles} dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
