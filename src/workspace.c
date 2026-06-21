@@ -1042,9 +1042,8 @@ static int worktree_create_sibling_at_ref(const char *git_root, const char *sid,
    /* Hard failure: isolation could not be established. Log loudly — the caller
     * continues without a per-session worktree, so writes fall to the guardrail
     * that blocks edits outside a managed worktree. */
-   LOG_ERROR("workspace",
-             "failed to create worktree '%s' (base=%s): %s; branch-attach retry: %s", wt_path,
-             base_branch, out ? out : "unknown", out2 ? out2 : "unknown");
+   LOG_ERROR("workspace", "failed to create worktree '%s' (base=%s): %s; branch-attach retry: %s",
+             wt_path, base_branch, out ? out : "unknown", out2 ? out2 : "unknown");
    fprintf(stderr, "aimee: failed to create worktree at %s: %s\n", wt_path, out ? out : "unknown");
    free(out);
    free(out2);
