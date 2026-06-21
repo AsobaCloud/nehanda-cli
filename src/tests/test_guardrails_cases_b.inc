@@ -1685,7 +1685,8 @@ static void test_verify_gate_push_registered_worktree_from_nonrepo_cwd(void)
        maindir, "verify:\n  enforce: true\n  steps:\n    - name: build\n      run: echo ok\n");
 
    const char *sid = "reg12345-1234-5678";
-   const char *branch = "aimee/session/reg12345";
+   /* Session branch is keyed by the first 16 chars of the sid (WORKTREE_SID_KEY_LEN). */
+   const char *branch = "aimee/session/reg12345-1234-56";
    assert(worktree_create_sibling(maindir, sid, NULL) == 0);
 
    char wt_path[MAX_PATH_LEN];
@@ -1762,7 +1763,8 @@ static void test_verify_gate_pr_create_registered_worktree_from_nonrepo_cwd(void
    vy_set_global_yaml(nonrepo, verify_yaml);
 
    const char *sid = "prreg123-1234-5678";
-   const char *branch = "aimee/session/prreg123";
+   /* Session branch is keyed by the first 16 chars of the sid (WORKTREE_SID_KEY_LEN). */
+   const char *branch = "aimee/session/prreg123-1234-56";
    assert(worktree_create_sibling(maindir, sid, NULL) == 0);
 
    char wt_path[MAX_PATH_LEN];
