@@ -57,9 +57,10 @@ char *style_read(const char *project_name);
 int worktree_sibling_path(const char *git_root, const char *sid, const char *work_name, char *out,
                           size_t out_len);
 /* Deterministic per-delegation worktree work-name derived from `sid` (FNV-1a
- * over its first 8 chars), so the dispatch and server-compute paths resolve to
- * one shared sibling worktree instead of two. Writes <=8 hex chars + NUL into
- * out[cap] (cap >= 9). Returns 0 on success, -1 on bad args. */
+ * over the session key — its leading characters; see worktree_session_key in
+ * workspace.c), so the dispatch and server-compute paths resolve to one shared
+ * sibling worktree instead of two. Writes <=8 hex chars + NUL into out[cap]
+ * (cap >= 9). Returns 0 on success, -1 on bad args. */
 int worktree_delegate_work_name(const char *sid, char *out, size_t cap);
 int is_aimee_worktree_path(const char *path);
 int worktree_managed_git_root(const char *path, char *out, size_t out_len);
@@ -91,9 +92,10 @@ int worktree_find_branch_registered(const char *branch, char *out_dir, size_t ou
 int check_merged_pr_for_branch(const char *git_dir);
 const char *worktree_for_cwd(const session_state_t *state, const char *cwd);
 
-/* Detect the best base branch for a new worktree rooted at git_root.
- * Prefers the current checked-out branch; falls back to main/origin/main/HEAD.
- * Writes result into buf (at most buf_len bytes including NUL). */
+/* Detect the base branch for a new worktree rooted at git_root.
+ * Prefers the repository's DEFAULT branch (origin/HEAD), then local
+ * main/master/trunk, then the current HEAD as a last resort. Writes result
+ * into buf (at most buf_len bytes including NUL). */
 void worktree_detect_base_branch(const char *git_root, char *buf, size_t buf_len);
 
 /* Count active aimee-managed worktrees for git_root. */
