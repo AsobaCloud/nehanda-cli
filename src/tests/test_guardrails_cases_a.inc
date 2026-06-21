@@ -378,21 +378,29 @@ static void test_worktree_sibling_path(void)
 {
    char buf[MAX_PATH_LEN];
 
+   /* The session key is the first 16 chars of the id (WORKTREE_SID_KEY_LEN). */
+
    /* Without work_name: session-level worktree. */
    int rc = worktree_sibling_path("/root/dev/aimee", "fadc648f-1234-5678", NULL, buf, sizeof(buf));
    assert(rc == 0);
-   assert(strcmp(buf, "/root/dev/aimee/.aimee/worktrees/fadc648f/main") == 0);
+   assert(strcmp(buf, "/root/dev/aimee/.aimee/worktrees/fadc648f-1234-56/main") == 0);
 
    /* With work_name: per-delegate worktree. */
    rc = worktree_sibling_path("/root/dev/aimee", "fadc648f-1234-5678", "task01", buf, sizeof(buf));
    assert(rc == 0);
-   assert(strcmp(buf, "/root/dev/aimee/.aimee/worktrees/fadc648f/task01") == 0);
+   assert(strcmp(buf, "/root/dev/aimee/.aimee/worktrees/fadc648f-1234-56/task01") == 0);
+
+   /* A legacy short (<=16 char) id maps to itself, so worktrees created before
+    * the key was widened keep their path. */
+   rc = worktree_sibling_path("/root/dev/aimee", "abcd1234", NULL, buf, sizeof(buf));
+   assert(rc == 0);
+   assert(strcmp(buf, "/root/dev/aimee/.aimee/worktrees/abcd1234/main") == 0);
 }
 
 static void test_worktree_detect_base_branch_active(void)
 {
-   /* Create a temporary git repo, checkout a named branch, and verify
-    * that worktree_detect_base_branch() returns that branch name. */
+   /* A new worktree must be rooted on the repository's DEFAULT branch
+    * (origin/HEAD), NOT on whatever feature branch is currently checked out. */
    char tmpdir[] = "/tmp/test_wt_branch_XXXXXX";
    if (mkdtemp(tmpdir) == NULL)
    {
@@ -400,7 +408,6 @@ static void test_worktree_detect_base_branch_active(void)
       return;
    }
 
-   /* Init repo and create a commit so the branch ref exists */
    char cmd[512];
    snprintf(cmd, sizeof(cmd), "git -C '%s' init -q 2>/dev/null", tmpdir);
    (void)system(cmd);
@@ -412,15 +419,60 @@ static void test_worktree_detect_base_branch_active(void)
             "touch '%s/x' && git -C '%s' add x && git -C '%s' commit -qm 'init' 2>/dev/null",
             tmpdir, tmpdir, tmpdir);
    (void)system(cmd);
-   /* Create and checkout a distinct branch */
+   /* Normalize the default branch name and simulate a configured remote default
+    * (origin/HEAD -> origin/main) without needing a network remote. */
+   snprintf(cmd, sizeof(cmd), "git -C '%s' branch -m main 2>/dev/null", tmpdir);
+   (void)system(cmd);
+   snprintf(cmd, sizeof(cmd), "git -C '%s' update-ref refs/remotes/origin/main HEAD 2>/dev/null",
+            tmpdir);
+   (void)system(cmd);
+   snprintf(cmd, sizeof(cmd),
+            "git -C '%s' symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main 2>/dev/null",
+            tmpdir);
+   (void)system(cmd);
+   /* Check out a distinct feature branch — detection must ignore it. */
    snprintf(cmd, sizeof(cmd), "git -C '%s' checkout -qb 'feat/test-branch' 2>/dev/null", tmpdir);
    (void)system(cmd);
 
    char branch[64];
    worktree_detect_base_branch(tmpdir, branch, sizeof(branch));
-   assert(strcmp(branch, "feat/test-branch") == 0);
+   assert(strcmp(branch, "origin/main") == 0);
 
-   /* Cleanup */
+   snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmpdir);
+   (void)system(cmd);
+}
+
+static void test_worktree_detect_base_branch_local_default(void)
+{
+   /* With no remote default set, fall back to a local default branch (main),
+    * still in preference to the checked-out feature branch. */
+   char tmpdir[] = "/tmp/test_wt_localdef_XXXXXX";
+   if (mkdtemp(tmpdir) == NULL)
+   {
+      fprintf(stderr, "test_worktree_detect_base_branch_local_default: mkdtemp failed, skipping\n");
+      return;
+   }
+
+   char cmd[512];
+   snprintf(cmd, sizeof(cmd), "git -C '%s' init -q 2>/dev/null", tmpdir);
+   (void)system(cmd);
+   snprintf(cmd, sizeof(cmd), "git -C '%s' config user.email 'test@test.com' 2>/dev/null", tmpdir);
+   (void)system(cmd);
+   snprintf(cmd, sizeof(cmd), "git -C '%s' config user.name 'Test' 2>/dev/null", tmpdir);
+   (void)system(cmd);
+   snprintf(cmd, sizeof(cmd),
+            "touch '%s/x' && git -C '%s' add x && git -C '%s' commit -qm 'init' 2>/dev/null",
+            tmpdir, tmpdir, tmpdir);
+   (void)system(cmd);
+   snprintf(cmd, sizeof(cmd), "git -C '%s' branch -m main 2>/dev/null", tmpdir);
+   (void)system(cmd);
+   snprintf(cmd, sizeof(cmd), "git -C '%s' checkout -qb 'feat/test-branch' 2>/dev/null", tmpdir);
+   (void)system(cmd);
+
+   char branch[64];
+   worktree_detect_base_branch(tmpdir, branch, sizeof(branch));
+   assert(strcmp(branch, "main") == 0);
+
    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmpdir);
    (void)system(cmd);
 }
@@ -484,7 +536,7 @@ static void test_session_isolation_creates_and_returns_worktree(void)
    assert(rc == 1);
 
    char expected[MAX_PATH_LEN];
-   snprintf(expected, sizeof(expected), "%s/aimee/.aimee/worktrees/fadc648f/main", tmpdir);
+   snprintf(expected, sizeof(expected), "%s/aimee/.aimee/worktrees/fadc648f-1234-56/main", tmpdir);
    assert(strcmp(target, expected) == 0);
 
    /* Worktree must exist on disk after create_if_missing */
@@ -541,7 +593,7 @@ static void test_session_isolation_creates_new_worktree_from_existing_worktree(v
    assert(strcmp(first, second) != 0);
 
    char expected[MAX_PATH_LEN];
-   snprintf(expected, sizeof(expected), "%s/aimee/.aimee/worktrees/ccccdddd/main", tmpdir);
+   snprintf(expected, sizeof(expected), "%s/aimee/.aimee/worktrees/ccccdddd-1234-56/main", tmpdir);
    assert(strcmp(second, expected) == 0);
 
    struct stat st;

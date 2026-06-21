@@ -578,17 +578,20 @@ int main(void)
       for (int i = 0; i < 8; i++) /* lowercase hex */
          assert((a[i] >= '0' && a[i] <= '9') || (a[i] >= 'a' && a[i] <= 'f'));
 
-      /* Agreement: two sids that share the first 8 chars (the worktree-dir
-       * component both paths use) yield the SAME name — so a dispatch sid of
-       * "deleg-14" and a compute sid of "deleg-14-suffix" still collapse to one
-       * worktree. */
-      assert(worktree_delegate_work_name("deleg-14-suffix", c, sizeof(c)) == 0);
-      assert(strcmp(a, c) == 0);
+      /* Agreement across the dispatch/compute split: dispatch keys the worktree
+       * on session_id(), compute on the delegation id; for one delegation those
+       * resolve to the same id, so the work-names must match. Drift PAST the
+       * session-key width is tolerated — two sids that share the first
+       * WORKTREE_SID_KEY_LEN (16) chars collapse to one worktree. */
+      assert(worktree_delegate_work_name("aimee-task-abcdef0123456789", b, sizeof(b)) == 0);
+      assert(worktree_delegate_work_name("aimee-task-abcdef0123456789-retry", c, sizeof(c)) == 0);
+      assert(strcmp(b, c) == 0);
 
-      /* Distinct delegate ids generally differ (no accidental collapse). */
+      /* Sids that diverge WITHIN the first 16 chars stay distinct — unrelated
+       * delegations never collapse onto one worktree. */
       char d[32] = "";
-      assert(worktree_delegate_work_name("deleg-15", d, sizeof(d)) == 0);
-      assert(strcmp(a, d) != 0);
+      assert(worktree_delegate_work_name("aimee-task-ffffffff00000000", d, sizeof(d)) == 0);
+      assert(strcmp(b, d) != 0);
 
       /* arg guards */
       assert(worktree_delegate_work_name(NULL, a, sizeof(a)) == -1);
