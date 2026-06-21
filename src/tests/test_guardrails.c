@@ -129,6 +129,7 @@ int main(void)
    test_worktree_prefers_specific_git_root();
    test_worktree_sibling_path();
    test_worktree_detect_base_branch_active();
+   test_worktree_detect_base_branch_local_default();
    test_worktree_detect_base_branch_fallback();
    test_session_isolation_creates_and_returns_worktree();
    test_session_isolation_skips_when_already_in_same_session_worktree();
