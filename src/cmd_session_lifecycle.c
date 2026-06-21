@@ -1299,17 +1299,27 @@ void cmd_launch(app_ctx_t *ctx, int argc, char **argv)
     * Set the override BEFORE cmd_session_start so every downstream
     * session_id() call in this process uses the new unique ID. */
    {
-      unsigned char rnd[4];
+      /* 10 random bytes -> 20 hex chars. The per-session worktree key uses the
+       * first 16 chars (64 bits), so the id must carry at least that much
+       * entropy; the old 4-byte (8-hex) id left the key at only 32 bits, where
+       * independent launches collided onto a shared worktree. */
+      unsigned char rnd[10];
       if (platform_random_bytes(rnd, sizeof(rnd)) != 0)
       {
-         /* Fallback: mix PID and time to reduce collision risk */
-         rnd[0] = (unsigned char)(getpid() & 0xff);
-         rnd[1] = (unsigned char)((getpid() >> 8) & 0xff);
-         rnd[2] = (unsigned char)(time(NULL) & 0xff);
-         rnd[3] = (unsigned char)((time(NULL) >> 8) & 0xff);
+         /* Fallback: seed an LCG from PID+time and emit one byte per step.
+          * Advancing the state each byte (rather than shifting a single value)
+          * keeps all bytes distinct without any out-of-range shift. */
+         uint64_t mix = (uint64_t)getpid() * 2654435761u + (uint64_t)time(NULL);
+         for (size_t i = 0; i < sizeof(rnd); i++)
+         {
+            mix = mix * 6364136223846793005ULL + 1442695040888963407ULL;
+            rnd[i] = (unsigned char)(mix >> 56);
+         }
       }
-      char fresh_id[16];
-      snprintf(fresh_id, sizeof(fresh_id), "%02x%02x%02x%02x", rnd[0], rnd[1], rnd[2], rnd[3]);
+      char fresh_id[32];
+      int off = 0;
+      for (size_t i = 0; i < sizeof(rnd); i++)
+         off += snprintf(fresh_id + off, sizeof(fresh_id) - off, "%02x", rnd[i]);
       session_id_set_override(fresh_id);
    }
 
