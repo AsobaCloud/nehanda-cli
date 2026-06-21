@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, memo } from 'react';
 import { Spinner, Tabs, tokens } from '@rakuensoftware/smoothgui';
 import { BootstrapBanner, DiffBlock, Message, RewindMarker, ThinkingBlock, ToolBlock, TurnSummaryCard } from './chat/ChatPrimitives';
 import { renderWithMentions } from './chat/markdown';
@@ -1317,6 +1317,55 @@ function ChannelView({ channelName, messages, agents, onSend }: ChannelViewProps
     </div>
   );
 }
+
+/* Renders the committed transcript. Extracted + memoized so re-renders of the
+ * big Chat component that are NOT a message change (textarea typing, the remote-
+ * turn preview, the workflow poll, working toggles) skip transcript
+ * reconciliation entirely. Only re-renders when `messages`, `working`, or
+ * `activeSid` actually change. */
+const Transcript = memo(function Transcript({ messages, working, activeSid }: {
+  messages: StreamMsg[]; working: boolean; activeSid: string;
+}) {
+  // The growing tail assistant bubble streams as raw text (no markdown re-parse);
+  // it stops being "streaming" the moment another block follows it or the turn
+  // ends (working → false), at which point it renders markdown once.
+  const lastId = messages.length > 0 ? messages[messages.length - 1].id : -1;
+  return (
+    <>
+      {messages.map(m => {
+        if (m.type === 'user') {
+          return <Message key={m.id} role="user" text={m.text} />;
+        }
+        if (m.type === 'assistant') {
+          return <Message key={m.id} role="assistant" text={m.text} streaming={working && m.id === lastId} />;
+        }
+        if (m.type === 'thinking') {
+          return <ThinkingBlock key={m.id} text={m.thinkText ?? ''} />;
+        }
+        if (m.type === 'tool') {
+          return (
+            <ToolBlock
+              key={m.id}
+              name={m.toolName ?? ''}
+              args={m.toolArgs ?? ''}
+              result={m.toolResult}
+            />
+          );
+        }
+        if (m.type === 'narration') {
+          return <TurnSummaryCard key={m.id} text={m.text} />;
+        }
+        if (m.type === 'diff') {
+          return <DiffBlock key={m.id} path={m.diffPath} diff={m.diffContent ?? ''} />;
+        }
+        if (m.type === 'checkpoint') {
+          return <RewindMarker key={m.id} snapshotId={m.snapshotId!} sid={activeSid} />;
+        }
+        return null;
+      })}
+    </>
+  );
+});
 
 /* ---- Main Chat component ---- */
 
@@ -2742,37 +2791,7 @@ export default function Chat() {
         flex: 1, overflowY: 'auto', padding: '16px',
         display: 'flex', flexDirection: 'column', gap: '12px',
       }}>
-        {streamMsgs.map(m => {
-          if (m.type === 'user') {
-            return <Message key={m.id} role="user" text={m.text} />;
-          }
-          if (m.type === 'assistant') {
-            return <Message key={m.id} role="assistant" text={m.text} />;
-          }
-          if (m.type === 'thinking') {
-            return <ThinkingBlock key={m.id} text={m.thinkText ?? ''} />;
-          }
-          if (m.type === 'tool') {
-            return (
-              <ToolBlock
-                key={m.id}
-                name={m.toolName ?? ''}
-                args={m.toolArgs ?? ''}
-                result={m.toolResult}
-              />
-            );
-          }
-          if (m.type === 'narration') {
-            return <TurnSummaryCard key={m.id} text={m.text} />;
-          }
-          if (m.type === 'diff') {
-            return <DiffBlock key={m.id} path={m.diffPath} diff={m.diffContent ?? ''} />;
-          }
-          if (m.type === 'checkpoint') {
-            return <RewindMarker key={m.id} snapshotId={m.snapshotId!} sid={tabs[activeIdx]?.aimeeSid ?? ''} />;
-          }
-          return null;
-        })}
+        <Transcript messages={streamMsgs} working={working} activeSid={tabs[activeIdx]?.aimeeSid ?? ''} />
         {working && <WorkingIndicator />}
         {remoteTurnActive && !working && (
           <div style={{
