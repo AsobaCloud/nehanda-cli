@@ -27,16 +27,24 @@ static long long test_mono_ms(void)
    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+/* Path the fake tmux appends every `send-keys` invocation to, so a test can
+ * assert which interrupt key (if any) the cancel path sent. */
+static char g_sendlog[320];
+
 static void install_fake_tmux(void)
 {
    snprintf(g_fake_dir, sizeof(g_fake_dir), "/tmp/aimee_faketmux_%d", (int)getpid());
    mkdir(g_fake_dir, 0700);
    char counter[300];
    snprintf(counter, sizeof(counter), "%s/counter", g_fake_dir);
+   snprintf(g_sendlog, sizeof(g_sendlog), "%s/sendlog", g_fake_dir);
    char script[320];
    snprintf(script, sizeof(script), "%s/tmux", g_fake_dir);
    FILE *f = fopen(script, "w");
    assert(f != NULL);
+   /* capture-pane modes: `changing` never stabilises; `codexgen` returns a codex
+    * generating-footer; anything else returns a static pane. send-keys is logged
+    * so the cancel tests can assert the interrupt key. */
    fprintf(f,
            "#!/bin/sh\n"
            "case \"$1\" in\n"
@@ -45,10 +53,13 @@ static void install_fake_tmux(void)
            "    if [ \"$FAKE_TMUX_MODE\" = changing ]; then\n"
            "      c=0; [ -f '%s' ] && c=$(cat '%s'); c=$((c+1)); echo \"$c\" > '%s';\n"
            "      echo \"frame $c\";\n"
+           "    elif [ \"$FAKE_TMUX_MODE\" = codexgen ]; then\n"
+           "      echo 'codex output'; echo 'Working (1s esc to interrupt)';\n"
            "    else echo 'STATIC OUTPUT'; fi; exit 0 ;;\n"
+           "  send-keys) shift; echo \"$*\" >> '%s'; exit 0 ;;\n"
            "  *) exit 0 ;;\n"
            "esac\n",
-           counter, counter, counter);
+           counter, counter, counter, g_sendlog);
    fclose(f);
    assert(chmod(script, 0700) == 0);
 
@@ -56,6 +67,30 @@ static void install_fake_tmux(void)
    char newpath[4096];
    snprintf(newpath, sizeof(newpath), "%s:%s", g_fake_dir, old_path ? old_path : "");
    setenv("PATH", newpath, 1);
+}
+
+/* Cancel-check fixture: returns the value of *flag (an int the test toggles). */
+static int g_test_cancel_flag;
+static int test_cancel_cb(void *ud)
+{
+   (void)ud;
+   return g_test_cancel_flag;
+}
+/* True if the fake tmux send-keys log contains `needle`. */
+static int sendlog_has(const char *needle)
+{
+   FILE *f = fopen(g_sendlog, "r");
+   if (!f)
+      return 0;
+   char buf[4096];
+   size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+   buf[n] = '\0';
+   fclose(f);
+   return strstr(buf, needle) != NULL;
+}
+static void sendlog_reset(void)
+{
+   unlink(g_sendlog);
 }
 
 static cli_session_t fake_session(void)
@@ -98,6 +133,62 @@ static void test_recv_dead_session(void)
    char buf[8192];
    int rc = cli_session_recv(&s, buf, sizeof(buf), 10000);
    assert(rc == -1);
+}
+
+/* --- cancel / steering-interrupt path --- */
+
+/* claude: a fired cancel-check returns -3 and sends Escape, promptly (no need to
+ * wait for the pane to stabilise). */
+static void test_recv_cancel_claude_escape(void)
+{
+   setenv("FAKE_TMUX_MODE", "stable", 1);
+   sendlog_reset();
+   g_test_cancel_flag = 1;
+   cli_session_set_cancel_check(test_cancel_cb, NULL);
+   cli_session_t s = fake_session();
+   cli_session_set_kind(&s, "claude");
+   char buf[8192];
+   int rc = cli_session_recv(&s, buf, sizeof(buf), 10000);
+   cli_session_set_cancel_check(NULL, NULL);
+   g_test_cancel_flag = 0;
+   assert(rc == -3);
+   assert(sendlog_has("Escape"));
+   assert(!sendlog_has("C-c"));
+}
+
+/* codex while generating (footer shows the interrupt hint): cancel sends C-c. */
+static void test_recv_cancel_codex_generating_ctrlc(void)
+{
+   setenv("FAKE_TMUX_MODE", "codexgen", 1);
+   sendlog_reset();
+   g_test_cancel_flag = 1;
+   cli_session_set_cancel_check(test_cancel_cb, NULL);
+   cli_session_t s = fake_session();
+   cli_session_set_kind(&s, "codex");
+   char buf[8192];
+   int rc = cli_session_recv(&s, buf, sizeof(buf), 10000);
+   cli_session_set_cancel_check(NULL, NULL);
+   g_test_cancel_flag = 0;
+   assert(rc == -3);
+   assert(sendlog_has("C-c"));
+}
+
+/* codex while idle (no generating footer): cancel still returns -3 but must NOT
+ * send C-c — an idle C-c would quit codex. */
+static void test_recv_cancel_codex_idle_skips_ctrlc(void)
+{
+   setenv("FAKE_TMUX_MODE", "stable", 1); /* capture returns "STATIC OUTPUT" — no hint */
+   sendlog_reset();
+   g_test_cancel_flag = 1;
+   cli_session_set_cancel_check(test_cancel_cb, NULL);
+   cli_session_t s = fake_session();
+   cli_session_set_kind(&s, "codex");
+   char buf[8192];
+   int rc = cli_session_recv(&s, buf, sizeof(buf), 10000);
+   cli_session_set_cancel_check(NULL, NULL);
+   g_test_cancel_flag = 0;
+   assert(rc == -3);
+   assert(!sendlog_has("C-c"));
 }
 
 /* --- cli_session_make_name tests --- */
@@ -250,8 +341,167 @@ static void test_delta_non_prefix_falls_back_to_full(void)
    free(out);
 }
 
+/* --- response extraction (TUI scrape) --------------------------------------
+ * Markers: claude assistant ●(\xe2\x97\x8f) user ❯(\xe2\x9d\xaf) status ✻(\xe2\x9c\xbb);
+ * codex assistant •(\xe2\x80\xa2) user ›(\xe2\x80\xba). Captures mirror the real panes. */
+
+static void test_extract_claude_basic(void)
+{
+   const char *pane = "\xe2\x9d\xaf Reply with three words\n"
+                      "\xe2\x97\x8f alpha bravo charlie\n"
+                      "\xe2\x9c\xbb Cooked for 1s\n"
+                      "\n"
+                      "\xe2\x9d\xaf \n"
+                      "  ? for shortcuts\n";
+   char *r = cli_session_extract_response(pane, "claude", NULL);
+   assert(r != NULL);
+   assert(strcmp(r, "alpha bravo charlie") == 0);
+   free(r);
+}
+
+/* Reused pane holding a prior turn: with the prior turn as baseline, only the
+ * NEW turn's reply is returned — the core anti-bleed guarantee. */
+static void test_extract_claude_excludes_prior_turn(void)
+{
+   const char *baseline = "\xe2\x9d\xaf first question\n"
+                          "\xe2\x97\x8f first answer here\n"
+                          "\xe2\x9c\xbb Cooked for 1s\n";
+   const char *pane = "\xe2\x9d\xaf first question\n"
+                      "\xe2\x97\x8f first answer here\n"
+                      "\xe2\x9c\xbb Cooked for 1s\n"
+                      "\xe2\x9d\xaf second question\n"
+                      "\xe2\x97\x8f second answer only\n"
+                      "\xe2\x9c\xbb Baked for 2s\n"
+                      "\xe2\x9d\xaf \n";
+   char *r = cli_session_extract_response(pane, "claude", baseline);
+   assert(r != NULL);
+   assert(strcmp(r, "second answer only") == 0);
+   free(r);
+}
+
+static void test_extract_claude_multiline(void)
+{
+   const char *pane = "\xe2\x9d\xaf q\n"
+                      "\xe2\x97\x8f line one\n"
+                      "  line two\n"
+                      "\xe2\x9c\xbb Cooked for 1s\n";
+   char *r = cli_session_extract_response(pane, "claude", NULL);
+   assert(r != NULL);
+   assert(strcmp(r, "line one\nline two") == 0);
+   free(r);
+}
+
+/* Regression (found by live e2e): claude renders its model/effort status with the
+ * SAME ● bullet as a real answer ("● high · /effort"); it must be treated as
+ * chrome and skipped, not returned as the reply. */
+static void test_extract_claude_skips_effort_status(void)
+{
+   const char *pane = "\xe2\x9d\xaf q\n"
+                      "\xe2\x97\x8f high \xc2\xb7 /effort\n" /* ● high · /effort — status */
+                      "\xe2\x97\x8f PINEAPPLE\n"
+                      "\xe2\x9c\xbb Cooked for 1s\n";
+   char *r = cli_session_extract_response(pane, "claude", NULL);
+   assert(r != NULL);
+   assert(strcmp(r, "PINEAPPLE") == 0);
+   free(r);
+}
+
+/* The /effort chrome match is anchored to the "· /effort" status format, so a
+ * legitimate answer that merely mentions /effort is NOT skipped. */
+static void test_extract_claude_effort_in_answer_kept(void)
+{
+   const char *pane = "\xe2\x9d\xaf q\n"
+                      "\xe2\x97\x8f Use the /effort command to set the depth.\n"
+                      "\xe2\x9c\xbb Cooked for 1s\n";
+   char *r = cli_session_extract_response(pane, "claude", NULL);
+   assert(r != NULL);
+   assert(strcmp(r, "Use the /effort command to set the depth.") == 0);
+   free(r);
+}
+
+static void test_extract_codex_basic(void)
+{
+   /* codex events also use •; the SessionStart hook fired before the turn, so it
+    * is in the baseline (captured pre-send) and excluded — the answer is the new
+    * bullet. */
+   const char *baseline = "\xe2\x80\xa2 SessionStart hook (completed)\n"
+                          "  hook context noise\n";
+   const char *pane = "\xe2\x80\xba Reply with three words\n"
+                      "\xe2\x80\xa2 SessionStart hook (completed)\n"
+                      "  hook context noise\n"
+                      "\xe2\x80\xa2 foxtrot golf hotel\n"
+                      "\xe2\x80\xba Find and fix a bug\n"
+                      "  gpt-5.5 default\n";
+   char *r = cli_session_extract_response(pane, "codex", baseline);
+   assert(r != NULL);
+   assert(strcmp(r, "foxtrot golf hotel") == 0);
+   free(r);
+}
+
+/* Multi-bullet answer: all bullets of the turn are kept, not just the last. */
+static void test_extract_claude_multibullet(void)
+{
+   const char *pane = "\xe2\x9d\xaf q\n"
+                      "\xe2\x97\x8f paragraph one\n"
+                      "\xe2\x97\x8f paragraph two\n"
+                      "\xe2\x9c\xbb Cooked for 1s\n";
+   char *r = cli_session_extract_response(pane, "claude", NULL);
+   assert(r != NULL);
+   assert(strcmp(r, "paragraph one\nparagraph two") == 0);
+   free(r);
+}
+
+/* A short reply that merely appears as a SUBSTRING of a prior line must NOT be
+ * excluded — the baseline match is whole-line, not substring. */
+static void test_extract_baseline_substring_kept(void)
+{
+   const char *baseline = "\xe2\x97\x8f that looks ok to me\n"
+                          "\xe2\x9c\xbb Cooked for 1s\n";
+   const char *pane = "\xe2\x97\x8f that looks ok to me\n"
+                      "\xe2\x9c\xbb Cooked for 1s\n"
+                      "\xe2\x9d\xaf next\n"
+                      "\xe2\x97\x8f ok\n"
+                      "\xe2\x9c\xbb Baked for 1s\n";
+   char *r = cli_session_extract_response(pane, "claude", baseline);
+   assert(r != NULL);
+   assert(strcmp(r, "ok") == 0);
+   free(r);
+}
+
 int main(void)
 {
+   printf("test_extract_claude_basic... ");
+   test_extract_claude_basic();
+   printf("OK\n");
+
+   printf("test_extract_claude_excludes_prior_turn... ");
+   test_extract_claude_excludes_prior_turn();
+   printf("OK\n");
+
+   printf("test_extract_claude_multiline... ");
+   test_extract_claude_multiline();
+   printf("OK\n");
+
+   printf("test_extract_claude_skips_effort_status... ");
+   test_extract_claude_skips_effort_status();
+   printf("OK\n");
+
+   printf("test_extract_claude_effort_in_answer_kept... ");
+   test_extract_claude_effort_in_answer_kept();
+   printf("OK\n");
+
+   printf("test_extract_codex_basic... ");
+   test_extract_codex_basic();
+   printf("OK\n");
+
+   printf("test_extract_claude_multibullet... ");
+   test_extract_claude_multibullet();
+   printf("OK\n");
+
+   printf("test_extract_baseline_substring_kept... ");
+   test_extract_baseline_substring_kept();
+   printf("OK\n");
+
    printf("test_make_name_format... ");
    test_make_name_format();
    printf("OK\n");
@@ -328,6 +578,18 @@ int main(void)
 
    printf("test_recv_dead_session... ");
    test_recv_dead_session();
+   printf("OK\n");
+
+   printf("test_recv_cancel_claude_escape... ");
+   test_recv_cancel_claude_escape();
+   printf("OK\n");
+
+   printf("test_recv_cancel_codex_generating_ctrlc... ");
+   test_recv_cancel_codex_generating_ctrlc();
+   printf("OK\n");
+
+   printf("test_recv_cancel_codex_idle_skips_ctrlc... ");
+   test_recv_cancel_codex_idle_skips_ctrlc();
    printf("OK\n");
 
    printf("All cli_session tests passed.\n");
