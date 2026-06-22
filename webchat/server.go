@@ -135,6 +135,7 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 
 	// Chat API (session required)
 	mux.HandleFunc("/api/chat/send", s.requireAuth(s.handleChatSend))
+	mux.HandleFunc("/api/chat/interrupt", s.requireAuth(s.handleChatInterrupt))
 	mux.HandleFunc("/api/chat/session", s.requireAuth(s.handleChatSession))
 	mux.HandleFunc("/api/chat/projects", s.requireAuth(s.handleChatProjects))
 	mux.HandleFunc("/api/chat/bootstrap-status", s.requireAuth(s.handleBootstrapStatus))
@@ -188,6 +189,7 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/git/projects", s.requireAuth(s.handleGitProjects))
 	mux.HandleFunc("/api/git/clone", s.requireAuth(s.handleGitClone))
 	mux.HandleFunc("/api/git/op", s.requireAuth(s.handleGitOp))
+	mux.HandleFunc("/api/git/session-dir", s.requireAuth(s.handleGitSessionDir))
 	mux.HandleFunc("/api/git/credentials", s.requireAuth(s.handleGitCredentials))
 	mux.HandleFunc("/api/git/oauth/github/start", s.requireAuth(s.handleGitOauthGithubStart))
 	mux.HandleFunc("/api/git/oauth/github/poll", s.requireAuth(s.handleGitOauthGithubPoll))

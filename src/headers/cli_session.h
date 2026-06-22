@@ -14,10 +14,43 @@ typedef struct
 {
    char session_name[CLI_SESSION_NAME_MAX]; /* tmux session name */
    char cli_cmd[CLI_SESSION_CMD_MAX];       /* CLI command that was started */
+   char cli_kind[32];                       /* "claude"/"codex"/... drives response parsing */
    int reuse;                               /* 1 = reuse across tasks */
    time_t last_activity;
    int active; /* 1 = session exists */
+   /* Pane snapshot taken just before a prompt is sent. recv diffs against it so
+    * a reused pane returns ONLY this turn's output, never prior turns still on
+    * screen. malloc'd; freed by cli_session_destroy. */
+   char *baseline;
+   /* Clean response text already streamed to the caller this turn (so recv emits
+    * only the growth as an incremental delta). malloc'd; freed on destroy. */
+   char *stream_emitted;
 } cli_session_t;
+
+/* Incremental stream callback: invoked by cli_session_recv with each newly
+ * produced chunk of clean response text as the turn streams. Set per-thread. */
+typedef void (*cli_session_stream_cb_t)(const char *delta, void *ud);
+void cli_session_set_stream_cb(cli_session_stream_cb_t cb, void *ud);
+/* Read the current thread's stream callback so a caller can save/restore it
+ * around a nested turn (prevents the inner turn's now-dead context leaking to
+ * the outer turn). *ud_out receives the userdata; returns the callback. */
+cli_session_stream_cb_t cli_session_get_stream_cb(void **ud_out);
+
+/* Cancel-check callback: cli_session_recv polls it each tick; a non-zero return
+ * aborts the wait (the running turn was asked to stop — steering/interrupt or
+ * session close). recv then sends an interrupt key to the pane so the CLI stops
+ * generating (the conversation stays intact for the next turn) and returns the
+ * cancelled status. Thread-local, like the stream callback. */
+typedef int (*cli_session_cancel_cb_t)(void *ud);
+void cli_session_set_cancel_check(cli_session_cancel_cb_t cb, void *ud);
+cli_session_cancel_cb_t cli_session_get_cancel_check(void **ud_out);
+
+/* Record the CLI kind so recv can pick the right TUI response parser. */
+void cli_session_set_kind(cli_session_t *s, const char *cli_kind);
+
+/* Snapshot the current pane as the baseline for the next recv. Call right
+ * before cli_session_send so the turn's reply is diffed from a clean boundary. */
+void cli_session_mark_baseline(cli_session_t *s);
 
 /* --- Lifecycle --- */
 /* Creates (or attaches to existing) tmux session, starts CLI.
@@ -45,11 +78,21 @@ int cli_session_capture(cli_session_t *s, char *out, size_t out_max);
 /* Polls capture-pane until output stabilises (hash-based), the session dies,
  * or timeout_ms elapses. Writes captured text to out (NUL-terminated).
  * Returns 0 on success, -1 if the session exits before output stabilises,
- * and -2 if it did not stabilise within timeout_ms. timeout_ms <= 0 disables
+ * -2 if it did not stabilise within timeout_ms, and -3 if the cancel-check
+ * fired (the turn was asked to stop). timeout_ms <= 0 disables
  * the wall-clock bound (legacy unbounded behaviour). The bound is the only
  * thing that breaks a CLI wedged in a provider retry loop (e.g. an Anthropic
- * outage), whose pane animates forever without the session dying. */
+ * outage), whose pane animates forever without the session dying. recv writes
+ * ONLY this turn's clean response (pane diffed vs the baseline, TUI chrome
+ * stripped) and streams the reply's growth via the thread's stream callback. */
 int cli_session_recv(cli_session_t *s, char *out, size_t out_max, int timeout_ms);
+
+/* Extract the latest assistant turn's clean text from a raw pane capture.
+ * `cli_kind` selects the TUI markers ("claude"/"claude-code" use ●/❯/✻,
+ * "codex" uses •/›). `baseline` is the pre-send pane snapshot (may be NULL);
+ * content present in the baseline is excluded so prior turns never leak.
+ * Returns newly allocated text; caller frees. Exposed for unit tests. */
+char *cli_session_extract_response(const char *raw, const char *cli_kind, const char *baseline);
 
 /* --- Session name helpers --- */
 /* Build a deterministic session name: "aimee-<agent>-<hash(role)>".

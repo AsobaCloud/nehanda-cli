@@ -89,6 +89,18 @@ extern "C"
     * number flagged. Sets flags only; the owning workers do the reaping. */
    int turn_registry_cancel_all(void);
 
+   /* --- pending-steer store (chat.interrupt) ---
+    * One pending steering message per session. chat.interrupt stashes the
+    * message (and cancels the in-flight turn); the worker that ran the cancelled
+    * turn takes it and dispatches it as the next, server-initiated turn. */
+   /* Returns 0 on success, -1 if the message could not be stored (OOM or the
+    * table is full) — the caller must then NOT report a queued steer. */
+   int chat_steer_set(const char *session_id, const char *message);
+   /* Take + clear the pending steer. Returns 1 with *out_message (malloc'd,
+    * caller frees) if one was pending, 0 otherwise. */
+   int chat_steer_take(const char *session_id, char **out_message);
+   void chat_steer_clear(const char *session_id);
+
 #ifdef __cplusplus
 }
 #endif
