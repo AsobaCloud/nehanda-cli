@@ -565,19 +565,52 @@ int cli_session_recv(cli_session_t *s, char *out, size_t out_max, int timeout_ms
       {
          /* Per-CLI interrupt key (verified live): claude stops a response on
           * Escape (harmless when idle); codex ignores Escape and interrupts on
-          * Ctrl-C (a single C-c mid-generation stops it without quitting). The
-          * cancel fires while recv is polling — i.e. during generation — so the
-          * codex C-c lands while it is working. Default to Escape (the safe key:
-          * ignored CLIs just clear their input). */
-         const char *intr = (strstr(s->cli_kind, "codex") != NULL) ? "C-c" : "Escape";
-         char ic[CLI_SESSION_NAME_MAX + 64];
-         snprintf(ic, sizeof(ic), "tmux send-keys -t '%s' %s 2>/dev/null", s->session_name, intr);
-         int erc;
-         free(sess_run(ic, &erc));
-         /* Let the TUI settle out of its animating state before the turn ends, so
-          * the next (steer) turn captures a clean baseline and pastes into a
-          * stable prompt rather than a half-rendered one. */
-         msleep_ms(300);
+          * Ctrl-C. The catch: codex C-c interrupts an ACTIVE generation but QUITS
+          * codex when it is idle. So for codex, only send C-c while it is still
+          * generating — detected by its working / interrupt-hint footer; if the
+          * response already finished, skip the key (the turn ends and the steer
+          * reuses the live pane). claude's Escape is safe either way; default to
+          * Escape for unknown CLIs (ignored CLIs just clear their input). */
+         int is_codex = (strstr(s->cli_kind, "codex") != NULL);
+         int send_key = 1;
+         if (is_codex)
+         {
+            /* Probe ONLY the footer band (last few lines) for codex's active-
+             * generation hint, captured immediately before the send to minimize
+             * the window where codex goes idle between probe and C-c. Searching
+             * just the footer (not the whole pane) avoids a false positive from
+             * the literal "Working"/"to interrupt" appearing in scrollback or the
+             * conversation. The hint text is codex-version-dependent (verified
+             * 2026-06: "◦ Working (Ns • esc to interrupt)"); a future relabel
+             * would make this a false negative (skip C-c) — the safe direction
+             * (it won't quit codex; worst case the steer paste lands mid-render). */
+            send_key = 0;
+            /* Holds the whole visible pane (220x50, up to ~4 bytes/glyph) so the
+             * footer at the bottom is never truncated away (cli_session_capture
+             * keeps the START of the capture). The pool thread stack is 32MB. */
+            char probe[49152];
+            if (cli_session_capture(s, probe, sizeof(probe)) == 0)
+            {
+               /* Search only the footer band (last ~800 bytes) so the literal
+                * "Working"/"to interrupt" elsewhere in the pane can't false-match. */
+               size_t plen = strlen(probe);
+               const char *foot = plen > 800 ? probe + (plen - 800) : probe;
+               if (strstr(foot, "to interrupt") || strstr(foot, "Working"))
+                  send_key = 1; /* codex is actively generating: C-c interrupts, not quits */
+            }
+         }
+         if (send_key)
+         {
+            char ic[CLI_SESSION_NAME_MAX + 64];
+            snprintf(ic, sizeof(ic), "tmux send-keys -t '%s' %s 2>/dev/null", s->session_name,
+                     is_codex ? "C-c" : "Escape");
+            int erc;
+            free(sess_run(ic, &erc));
+            /* Let the TUI settle out of its animating state before the turn ends,
+             * so the next (steer) turn captures a clean baseline and pastes into a
+             * stable prompt rather than a half-rendered one. */
+            msleep_ms(300);
+         }
          out[0] = '\0';
          return -3;
       }
