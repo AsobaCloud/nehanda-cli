@@ -77,6 +77,25 @@ cli_session_stream_cb_t cli_session_get_stream_cb(void **ud_out)
    return g_stream_cb;
 }
 
+/* Per-thread cancel-check (set by the chat worker to the turn's cancel flag).
+ * cli_session.c stays decoupled from the turn registry — the worker supplies the
+ * predicate. */
+static __thread cli_session_cancel_cb_t g_cancel_cb = NULL;
+static __thread void *g_cancel_ud = NULL;
+
+void cli_session_set_cancel_check(cli_session_cancel_cb_t cb, void *ud)
+{
+   g_cancel_cb = cb;
+   g_cancel_ud = ud;
+}
+
+cli_session_cancel_cb_t cli_session_get_cancel_check(void **ud_out)
+{
+   if (ud_out)
+      *ud_out = g_cancel_ud;
+   return g_cancel_cb;
+}
+
 void cli_session_set_kind(cli_session_t *s, const char *cli_kind)
 {
    if (!s)
@@ -538,6 +557,31 @@ int cli_session_recv(cli_session_t *s, char *out, size_t out_max, int timeout_ms
          return -1;
       }
 
+      /* Cancellation (steering/interrupt or session close): stop the CLI mid-
+       * generation with an interrupt key so the pane goes idle with the
+       * conversation intact, then report cancelled. Checked before the wall-clock
+       * and poll so a cancel is honoured promptly. */
+      if (g_cancel_cb && g_cancel_cb(g_cancel_ud))
+      {
+         /* Per-CLI interrupt key (verified live): claude stops a response on
+          * Escape (harmless when idle); codex ignores Escape and interrupts on
+          * Ctrl-C (a single C-c mid-generation stops it without quitting). The
+          * cancel fires while recv is polling — i.e. during generation — so the
+          * codex C-c lands while it is working. Default to Escape (the safe key:
+          * ignored CLIs just clear their input). */
+         const char *intr = (strstr(s->cli_kind, "codex") != NULL) ? "C-c" : "Escape";
+         char ic[CLI_SESSION_NAME_MAX + 64];
+         snprintf(ic, sizeof(ic), "tmux send-keys -t '%s' %s 2>/dev/null", s->session_name, intr);
+         int erc;
+         free(sess_run(ic, &erc));
+         /* Let the TUI settle out of its animating state before the turn ends, so
+          * the next (steer) turn captures a clean baseline and pastes into a
+          * stable prompt rather than a half-rendered one. */
+         msleep_ms(300);
+         out[0] = '\0';
+         return -3;
+      }
+
       /* Wall-clock backstop. Completion is detected by the pane going static
        * (stability hash below), but a CLI stuck in a provider retry/backoff
        * loop animates its spinner + elapsed-time counter forever, so the pane
@@ -608,10 +652,19 @@ char *cli_session_make_name(const char *agent_name, const char *role)
    if (!name)
       return NULL;
    snprintf(name, CLI_SESSION_NAME_MAX, "aimee-%s-%08lx", agent_name, h & 0xffffffff);
-   /* Replace chars invalid in tmux session names */
+   /* Sanitize: the session name is interpolated into single-quoted tmux shell
+    * commands ('%s') throughout this file, so beyond the chars tmux rejects in a
+    * session name we must also neutralize anything that could break out of the
+    * quoting (single quote, backslash, control/shell metacharacters). The name is
+    * derived from the aimee session id, which can be client-influenced, so this
+    * is the single chokepoint that keeps every tmux sink injection-safe. Keep
+    * only [A-Za-z0-9_-]; map everything else to '-'. */
    for (char *p = name; *p; p++)
    {
-      if (*p == ' ' || *p == '.' || *p == ':' || *p == '/')
+      unsigned char c = (unsigned char)*p;
+      int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+               c == '_' || c == '-';
+      if (!ok)
          *p = '-';
    }
    return name;
