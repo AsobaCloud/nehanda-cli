@@ -3,12 +3,18 @@
 #define _GNU_SOURCE
 #endif
 #include "aimee.h"
+#include "cJSON.h"
 #include "cli_session.h"
 #include "util.h"
 #include "workspace_provider.h"
+#include <fcntl.h>
+#include <limits.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -146,6 +152,203 @@ int cli_session_is_alive(const cli_session_t *s)
    return rc == 0;
 }
 
+/* --- claude-code TUI first-run gate seeding ------------------------------- */
+
+/* HOME the claude TUI reads its config from. The pane inherits the server's
+ * env, and claude-code resolves ~/.claude{,.json} via $HOME — so seed there to
+ * be sure the TUI sees it. Prefer $HOME (what claude reads), then $AIMEE_HOME
+ * (where server_cli_oauth installs the npm prefix + tokens; equals $HOME on the
+ * standard image), then the image default. */
+static const char *cli_claude_home(void)
+{
+   const char *h = getenv("HOME");
+   if (h && h[0])
+      return h;
+   h = getenv("AIMEE_HOME");
+   return (h && h[0]) ? h : "/var/lib/aimee";
+}
+
+/* Read an entire file into a malloc'd NUL-terminated string (caller frees), or
+ * NULL if it does not exist / cannot be read. ~/.claude.json accumulates session
+ * history and can grow large; cap the read (oversize → NULL → seeding skipped,
+ * per the best-effort contract) rather than slurp unbounded. */
+#define CLI_CLAUDE_CFG_MAX (16 * 1024 * 1024)
+static char *cli_read_file(const char *path)
+{
+   FILE *f = fopen(path, "rb");
+   if (!f)
+      return NULL;
+   if (fseek(f, 0, SEEK_END) != 0)
+   {
+      fclose(f);
+      return NULL;
+   }
+   long n = ftell(f);
+   if (n < 0 || n > CLI_CLAUDE_CFG_MAX || fseek(f, 0, SEEK_SET) != 0)
+   {
+      fclose(f);
+      return NULL;
+   }
+   char *buf = malloc((size_t)n + 1);
+   if (!buf)
+   {
+      fclose(f);
+      return NULL;
+   }
+   size_t rd = fread(buf, 1, (size_t)n, f);
+   fclose(f);
+   buf[rd] = '\0';
+   return buf;
+}
+
+/* Atomically replace `path` with `data` (temp sibling + rename). The file holds
+ * claude's oauth account/trust state, so create the temp 0600 (rename keeps the
+ * temp's mode, not the destination's — a plain fopen()+umask would downgrade an
+ * existing 0600 config to 0644). 0 on success. */
+static int cli_write_file_atomic(const char *path, const char *data)
+{
+   char tmp[PATH_MAX];
+   if ((size_t)snprintf(tmp, sizeof(tmp), "%s.aimee.tmp.%d", path, (int)getpid()) >= sizeof(tmp))
+      return -1;
+   int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+   if (fd < 0)
+      return -1;
+   FILE *f = fdopen(fd, "wb");
+   if (!f)
+   {
+      close(fd);
+      unlink(tmp);
+      return -1;
+   }
+   size_t len = strlen(data);
+   int ok = (fwrite(data, 1, len, f) == len);
+   if (fclose(f) != 0)
+      ok = 0;
+   if (!ok || rename(tmp, path) != 0)
+   {
+      unlink(tmp);
+      return -1;
+   }
+   return 0;
+}
+
+/* Ensure an object has a boolean key set to true; returns 1 if it changed it. */
+static int cli_json_set_true(cJSON *obj, const char *key)
+{
+   cJSON *cur = cJSON_GetObjectItemCaseSensitive(obj, key);
+   if (cJSON_IsTrue(cur))
+      return 0;
+   cJSON_DeleteItemFromObject(obj, key);
+   cJSON_AddTrueToObject(obj, key);
+   return 1;
+}
+
+/* Load a claude config file for read-modify-write. Returns the parsed object
+ * (caller cJSON_Delete's), or NULL with *skip=1 when the file EXISTS but won't
+ * parse — claude-code writes ~/.claude.json non-atomically, so a concurrent
+ * read can catch it mid-write; clobbering it with a fresh {} would wipe the
+ * oauth account, trust map, and session history. In that case do nothing and
+ * try again next turn. A genuinely absent file returns a fresh object. */
+static cJSON *cli_claude_cfg_load(const char *path, int *skip)
+{
+   *skip = 0;
+   char *txt = cli_read_file(path);
+   int existed = (txt != NULL);
+   cJSON *root = txt ? cJSON_Parse(txt) : NULL;
+   free(txt);
+   if (existed && !root)
+   {
+      *skip = 1;
+      return NULL;
+   }
+   return root ? root : cJSON_CreateObject();
+}
+
+void cli_session_prepare_claude(const char *work_dir)
+{
+   const char *home = cli_claude_home();
+   char claude_dir[PATH_MAX], lockpath[PATH_MAX], jsonpath[PATH_MAX], setpath[PATH_MAX];
+   snprintf(claude_dir, sizeof(claude_dir), "%s/.claude", home);
+   snprintf(lockpath, sizeof(lockpath), "%s/.aimee-prep.lock", claude_dir);
+   snprintf(jsonpath, sizeof(jsonpath), "%s/.claude.json", home);
+   snprintf(setpath, sizeof(setpath), "%s/settings.json", claude_dir);
+
+   /* Best-effort: an unwritable home just means claude shows its prompts —
+    * never fail the turn over it. */
+   mkdir(claude_dir, 0700); /* ignore EEXIST */
+
+   /* Two layers of mutual exclusion for the read-modify-write below:
+    *  - g_prep_mu serializes threads in THIS process. flock(2) alone does not:
+    *    each thread open()s its own description, and while a second flock would
+    *    block on the first, the temp path in cli_write_file_atomic keys on pid
+    *    only — same-process threads would collide on it. The mutex closes that.
+    *  - flock serializes across processes (a second server / a manual edit). */
+   static pthread_mutex_t g_prep_mu = PTHREAD_MUTEX_INITIALIZER;
+   pthread_mutex_lock(&g_prep_mu);
+   int lf = open(lockpath, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+   if (lf >= 0)
+      flock(lf, LOCK_EX);
+
+   /* ~/.claude.json: mark onboarding done + trust this (per-session) worktree. */
+   int skip = 0;
+   cJSON *root = cli_claude_cfg_load(jsonpath, &skip);
+   if (root)
+   {
+      int changed = cli_json_set_true(root, "hasCompletedOnboarding");
+      if (work_dir && work_dir[0])
+      {
+         cJSON *projects = cJSON_GetObjectItemCaseSensitive(root, "projects");
+         if (!cJSON_IsObject(projects))
+         {
+            cJSON_DeleteItemFromObject(root, "projects");
+            projects = cJSON_AddObjectToObject(root, "projects");
+         }
+         cJSON *proj = projects ? cJSON_GetObjectItemCaseSensitive(projects, work_dir) : NULL;
+         if (projects && !cJSON_IsObject(proj))
+         {
+            cJSON_DeleteItemFromObject(projects, work_dir);
+            proj = cJSON_AddObjectToObject(projects, work_dir);
+         }
+         if (proj)
+            changed |= cli_json_set_true(proj, "hasTrustDialogAccepted");
+      }
+      if (changed)
+      {
+         char *out = cJSON_Print(root);
+         if (out)
+         {
+            cli_write_file_atomic(jsonpath, out);
+            free(out);
+         }
+      }
+      cJSON_Delete(root);
+   }
+
+   /* ~/.claude/settings.json: pre-accept the bypass-permissions warning so a
+    * --dangerously-skip-permissions launch starts straight at the prompt. */
+   cJSON *sroot = cli_claude_cfg_load(setpath, &skip);
+   if (sroot)
+   {
+      if (cli_json_set_true(sroot, "skipDangerousModePermissionPrompt"))
+      {
+         char *out = cJSON_Print(sroot);
+         if (out)
+         {
+            cli_write_file_atomic(setpath, out);
+            free(out);
+         }
+      }
+      cJSON_Delete(sroot);
+   }
+
+   if (lf >= 0)
+   {
+      flock(lf, LOCK_UN);
+      close(lf);
+   }
+   pthread_mutex_unlock(&g_prep_mu);
+}
+
 int cli_session_create(cli_session_t *s, const char *session_name, const char *cli_cmd,
                        const char *work_dir, int reuse)
 {
@@ -165,21 +368,29 @@ int cli_session_create(cli_session_t *s, const char *session_name, const char *c
    /* Create new tmux session running the CLI directly rather than via an
     * interactive shell prompt. That avoids a race where the first user
     * message lands before the CLI is fully attached and also keeps shell
-    * prompts out of captured output. */
-   char create_cmd[512];
+    * prompts out of captured output.
+    *
+    * Use `/bin/sh -c` (NOT `-lc`): a login shell sources /etc/profile, which on
+    * Debian resets PATH to a bare default and discards the image's
+    * `ENV PATH=.../.npm-global/bin:$PATH`. The on-demand CLI agents (claude /
+    * codex) install into that npm prefix, so a login shell can no longer find
+    * them and the pane exits instantly ("failed to send prompt to tmux
+    * session"). A non-login shell inherits the tmux server's env (= aimee-
+    * server's, which carries the image PATH), so the CLI resolves. */
+   char create_cmd[1024];
    char *esc_cli = shell_escape(cli_cmd && cli_cmd[0] ? cli_cmd : "claude");
    if (work_dir && work_dir[0])
    {
       char *esc_dir = shell_escape(work_dir);
       snprintf(create_cmd, sizeof(create_cmd),
-               "tmux new-session -d -s '%s' -x 220 -y 50 -c %s /bin/sh -lc %s 2>/dev/null",
+               "tmux new-session -d -s '%s' -x 220 -y 50 -c %s /bin/sh -c %s 2>/dev/null",
                session_name, esc_dir, esc_cli);
       free(esc_dir);
    }
    else
    {
       snprintf(create_cmd, sizeof(create_cmd),
-               "tmux new-session -d -s '%s' -x 220 -y 50 /bin/sh -lc %s 2>/dev/null", session_name,
+               "tmux new-session -d -s '%s' -x 220 -y 50 /bin/sh -c %s 2>/dev/null", session_name,
                esc_cli);
    }
    free(esc_cli);
