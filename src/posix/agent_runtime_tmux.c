@@ -44,12 +44,20 @@ int agent_execute_cli_session(const agent_t *agent, const agent_network_t *netwo
     * primary pane reuses (the conversation persists across turns); a delegate
     * pane is one-shot and torn down on completion (isolation is the unique
     * name, not reuse) so unique-per-delegation panes don't accumulate — there
-    * is no idle reaper for these sessions. */
+    * is no idle reaper for these sessions.
+    *
+    * The per-session pane is used ONLY when a real session id is bound on this
+    * thread (session_id_override_active). Without an override, session_id()
+    * returns the process-wide PPID fallback — the SAME value for every
+    * override-less turn in the server — which would collapse them all onto one
+    * "<ppid>-cli" pane and cross-contaminate. In that case fall through to the
+    * agent-keyed / unique-per-turn names below. */
    const char *aimee_sid = session_id();
    const char *deleg_id = delegation_active_id();
+   int have_session = aimee_sid && aimee_sid[0] && session_id_override_active();
    int reuse = agent->session_reuse;
    char *sess_name;
-   if (aimee_sid && aimee_sid[0])
+   if (have_session)
    {
       if (deleg_id && deleg_id[0])
       {
@@ -78,7 +86,18 @@ int agent_execute_cli_session(const agent_t *agent, const agent_network_t *netwo
       return -1;
    }
 
-   const char *cli_cmd = agent->cli_cmd[0] ? agent->cli_cmd : "claude";
+   /* Honour the agent's model: append `--model <model>` (claude and codex both
+    * accept it) unless the launch command already pins one. The model is the
+    * config default or the per-request override the chat worker wrote onto the
+    * agent — without this the CLI would launch with its own built-in default. */
+   const char *base_cmd = agent->cli_cmd[0] ? agent->cli_cmd : "claude";
+   char cli_cmd_buf[CLI_SESSION_CMD_MAX];
+   const char *cli_cmd = base_cmd;
+   if (agent->model[0] && !strstr(base_cmd, "--model") && !strstr(base_cmd, " -m "))
+   {
+      snprintf(cli_cmd_buf, sizeof(cli_cmd_buf), "%s --model %s", base_cmd, agent->model);
+      cli_cmd = cli_cmd_buf;
+   }
 
    /* Prefer the turn's bound cwd (the client workspace root on a detached
     * thin-client turn, where the tmux session actually runs); fall back to the
@@ -98,6 +117,8 @@ int agent_execute_cli_session(const agent_t *agent, const agent_network_t *netwo
       snprintf(out->error, sizeof(out->error), "failed to create tmux session for %s", agent->name);
       return -1;
    }
+   /* cli_kind drives the TUI response parser (claude ●/❯/✻ vs codex •/›). */
+   cli_session_set_kind(&sess, agent->cli_kind[0] ? agent->cli_kind : agent->name);
 
    size_t plen = (system_prompt ? strlen(system_prompt) : 0) + strlen(user_prompt) + 4;
    char *full_prompt = malloc(plen);
@@ -111,6 +132,10 @@ int agent_execute_cli_session(const agent_t *agent, const agent_network_t *netwo
       snprintf(full_prompt, plen, "%s\n\n%s", system_prompt, user_prompt);
    else
       snprintf(full_prompt, plen, "%s", user_prompt);
+
+   /* Snapshot the pane immediately before sending so recv returns ONLY this
+    * turn's reply — never prior turns still visible on a reused pane. */
+   cli_session_mark_baseline(&sess);
 
    if (cli_session_send(&sess, full_prompt) != 0)
    {
@@ -140,6 +165,24 @@ int agent_execute_cli_session(const agent_t *agent, const agent_network_t *netwo
    if (recv_rc != 0)
    {
       free(raw);
+      if (recv_rc == -3)
+      {
+         /* Cancelled (steering/interrupt): recv already sent the interrupt key,
+          * so the CLI stopped generating with the conversation intact. KEEP a
+          * reused pane alive (the steer continuation reuses it); only free this
+          * turn's scratch. A one-shot pane is torn down. */
+         if (reuse)
+         {
+            free(sess.baseline);
+            sess.baseline = NULL;
+            free(sess.stream_emitted);
+            sess.stream_emitted = NULL;
+         }
+         else
+            cli_session_destroy(&sess);
+         snprintf(out->error, sizeof(out->error), "turn cancelled");
+         return -1;
+      }
       cli_session_destroy(&sess); /* kill the (possibly wedged) session */
       if (recv_rc == -2)
          snprintf(out->error, sizeof(out->error),
@@ -151,11 +194,22 @@ int agent_execute_cli_session(const agent_t *agent, const agent_network_t *netwo
       return -1;
    }
 
-   char *clean = cli_session_strip_ansi(raw);
+   /* recv already returned this turn's clean, chrome-stripped response. */
+   char *clean = strdup(raw);
    free(raw);
 
+   /* Tear the pane down for a one-shot (delegate / non-reuse) session; for a
+    * reused chat pane keep it alive but free this turn's per-turn scratch
+    * (baseline + stream buffer) so it does not leak across turns. */
    if (!reuse)
       cli_session_destroy(&sess);
+   else
+   {
+      free(sess.baseline);
+      sess.baseline = NULL;
+      free(sess.stream_emitted);
+      sess.stream_emitted = NULL;
+   }
 
    if (!clean || !clean[0])
    {

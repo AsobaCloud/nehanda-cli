@@ -5,6 +5,10 @@
 #include "config.h"
 #include "forge_app_token.h"
 #include "forge_credentials.h"
+#include "git_host_cred.h"
+#include "git_host_resolve.h"
+#include "git_ops.h"
+#include "workspace.h"
 #include "kb_client_cache.h"
 #include "kb_client_ws.h"
 #include "db1.h"
@@ -141,6 +145,16 @@ static int run_server(const char *socket_path, log_level_t log_level)
    /* Activate the GitHub App installation-token provider for the server's forge
     * identity. Inert unless AIMEE_FORGE_APP_* is set (see forge_app_token.c). */
    forge_cred_register_app_token_provider(forge_app_token_configured, forge_app_token_get);
+
+   /* Wire the per-host git credential vault into the credential resolvers so git
+    * clone/fetch/push/PR authenticate with the stored token for the repo's host
+    * (git_host_resolve.c). Without this the per-host step is skipped. */
+   git_host_resolve_register(git_host_cred_for_url);
+
+   /* Wire the per-session worktree resolver so the webchat git surfaces (git panel
+    * + editor) act on the SAME isolated worktree the session's agent edits, rather
+    * than the shared project checkout (session_isolation_target, workspace.c). */
+   git_ops_register_session_isolation(session_isolation_target);
 
    config_t cfg;
    config_load(&cfg);
