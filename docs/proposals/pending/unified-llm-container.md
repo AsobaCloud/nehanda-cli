@@ -4,7 +4,8 @@
   blocking / 0 high / 0 medium, converged). Arc: r1 10 blocking → r2 7 blocking +
   8 high → r3 1 blocking + 1 high + 2 medium → r5 **0 blocking**. rev 7 closes the
   two open questions (pins the operator's synth models; decouples + shrinks the
-  reranker to 0.6B-default, 8B dropped; E4B-ungated CPU default). See "Decisions
+  reranker to Ettin ModernBERT — 400m GPU / 68m CPU, both `-fa on`, Qwen3-Reranker
+  dropped from the real-time path; E4B-ungated CPU default). See "Decisions
   taken" and "Changelog".
 - **Author:** JBailes
 - **Date:** 2026-06-21
@@ -160,46 +161,85 @@ install by detected VRAM (§5).
 
 **Embed ladder** (the embed row's dim drives every dim-dependent surface):
 
-| Install | Embed (GGUF) | dim |
-|---------|--------------|-----|
-| CPU-only / GPU (default) | `Qwen/Qwen3-Embedding-0.6B-GGUF` | 1024 |
-| GPU (high) | `Qwen/Qwen3-Embedding-8B-GGUF` | **4000** (trunc) |
+| Install | Embed (GGUF) | dim | selection |
+|---------|--------------|-----|-----------|
+| CPU-only (**default**) | `Qwen/Qwen3-Embedding-0.6B-GGUF` | 1024 | auto |
+| GPU (**default**) | `Qwen/Qwen3-Embedding-4B-GGUF` | 2560 | auto (any GPU install) |
+| GPU (**opt-in**) | `Qwen/Qwen3-Embedding-8B-GGUF` | **4000** (trunc 4096→4000) | operator must explicitly configure |
 
-> **CORRECTION (2026-06-22): the "nomic-everywhere" change is reverted.** An
-> earlier revision (PR #613) collapsed this to a single nomic-embed-text-v1.5 row
-> on a LoCoMo screen — **that was wrong on two counts** and is withdrawn. (1) LoCoMo
-> (short conversational-turn retrieval) under-discriminates embedder quality. (2)
-> the Qwen3 numbers were also depressed by a broken llama.cpp serving config. On
-> the **standard SciFact BEIR benchmark with the serving fix applied**
-> ([embedder-gate-scifact](../../validation/embedder-gate-scifact.md)),
-> **Qwen3-Embedding wins decisively and scales**: nDCG@10 **0.883 (8B) > 0.820
-> (0.6B) > 0.799 (nomic)** — even the 0.6B beats nomic, matching Qwen3-Embedding's
-> SOTA MTEB standing. So the **default is Qwen3-Embedding-0.6B** (beats nomic at a
-> modest 1024-dim) and the **high tier is Qwen3-Embedding-8B** (best quality).
-> Qwen3-4B is dropped (no measured SciFact gain probed yet; the Qwen3 paper has 4B
-> ≥ 8B on general retrieval, so revisit only if a mid-VRAM tier is wanted).
+> **Basis (2026-06-22, baseline-gated — supersedes every earlier embed-ladder note,
+> including PR #613's "nomic-everywhere" and #617's capped-SciFact revert).** The
+> embedder was re-validated end-to-end against **published** baselines; full data,
+> the four-model ladder, and the harness are in
+> [embedder-gate-scifact](../../validation/embedder-gate-scifact.md). Headline:
+> - **aimee embeds code** (`kb_curator_index_code_unit.c` body/signature vectors,
+>   `kb_service_code_embed.c` code chunks) through the same configured embedder, so
+>   **code retrieval is the decisive axis**. **nomic-embed is text-only** (never
+>   trained on code): on aimee's *own* 1864-function code set Qwen3-0.6B beats nomic
+>   by **+12.7 nDCG@10 / +10 Recall@10**; on published MTEB code tasks the gap is
+>   **+9 to +63**. **nomic is dropped.**
+> - **Text is a wash-to-win for Qwen3.** Both reproduce their published BEIR numbers
+>   within ~1pt (harness validated): they tie on SciFact (0.703 vs 0.706) and
+>   NFCorpus, and Qwen3 wins the rest (FiQA +9, SCIDOCS +7, ArguAna +19,
+>   TREC-COVID +27). The earlier "0.820 > 0.799 SciFact" was a **capped-corpus
+>   artifact** and is withdrawn.
+> - **Quality scales then plateaus.** aimee-code nDCG@10: 0.6B **0.697** → 4B
+>   **0.759** → 8B **0.761**. The **0.6B→4B step is +6.2; 4B→8B is +0.16 (noise)** —
+>   confirmed f16-vs-f16, and 4B-Q8 == 4B-f16 (quantization lossless here). So **4B
+>   is the GPU default**: it delivers 8B-grade quality at **2560-d vs 4096-d**
+>   (1.6× smaller pgvector index, indexed natively under the 4000-d `halfvec`
+>   ceiling — no truncation), ~1.4× faster embed, ~½ the VRAM.
+> - **8B is an operator opt-in**, not auto-selected by VRAM. It buys only the last
+>   ~0.2 nDCG and costs a 4000-d (truncated) index; a deployment that wants it must
+>   **explicitly configure** the 8B tier (see "The 8B truncation" below). 0.6B and
+>   4B need no truncation.
 >
 > **Required serving config** (the proposal's `aimee-llm` must launch the embedder
 > with these, or it crashes/slows on llama.cpp + Vulkan):
 > `--ctx-size 8192 -ub 512 -np 1 --cache-ram 0 --no-cache-idle-slots` — the default
 > prompt cache fragments the embedding KV cache (→ `GGML_ASSERT(task)` crash) and
 > continuous batching across slots hangs the server. Keep `-ub` ≤ 2048 (RADV
-> per-buffer limit). See the SciFact doc's "Serving fix" section.
+> per-buffer limit). (The HTTP `/v1/embeddings` path returns one vector per input by
+> construction; the `--no-escape` benchmark gotcha is CLI-only and does not affect
+> the server.)
 >
 > **Still provisional for the full cutover:** this is embedder-isolated retrieval
-> on one BEIR dataset; the full-pipeline ship-floor gate (rerank + fusion vs the
-> pplx baseline) remains the ship precondition.
+> (BEIR text + aimee's own code), not yet the full-pipeline ship-floor gate
+> (rerank + fusion vs the pplx baseline), which remains the ship precondition.
 
 **Reranker — decoupled, not part of the embed ladder.** The reranker scores
 `(query, candidate)` text pairs, so it is **dimension-agnostic** and need not scale
-with the embedder. Per the Qwen3 paper (Table 4), the **4B matches or beats the
-8B** (MTEB-R 69.76 vs 69.02; FollowIR 14.84 vs 8.05), so **8B is dropped
-entirely**, and the 0.6B is within ~3–4 pts of 4B on general retrieval (the gap is
-larger, ~8 pts, only on *code* retrieval).
+with the embedder. It runs **in the retrieval path of a user turn, so it must be
+real-time** (<~1s for the candidate set). That requirement **rules out the
+generative Qwen3-Reranker** — measured on the 7900XTX, its correct (yes/no-logit)
+scoring is ~320 ms/candidate → **top-20 = 4.4s**, and llama.cpp's native
+`/v1/rerank` scores it **incorrectly** (it is a yes/no causal LM, not a
+classifier-head cross-encoder, so the rank-pooling path is invalid — verified: an
+irrelevant doc scored highest).
 
-| Role | Default | Optional upgrade |
-|------|---------|------------------|
-| Reranker (all tiers) | `Qwen/Qwen3-Reranker-0.6B-GGUF` | `Qwen/Qwen3-Reranker-4B-GGUF` — an **embedder-independent** knob, recommended only for **code-heavy** deployments. **No 8B.** |
+The reranker is therefore **Ettin** (2025 ModernBERT cross-encoders — *already the
+pplx/ettin baseline family*; llama.cpp has native ModernBERT support). It is
+**correct *and* fast** via the native `/v1/rerank` endpoint, and is higher
+quality-per-param than both Qwen3-Reranker and bge-reranker-v2-m3 (published
+MTEB(eng, v2) nDCG@10: ettin-150m **0.599 > Qwen3-Reranker-0.6B 0.594**; ettin-32m
+**0.578 > bge-reranker-v2-m3 0.553**; ettin-1b 0.611 = mxbai-rerank-large-v2).
+
+> **Flash Attention is mandatory (`--flash-attn on`).** On this Vulkan build `-fa
+> auto` does **not** engage FA; forcing it on **~2× the GPU throughput** (ettin-400m:
+> 17 vs 36 ms/candidate). Every reranker `llama-server` launches with `-fa on`.
+
+| Tier | Reranker (GGUF) | Latency (measured, 7900XTX, `-fa on`) | quality (nDCG@10) |
+|------|-----------------|----------------------------------------|-------------------|
+| **GPU (default)** | `ettin-reranker-400m` | top-20 **0.34s** (17 ms/cand), top-50 ~0.85s | ~0.605 |
+| **CPU-only** | `ettin-reranker-68m` | top-10 **0.60s** (60 ms/cand); top-20 1.22s | ~0.589 |
+| CPU strict top-20 <1s | `ettin-reranker-32m` | top-20 ~0.76s | ~0.578 |
+| GPU max quality (opt-in) | `ettin-reranker-1b` | slower; = mxbai-large quality | ~0.611 |
+
+Both default tiers run the **native `/v1/rerank`** endpoint — one relevance score
+per `(query, candidate)` pair, **no chat template and no yes/no-logprob transform**
+(that machinery was specific to the rejected Qwen3-Reranker). Qwen3-Reranker is
+dropped from the real-time path; it remains usable only **async** (e.g. background
+memory re-ranking) where its quality is worth seconds of latency.
 
 **Synth ladder** (pinned to your specified models; MoE rows have low active params):
 
@@ -218,9 +258,11 @@ larger, ~8 pts, only on *code* retrieval).
 
 #### The 8B truncation — why 4000, and how it must be done
 
-> **Re-instated (2026-06-22):** the nomic-everywhere change is reverted (SciFact
-> shows Qwen3-Embedding wins — see the embed-ladder correction above), so the 8B
-> high tier and this truncation machinery are back in scope.
+> **Scope (2026-06-22):** the **GPU default is Qwen3-4B at 2560-d, which needs no
+> truncation** (it is under the 4000-d `halfvec` ceiling). This 4096→4000 machinery
+> applies **only when an operator opts into the 8B tier** (see the embed-ladder
+> "Basis" above — 8B buys ~0.2 nDCG over 4B for a 4096-d native vector). It is kept
+> because the 8B opt-in must store an indexable vector.
 
 Qwen3-Embedding-8B is **MRL-trained** (loss on first 512/1024/2048 + full 4096),
 so information front-loads into early dims; published guidance shows truncating to
@@ -271,10 +313,13 @@ replay source rows through the new embedder (bounded batch) → **gate the kb to
 
 #### Reranker contract + embedding acceptance gates (named, distinct)
 
-The Qwen3-Reranker mapping is **pinned, not deferred**: fixed chat template, fixed
-yes/no target tokens, `temperature=0`, documented logprob→score transform, and a
-query-side instruction prefix (query path only; pooling documented). Two
-**distinct** quality gates (do not conflate):
+The reranker mapping is **pinned, not deferred**: Ettin runs as a ModernBERT
+cross-encoder over the **native `/v1/rerank`** endpoint with **`--flash-attn on`** —
+one relevance score per `(query, candidate)` pair, **no chat template and no
+yes/no-logprob transform** (that machinery was specific to the rejected generative
+Qwen3-Reranker and is removed). The scoring contract the drift guard pins is
+therefore `(model_id, rerank-endpoint=/v1/rerank, fa=on)`. Two **distinct** quality
+gates (do not conflate):
 
 - **Ship-floor gate (≥95%)** — gates *replacing* pplx/ettin, and it is a
   **pre-cutover precondition** evaluated in staging/CI against the real corpus
@@ -442,14 +487,17 @@ We take the fold but pay down its cost:
   safety net for the cutover release, with the prior tag retained in the registry
   for a defined window.
 
-- **Embed = `Qwen3-Embedding-0.6B` default (1024-d) + `Qwen3-Embedding-8B` high
-  tier**, on **SciFact** evidence (nDCG@10 0.883 8B > 0.820 0.6B > 0.799 nomic;
-  even the 0.6B beats nomic) — see embedder-gate-scifact. The earlier
-  "nomic-everywhere" (PR #613, LoCoMo-based) is **reverted**: LoCoMo
-  under-discriminates and the Qwen3 runs were also hit by a llama.cpp serving
-  config bug (`--cache-idle-slots`/`--cache-ram` fragment the embedding KV →
-  `GGML_ASSERT(task)` crash). The embedder must run with
-  `-np 1 --cache-ram 0 --no-cache-idle-slots`. Full-pipeline ship-floor gate still
+- **Embed = `Qwen3-Embedding-0.6B` CPU default (1024-d), `Qwen3-Embedding-4B` GPU
+  default (2560-d), `Qwen3-Embedding-8B` operator opt-in (4000-d trunc).** Baseline-
+  gated against published numbers — see embedder-gate-scifact. Decisive axis is
+  **code** (aimee embeds raw code): nomic is text-only and loses by +9..+63 nDCG on
+  code (and +12.7 on aimee's own code), so **nomic is dropped**. On aimee-code the
+  ladder is 0.6B 0.697 → 4B 0.759 → 8B 0.761, i.e. **4B≈8B (+0.16, noise)** so 4B is
+  the GPU default (8B's 4096-d isn't worth ~0.2 nDCG); 8B is opt-in only. Both the
+  earlier "nomic-everywhere" (#613, LoCoMo) and the capped-SciFact "0.883/0.820/0.799"
+  revert (#617) are **withdrawn** as wrong/artifactual. Serving must run with
+  `-np 1 --cache-ram 0 --no-cache-idle-slots` (else the prompt cache fragments the
+  embedding KV → `GGML_ASSERT(task)` crash). Full-pipeline ship-floor gate still
   pending.
 - **Curator fold: take it** as an isolated supervised process + RBAC; off-box
   synth via forward/external; sidecar fallback = kernel-compromise response.
@@ -461,10 +509,13 @@ We take the fold but pay down its cost:
 - **CPU synth default = Gemma 4 E4B** via the ungated `ggml-org` GGUF mirror (no
   `HF_TOKEN`); the separate "ungated fallback" model is dropped.
 - **Synth models pinned** to the operator's spec: Gemma 4 **E4B (CPU)**, Gemma 4
-  12B / 26B-A4B / Qwen3.6 35B-A3B (GPU-S/M/L). **Reranker decoupled and shrunk:
-  0.6B default everywhere, 4B optional for code-heavy, 8B dropped** (4B ≥ 8B per
-  Qwen3 Table 4); the reranker guard is keyed on `(model_id, scoring-contract)`,
-  not dim.
+  12B / 26B-A4B / Qwen3.6 35B-A3B (GPU-S/M/L). **Reranker = Ettin (ModernBERT
+  cross-encoder), NOT Qwen3-Reranker**: GPU default `ettin-reranker-400m`, CPU-only
+  `ettin-reranker-68m`, both `--flash-attn on`. Real-time on the 7900XTX (ettin-400m
+  top-20 0.34s; ettin-68m top-10 0.60s) and correct/fast via native `/v1/rerank` —
+  Qwen3-Reranker is generative (~320 ms/cand, top-20 4.4s) and llama.cpp's native
+  rerank scores it wrong, so it is dropped from the real-time path. The reranker
+  guard is keyed on `(model_id, scoring-contract)`, not dim.
 - **Streaming disabled** in the first release.
 - **Two named gates:** ship-floor ≥95% (replace pplx/ettin) vs tier-cutoff ≥99%
   (enable 8B truncated tier).
@@ -504,8 +555,10 @@ We take the fold but pay down its cost:
   operator's spec — Gemma 4 E4B (CPU, **ungated `ggml-org` mirror → no `HF_TOKEN`**,
   so the rev-5 "ungated fallback" model is dropped and E4B is the plain CPU
   default), Gemma 4 12B / 26B-A4B / Qwen3.6 35B-A3B (GPU-S/M/L). **Decoupled the
-  reranker** from the embed ladder (it is dimension-agnostic): **0.6B default on all
-  tiers, 4B optional for code-heavy, 8B dropped** (per Qwen3 Table 4 the 4B ≥ 8B).
+  reranker** from the embed ladder (it is dimension-agnostic): **Ettin ModernBERT
+  cross-encoder — `ettin-reranker-400m` (GPU) / `ettin-reranker-68m` (CPU), both
+  `-fa on`; Qwen3-Reranker dropped from the real-time path** (too slow + native
+  rerank scores it wrong).
   Embed GGUF repos named. Updated §2 ladders, §5 (retitled "GPU detection &
   sizing"), "What this removes", Migration, Decisions.
 - **rev 6 (2026-06-21):** roundtable **signed off** (round 5: 0 blocking/high/medium,
