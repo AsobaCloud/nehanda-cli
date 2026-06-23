@@ -112,6 +112,9 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-wfe-delegate-seam \
                $(TESTPREFIX)/unit-test-wfe-scheduler \
                $(TESTPREFIX)/unit-test-wfe-random-delegate \
+               $(TESTPREFIX)/unit-test-wfe-gate-reject \
+               $(TESTPREFIX)/unit-test-wfe-gate-apply \
+               $(TESTPREFIX)/unit-test-workflow-gate-caps \
                $(TESTPREFIX)/unit-test-wfe-webapi \
                $(TESTPREFIX)/unit-test-cli-profile \
                $(TESTPREFIX)/unit-test-cmd-profile \
@@ -1058,7 +1061,7 @@ $(TESTPREFIX)/unit-test-server-compute: $(OBJDIR)/tests/test_server_compute.o $(
                                $(OBJDIR)/aimee_home.o \
                                $(OBJDIR)/model_registry.o $(OBJDIR)/models_dev.o $(OBJDIR)/models_dev_cache.o \
                                $(OBJDIR)/platform_random.o $(OBJDIR)/log.o $(PLATFORM_BASIC_OBJS) $(OBJDIR)/cJSON.o $(OBJDIR)/server/presence.o $(OBJDIR)/server/turn_registry.o $(OBJDIR)/tests/support/agent_cancel_stub.o $(OBJDIR)/delivery_target.o \
-                               $(OBJDIR)/server/workspace_turn.o $(OBJDIR)/server/workspace_provider_detached.o \
+                               $(OBJDIR)/server/workspace_turn.o $(OBJDIR)/tests/support/git_cred_inject_stub.o $(OBJDIR)/server/workspace_provider_detached.o \
                                $(OBJDIR)/server/workspace_runner_registry.o $(OBJDIR)/server/workspace_runner_queue.o \
                                $(OBJDIR)/workspace_mirror.o $(OBJDIR)/forge_credentials.o $(OBJDIR)/server/git_host_resolve.o \
                                $(OBJDIR)/posix/workspace_provider.o $(OBJDIR)/json_fluent.o
@@ -1153,6 +1156,25 @@ $(TESTPREFIX)/unit-test-wfe-random-delegate: $(OBJDIR)/tests/test_wfe_random_del
                                     $(OBJDIR)/server/wfe_delegate_resolve.o
 	$(TESTLINK) -o $@ $^ $(L_MINIMAL)
 
+# Human-gate reject routing (retry_on_reject): pure def-query, no DB.
+$(TESTPREFIX)/unit-test-wfe-gate-reject: $(OBJDIR)/tests/test_wfe_gate_reject.o \
+                                    $(OBJDIR)/workflow/wfe_def.o $(OBJDIR)/workflow/wfe_iface.o \
+                                    $(OBJDIR)/workflow/wfe_validate.o $(OBJDIR)/workflow/wfe_canonical.o \
+                                    $(OBJDIR)/workflow/wfe_custom.o $(OBJDIR)/aimee_home.o \
+                                    $(OBJDIR)/yaml.o $(OBJDIR)/dstr.o $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+# Atomic guarded human-gate transition (DB1-backed).
+$(TESTPREFIX)/unit-test-wfe-gate-apply: $(OBJDIR)/tests/test_wfe_gate_apply.o \
+                                    $(OBJDIR)/db1/db1_init.o $(OBJDIR)/db1/db_schema.o \
+                                    $(OBJDIR)/db1/wfe_store.o $(OBJDIR)/aimee_home.o \
+                                    $(OBJDIR)/dstr.o $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+# Capability invariant for the gate route (compile-time _Static_assert).
+$(TESTPREFIX)/unit-test-workflow-gate-caps: $(OBJDIR)/tests/test_workflow_gate_caps.o
+	$(TESTLINK) -o $@ $^ $(L_MINIMAL)
+
 # Workflow visual composer (W7): /v1/workflow read+author handlers.
 $(TESTPREFIX)/unit-test-wfe-webapi: $(OBJDIR)/tests/test_wfe_webapi.o \
                                     $(OBJDIR)/server/server_workflow_api.o \
@@ -1205,7 +1227,7 @@ $(TESTPREFIX)/unit-test-trace-analysis: $(OBJDIR)/tests/test_trace_analysis.o $(
 
 $(TESTPREFIX)/unit-test-cmd-branch: $(OBJDIR)/tests/test_cmd_branch.o $(OBJDIR)/cmd_branch.o \
                            $(OBJDIR)/cmd_util.o $(TEST_DATA_OBJS) $(TEST_WORKSPACE_OBJS_EXTRA) \
-                           $(OBJDIR)/mcp_git_query.o $(OBJDIR)/forge_credentials.o $(OBJDIR)/server/git_host_resolve.o $(OBJDIR)/mcp_git_write.o \
+                           $(OBJDIR)/mcp_git_query.o $(OBJDIR)/tests/support/git_cred_inject_stub.o $(OBJDIR)/forge_credentials.o $(OBJDIR)/server/git_host_resolve.o $(OBJDIR)/mcp_git_write.o \
                            $(OBJDIR)/mcp_git_branch.o $(OBJDIR)/mcp_git_pr.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
@@ -1214,7 +1236,7 @@ $(TESTPREFIX)/unit-test-cmd-core: $(OBJDIR)/tests/test_cmd_core.o $(TEST_DATA_OB
                          $(OBJDIR)/cmd_util.o $(OBJDIR)/cmd_work.o \
                          $(OBJDIR)/cmd_infra.o \
                          $(OBJDIR)/cmd_init.o \
-                         $(OBJDIR)/mcp_git_query.o $(OBJDIR)/forge_credentials.o $(OBJDIR)/server/git_host_resolve.o $(OBJDIR)/mcp_git_write.o \
+                         $(OBJDIR)/mcp_git_query.o $(OBJDIR)/tests/support/git_cred_inject_stub.o $(OBJDIR)/forge_credentials.o $(OBJDIR)/server/git_host_resolve.o $(OBJDIR)/mcp_git_write.o \
                          $(OBJDIR)/mcp_git_branch.o $(OBJDIR)/mcp_git_pr.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
@@ -1226,7 +1248,7 @@ $(TESTPREFIX)/unit-test-cmd-work: $(OBJDIR)/tests/test_cmd_work.o $(TEST_DATA_OB
 $(TESTPREFIX)/unit-test-client-integrations: $(OBJDIR)/tests/test_client_integrations.o $(TEST_CORE_OBJS)
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
-$(TESTPREFIX)/unit-test-mcp-git: $(OBJDIR)/tests/test_mcp_git.o $(OBJDIR)/mcp_git_query.o $(OBJDIR)/forge_credentials.o $(OBJDIR)/server/git_host_resolve.o $(OBJDIR)/mcp_git_write.o \
+$(TESTPREFIX)/unit-test-mcp-git: $(OBJDIR)/tests/test_mcp_git.o $(OBJDIR)/mcp_git_query.o $(OBJDIR)/tests/support/git_cred_inject_stub.o $(OBJDIR)/forge_credentials.o $(OBJDIR)/server/git_host_resolve.o $(OBJDIR)/mcp_git_write.o \
                         $(OBJDIR)/mcp_git_branch.o $(OBJDIR)/mcp_git_pr.o $(OBJDIR)/git_verify.o $(OBJDIR)/git_verify_config.o \
                         $(OBJDIR)/git_verify_jobs.o $(OBJDIR)/git_verify_hook.o $(OBJDIR)/git_verify_ops.o \
                         $(OBJDIR)/git_verify_select.o $(OBJDIR)/git_verify_step.o $(OBJDIR)/server/compute_pool.o \
@@ -1459,7 +1481,7 @@ $(TESTPREFIX)/unit-test-cmd-doctor: $(OBJDIR)/tests/test_cmd_doctor.o $(OBJDIR)/
                             $(OBJDIR)/cmd_util.o $(TEST_DATA_OBJS) $(TEST_WORKSPACE_OBJS_EXTRA) \
                             $(OBJDIR)/client_integrations.o $(OBJDIR)/db1/secrets.o \
                             $(OBJDIR)/server/kb_client.o $(OBJDIR)/server/kb_client_cache.o $(OBJDIR)/server/kb_client_index.o $(OBJDIR)/code_collect.o $(OBJDIR)/server/kb_client_memory.o $(OBJDIR)/server/kb_client_memory_mutations.o $(OBJDIR)/server/kb_client_agent.o $(OBJDIR)/server/kb_client_dashboard.o $(OBJDIR)/server/kb_client_tasks.o $(OBJDIR)/server/kb_client_data.o $(OBJDIR)/cli_client.o $(OBJDIR)/posix/cli_client.o $(OBJDIR)/aimee_tls.o $(OBJDIR)/codex_auth.o \
-                            $(OBJDIR)/mcp_git_query.o $(OBJDIR)/forge_credentials.o $(OBJDIR)/server/git_host_resolve.o $(OBJDIR)/mcp_git_write.o \
+                            $(OBJDIR)/mcp_git_query.o $(OBJDIR)/tests/support/git_cred_inject_stub.o $(OBJDIR)/forge_credentials.o $(OBJDIR)/server/git_host_resolve.o $(OBJDIR)/mcp_git_write.o \
                             $(OBJDIR)/mcp_git_branch.o $(OBJDIR)/mcp_git_pr.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
@@ -1470,7 +1492,7 @@ $(TESTPREFIX)/unit-test-cmd-onboard: $(OBJDIR)/tests/test_cmd_onboard.o \
                             $(DB2_OBJS) \
                             $(TEST_DATA_OBJS) $(TEST_WORKSPACE_OBJS_EXTRA) \
                             $(OBJDIR)/client_integrations.o $(OBJDIR)/db1/secrets.o \
-                            $(OBJDIR)/mcp_git_query.o $(OBJDIR)/forge_credentials.o $(OBJDIR)/server/git_host_resolve.o $(OBJDIR)/mcp_git_write.o \
+                            $(OBJDIR)/mcp_git_query.o $(OBJDIR)/tests/support/git_cred_inject_stub.o $(OBJDIR)/forge_credentials.o $(OBJDIR)/server/git_host_resolve.o $(OBJDIR)/mcp_git_write.o \
                             $(OBJDIR)/mcp_git_branch.o $(OBJDIR)/mcp_git_pr.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
@@ -1543,7 +1565,7 @@ $(TESTPREFIX)/unit-test-workspace-runner-registry: \
 	$(TESTLINK) -o $@ $^ $(L_MINIMAL)
 
 $(TESTPREFIX)/unit-test-workspace-turn: $(OBJDIR)/tests/test_workspace_turn.o \
-                      $(OBJDIR)/server/workspace_turn.o \
+                      $(OBJDIR)/server/workspace_turn.o $(OBJDIR)/tests/support/git_cred_inject_stub.o \
                       $(OBJDIR)/server/workspace_provider_detached.o \
                       $(OBJDIR)/server/workspace_runner_registry.o \
                       $(OBJDIR)/server/workspace_runner_queue.o \
