@@ -832,7 +832,7 @@ function PluginsPanel({ open, plugins, loading, error, onToggle, onRefresh, onPl
 
 /* ---- Working indicator ---- */
 
-function WorkingIndicator() {
+function WorkingIndicator({ status }: { status?: string }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 14px', color: tokens.primary, fontSize: '13px', alignSelf: 'flex-start' }}>
       <div style={{ display: 'inline-flex', gap: '4px' }}>
@@ -846,7 +846,9 @@ function WorkingIndicator() {
           />
         ))}
       </div>
-      Working
+      {/* The condensed live spinner line when the CLI is actively working;
+          plain "Working" otherwise. */}
+      <span style={{ whiteSpace: 'pre-wrap' }}>{status && status.trim() ? status : 'Working'}</span>
       <style>{`
         @keyframes pulse {
           0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
@@ -1448,7 +1450,17 @@ export default function Chat() {
   // aimeeSid, so the busy indicator reflects the ACTIVE tab alone — sending on one
   // tab no longer shows "working" on every other tab. Derived values below.
   const [workBySid, setWorkBySid] = useState<Record<string, SidWork>>({});
+  // Transient live-activity line (condensed tmux-CLI spinner, e.g. "Misting…
+  // (1m 5s · ↓ 2.6k tokens · thinking)") keyed by the owning tab's aimeeSid. Set
+  // from `status` SSE events, cleared at each turn boundary. Shown inside the
+  // working indicator so a long thinking phase reads as live, not frozen.
+  const [statusBySid, setStatusBySid] = useState<Record<string, string>>({});
+  // Every tab's latest live-activity line, kept off the render path so an
+  // off-screen turn's spinner never re-renders the active view. Only the active
+  // tab is mirrored into statusBySid (above); a tab switch hydrates from here.
+  const statusByOwnerRef = useRef<Map<string, string>>(new Map());
   const activeWork = workBySid[tabs[activeIdx]?.aimeeSid ?? ''];
+  const activeStatus = statusBySid[tabs[activeIdx]?.aimeeSid ?? ''] ?? '';
   const working = !!activeWork && (activeWork.pending > 0 || activeWork.queued > 0);
   const iterCur = activeWork?.iterCur ?? 0;
   const iterMax = activeWork?.iterMax ?? 0;
@@ -1830,6 +1842,15 @@ export default function Chat() {
         if (!active && iterCur === 0 && iterMax === 0) continue;
         next[sid] = { pending: p, queued: q, iterCur, iterMax };
       }
+      // Bail if nothing changed: this runs on every drained item, and returning a
+      // fresh object each time forces a needless whole-Chat re-render.
+      const pk = Object.keys(prev);
+      const nk = Object.keys(next);
+      if (pk.length === nk.length && pk.every(k => {
+        const a = prev[k], b = next[k];
+        return b && a.pending === b.pending && a.queued === b.queued &&
+          a.iterCur === b.iterCur && a.iterMax === b.iterMax;
+      })) return prev;
       return next;
     });
   }
@@ -1839,6 +1860,29 @@ export default function Chat() {
     setWorkBySid(prev => {
       const cur = prev[sid] ?? { pending: 0, queued: 0, iterCur: 0, iterMax: 0 };
       return { ...prev, [sid]: { ...cur, iterCur, iterMax } };
+    });
+  }
+
+  /* Set (or clear, with '') the transient live-activity line for a tab.
+   *
+   * Only the ACTIVE tab's status drives React state. A background tab's spinner
+   * is never shown, so calling setState for it would re-render the whole Chat on
+   * every poll of every off-screen turn — that is the cost that scales with tab
+   * count (N concurrent turns → N× wasted full re-renders/s). Instead every tab's
+   * latest status is kept in a ref (no re-render); a tab switch hydrates state
+   * from it, and the entering tab's own live stream repaints within one poll. */
+  function setSidStatus(sid: string, status: string): void {
+    if (!sid) return;
+    if (status) statusByOwnerRef.current.set(sid, status);
+    else statusByOwnerRef.current.delete(sid);
+    const activeSid = tabsRef.current[activeIdxRef.current]?.aimeeSid ?? '';
+    if (sid !== activeSid) return;
+    setStatusBySid(prev => {
+      if ((prev[sid] ?? '') === status) return prev;
+      const next = { ...prev };
+      if (status) next[sid] = status;
+      else delete next[sid];
+      return next;
     });
   }
 
@@ -1854,6 +1898,8 @@ export default function Chat() {
     activeSendAbortRefs.current.forEach((_sid, controller) => controller.abort());
     activeSendAbortRefs.current.clear();
     setWorkBySid({});
+    statusByOwnerRef.current.clear();
+    setStatusBySid({});
   }
 
   useEffect(() => {
@@ -2127,6 +2173,11 @@ export default function Chat() {
     if (oldSid === newSid) return;
     if (oldSid) bgStreamsRef.current.set(oldSid, streamMsgsRef.current);
     renderedSidRef.current = newSid;
+    // Surface the entering tab's latest status (tracked in the ref while it was a
+    // background tab). statusBySid only ever holds the active tab, so reset it to
+    // just this one.
+    const enteringStatus = statusByOwnerRef.current.get(newSid) ?? '';
+    setStatusBySid(enteringStatus ? { [newSid]: enteringStatus } : {});
     skipNextStreamPersistRef.current = true;
     const buffered = bgStreamsRef.current.get(newSid);
     if (buffered) {
@@ -2711,15 +2762,31 @@ export default function Chat() {
       else e.think += u.delta;
       byId.set(u.id, e);
     }
-    const applyDeltas = (msgs: StreamMsg[], byId: Map<number, { text: string; think: string }>): StreamMsg[] =>
-      msgs.map(m => {
-        const e = byId.get(m.id);
-        if (!e) return m;
-        const next = { ...m };
-        if (e.text) next.text = m.text + e.text;
-        if (e.think) next.thinkText = (m.thinkText ?? '') + e.think;
-        return next;
-      });
+    // Only the messages that received a delta change — in practice the 1–2 tail
+    // blocks of the turn (the streaming assistant bubble, maybe a thinking
+    // block). The whole conversation lives in `msgs` (windowing is render-only),
+    // so map()-ing a closure + Map.get over the FULL history every flush is
+    // O(history) of wasted work — and it runs for EVERY streaming tab ~10×/s, so
+    // it scales with running-tab count × session length, pegging a core. Instead
+    // copy the array once (cheap pointer copy) and rewrite only the matching
+    // indices, scanning from the tail and stopping once every delta is placed.
+    const applyDeltas = (msgs: StreamMsg[], byId: Map<number, { text: string; think: string }>): StreamMsg[] => {
+      if (byId.size === 0) return msgs;
+      let next: StreamMsg[] | null = null;
+      let remaining = byId.size;
+      for (let i = msgs.length - 1; i >= 0 && remaining > 0; i--) {
+        const e = byId.get(msgs[i].id);
+        if (!e) continue;
+        if (!next) next = msgs.slice();
+        const m = msgs[i];
+        const nm = { ...m };
+        if (e.text) nm.text = m.text + e.text;
+        if (e.think) nm.thinkText = (m.thinkText ?? '') + e.think;
+        next[i] = nm;
+        remaining--;
+      }
+      return next ?? msgs;
+    };
     const activeSid = tabsRef.current[activeIdxRef.current]?.aimeeSid ?? '';
     for (const [owner, byId] of byOwner) {
       if (owner === activeSid) {
@@ -2750,6 +2817,13 @@ export default function Chat() {
         streamRefs.assistantId = null;
         streamRefs.thinkId = null;
         streamRefs.toolId = null;
+        setSidStatus(streamRefs.originSid, '');
+        break;
+      }
+      case 'status': {
+        // Transient live-activity line from a tmux CLI turn: replace in place
+        // (one rolling indicator), never appended to the transcript.
+        setSidStatus(streamRefs.originSid, String(data.content ?? ''));
         break;
       }
       case 'tool_start': {
@@ -2820,6 +2894,7 @@ export default function Chat() {
         streamRefs.assistantId = null;
         streamRefs.thinkId = null;
         streamRefs.toolId = null;
+        setSidStatus(streamRefs.originSid, '');
         break;
       }
       case 'error': {
@@ -2901,6 +2976,7 @@ export default function Chat() {
       }
       case 'done': {
         saveOwnerStream(streamRefs.originSid);
+        setSidStatus(streamRefs.originSid, '');
         void refreshWorkflow();
         /* Refresh LSP diagnostic badge after each completed turn */
         fetch('/api/lsp/diagnostics/summary')
@@ -3034,7 +3110,7 @@ export default function Chat() {
           </button>
         )}
         <Transcript messages={windowedMsgs} working={working} activeSid={tabs[activeIdx]?.aimeeSid ?? ''} />
-        {working && <WorkingIndicator />}
+        {working && <WorkingIndicator status={activeStatus} />}
         {remoteTurnActive && !working && (
           <div style={{
             alignSelf: 'flex-start', maxWidth: '85%', padding: '6px 10px',
