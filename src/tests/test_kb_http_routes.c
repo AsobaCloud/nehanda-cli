@@ -9,6 +9,7 @@
 #include "config.h"
 #include "cJSON.h"
 #include "kb_http.h"
+#include "db2/lifecycle.h" /* §2c: db2_reembed_* / db2_dim_change_reset stub types */
 #include "kb_service.h"
 #include "kb_bandit.h"
 #include "kb_service_backend.h"
@@ -277,6 +278,79 @@ int kb_curator_contradictions_json(int limit, char *out, size_t out_cap)
    (void)limit;
    snprintf(out, out_cap, "{\"contradictions\":[{\"a\":\"c1\",\"b\":\"c2\"}]}");
    return 1;
+}
+
+/* §2c: stubs for the new /v1/reembed + /v1/search-guard db2 refs in kb_http.o.
+ * g_test_reembed_in_progress lets a test drive the maintenance marker so the
+ * /v1/search 503 guard can be exercised deterministically. */
+static int g_test_reembed_in_progress = 0;
+int db2_reembed_in_progress_get(int *target_dim, long *started_epoch)
+{
+   if (g_test_reembed_in_progress)
+   {
+      if (target_dim)
+         *target_dim = 1024;
+      if (started_epoch)
+         *started_epoch = 1750000000L;
+      return 1; /* in progress -> search path 503s */
+   }
+   (void)target_dim;
+   (void)started_epoch;
+   return 0; /* not in progress -> search path proceeds */
+}
+int db2_dim_change_reset(int target_dim, int force, int dry_run, db2_reembed_plan_t *out)
+{
+   (void)force;
+   (void)dry_run;
+   if (out)
+   {
+      memset(out, 0, sizeof(*out));
+      out->target_dim =
+          target_dim; /* echo the resolved target so target_dim override is observable */
+   }
+   return 0;
+}
+int db2_reembed_in_progress_clear(void)
+{
+   g_test_reembed_in_progress = 0;
+   return 0;
+}
+/* Test-controllable recorded/running dims for the clear-maintenance consistency gate. */
+static int g_test_recorded_dim = 1024;
+static int g_test_running_dim = 1024;
+int db2_reembed_clear_maintenance(int force, int *was_in_progress, int *recorded, int *running)
+{
+   if (was_in_progress)
+      *was_in_progress = g_test_reembed_in_progress;
+   if (recorded)
+      *recorded = g_test_recorded_dim;
+   if (running)
+      *running = g_test_running_dim;
+   if (g_test_recorded_dim > 0 && g_test_recorded_dim != g_test_running_dim && !force)
+      return -1; /* mismatch needs force */
+   g_test_reembed_in_progress = 0;
+   return 0;
+}
+int db2_embedding_dim(void)
+{
+   return 1024;
+}
+int db2_probe_embedder_dim(int budget_ms, int *out)
+{
+   (void)budget_ms;
+   if (out)
+      *out = 1024;
+   return 0;
+}
+int config_resolve_embedding_dim(const config_t *cfg)
+{
+   (void)cfg;
+   return 0;
+}
+int config_embedding_dim_is_pinned(const config_t *cfg)
+{
+   (void)cfg;
+   return 0;
 }
 
 int db2_curator_invalidations_since(int64_t since_id, void *out, int max)
@@ -742,9 +816,13 @@ void kb_curator_queue_code_units_for_project(const char *project, const char *ro
    g_curator_code_queued++;
 }
 
+/* §2c: lets a test flip kb.reembed_on_dim_change so the /v1/reembed gate
+ * (403 when off, proceeds when on) can be exercised both ways. */
+static int g_test_reembed_enabled = 0;
 int config_load(config_t *cfg)
 {
    memset(cfg, 0, sizeof(*cfg));
+   cfg->kb_reembed_on_dim_change = g_test_reembed_enabled;
    cfg->kb_curator_extract_docs_enabled = 1;
    cfg->kb_curator_extract_code_enabled = 1;
    cfg->demotion_enabled = 1;
@@ -1772,98 +1850,9 @@ static void test_curator_routes(void)
    printf("  PASS: /v1/implements,/v1/synthesize,/v1/contradictions routes\n");
 }
 
-static void test_search_ok(void)
-{
-   char buf[1024];
-   int s = kb_http_route_ex("POST", "/v1/search", NULL, NULL, NULL, "{\"query\":\"foo\"}", 15, buf,
-                            sizeof(buf));
-   assert(s == 200);
-   assert(strstr(buf, "\"hits\"") != NULL);
-   assert(strstr(buf, "\"fusion_mode_used\"") != NULL);
-}
-
-static void test_search_missing_query(void)
-{
-   char buf[256];
-   int s = kb_http_route_ex("POST", "/v1/search", NULL, NULL, NULL, "{}", 2, buf, sizeof(buf));
-   assert(s == 400);
-}
-
-static void test_search_wrong_method(void)
-{
-   char buf[256];
-   int s = kb_http_route_ex("GET", "/v1/search", NULL, NULL, NULL, NULL, 0, buf, sizeof(buf));
-   assert(s == 405);
-}
-
-static void test_artifact_not_found(void)
-{
-   char buf[256];
-   int s = kb_http_route_ex("GET", "/v1/artifacts/no-such-uuid", NULL, NULL, NULL, NULL, 0, buf,
-                            sizeof(buf));
-   assert(s == 404);
-}
-
-static void test_artifact_links_ok(void)
-{
-   char buf[512];
-   int s = kb_http_route_ex("GET", "/v1/artifacts/some-uuid/links", NULL, NULL, NULL, NULL, 0, buf,
-                            sizeof(buf));
-   assert(s == 200);
-   assert(strstr(buf, "\"links\"") != NULL);
-}
-
-static void test_code_find_missing_identifier(void)
-{
-   char buf[256];
-   int s = kb_http_route_ex("GET", "/v1/code/find", "", NULL, NULL, NULL, 0, buf, sizeof(buf));
-   assert(s == 400);
-}
-
-static void test_code_find_ok(void)
-{
-   char buf[512];
-   int s = kb_http_route_ex("GET", "/v1/code/find", "identifier=foo", NULL, NULL, NULL, 0, buf,
-                            sizeof(buf));
-   assert(s == 200);
-   assert(strstr(buf, "\"hits\"") != NULL);
-   assert(strstr(buf, "\"project\":\"proj-alpha\"") != NULL);
-   assert(strstr(buf, "\"file_path\":\"src/main.c\"") != NULL);
-   assert(strstr(buf, "\"line\":12") != NULL);
-   assert(strstr(buf, "\"kind\":\"function\"") != NULL);
-}
-
-static void test_code_projects_wrong_method(void)
-{
-   char buf[256];
-   int s = kb_http_route_ex("POST", "/v1/code/projects", "", NULL, NULL, NULL, 0, buf, sizeof(buf));
-   assert(s == 405);
-}
-
-static void test_code_projects_ok(void)
-{
-   char buf[512];
-   int s = kb_http_route_ex("GET", "/v1/code/projects", "max_results=4", NULL, NULL, NULL, 0, buf,
-                            sizeof(buf));
-   assert(s == 200);
-   assert(strstr(buf, "\"status\":\"ok\"") != NULL);
-   assert(strstr(buf, "\"projects\"") != NULL);
-   assert(strstr(buf, "\"name\":\"proj-alpha\"") != NULL);
-   assert(strstr(buf, "\"root\":\"/repo/proj-alpha\"") != NULL);
-   assert(strstr(buf, "\"scanned_at\":\"2026-05-26 00:00:00\"") != NULL);
-   assert(strstr(buf, "\"next_cursor\":null") != NULL);
-}
-
-static void test_code_structure_missing_params(void)
-{
-   char buf[256];
-   int s = kb_http_route_ex("GET", "/v1/code/structure", "", NULL, NULL, NULL, 0, buf, sizeof(buf));
-   assert(s == 400);
-   assert(strstr(buf, "missing project") != NULL);
-}
-
 #include "test_kb_http_routes_code.inc"
 #include "test_kb_http_routes_endpoints.inc"
+#include "test_kb_http_routes_search.inc"
 int main(void)
 {
    printf("kb_http_routes: ");
@@ -1890,6 +1879,13 @@ int main(void)
    test_curator_routes();
    test_invalidations_route();
    test_search_ok();
+   test_search_503_while_reembed_in_progress();
+   test_reembed_wrong_method();
+   test_reembed_disabled_by_default();
+   test_reembed_enabled_no_confirm_is_dry_run();
+   test_reembed_target_dim_override();
+   test_reembed_clear_maintenance();
+   test_reembed_clear_maintenance_dim_mismatch_needs_force();
    test_search_missing_query();
    test_search_wrong_method();
    test_artifact_not_found();
