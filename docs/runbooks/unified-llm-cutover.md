@@ -54,18 +54,17 @@ docker build -f Dockerfile.aimee-llm -t aimee-llm:gpu \
 
 ## 3. Deploy to `.254` (tierd / LXC, GPU)
 
-`.254` runs containers via **tierd** (LXC), not raw docker, with GPU passthrough via
-`/dev/dri/renderD128` (Vulkan/RADV — **not** ROCm/`kfd`). Deploy the GPU image as a tierd
-plugin (manifest-swap, per the `.254` deploy memory) + `AIMEE_LLM_NGL=99`. The in-repo
-manifest is `deploy/smoothnas/aimee-llm.plugin.yaml` (pin its image to `:testing` for
-staging, `:latest`/`:<version>` for production). GPU passthrough is delivered as an operator
-profile, not a manifest device field (the manifest has no `devices` surface) — install it
-FIRST or the plugin install fails with `profile "aimee-gpu" not in catalog`:
-`sudo cp deploy/smoothnas/aimee-gpu.profile.yaml /etc/smoothnas/plugin-profiles.d/aimee-gpu.yaml`.
-That profile is render-node-number-agnostic (whole-`/dev/dri` bind + a wildcard DRM cgroup
-allow), so it survives a `renderD128` → `renderD129` renumber rather than pinning a node
-path; Vulkan/RADV inside the container enumerates whatever node is present.
-Point the kb at it: `AIMEE_EMBEDDER_URL=http://aimee-llm:8080` (the gateway preserves the
+`.254` runs containers via **tierd** (LXC), not raw docker, with GPU passthrough via the
+Vulkan/RADV render path (**not** ROCm/`kfd`). Deploy the GPU image as a tierd plugin
+(manifest-swap, per the `.254` deploy memory) + `AIMEE_LLM_NGL=99`. The in-repo manifest is
+`deploy/smoothnas/aimee-llm.plugin.yaml` (pin its image to `:testing` for staging,
+`:latest`/`:<version>` for production). GPU passthrough uses the **built-in `gpu-amd`
+profile** (compiled into tierd — the one Wolf/Steam use), so there is no custom profile to
+install and no node path to pin; verified on .254 the container enumerates `Vulkan0 : AMD
+Radeon Graphics (RADV GFX1100)` and offloads to VRAM. The gateway is host-published on
+**:8742** (NOT :8080 — Wolf's WolfLeash UI host-publishes 8080, and two plugins on one host
+port silently collide: the runtime DNATs both, one wins and the other is unreachable though
+"running"). Point the kb at it: `AIMEE_EMBEDDER_URL=http://10.100.0.1:8742` (the gateway preserves the
 `/embed`+`/embed_batch`+`/rerank` contract, so `embed-remote.py`/`rerank-remote.py` are
 untouched). Set the kb's `embedding_model` to the new identity (activates the P1 guard) and
 `embedding_dim` to the tier's dim (2560 for the 4B GPU tier). **Verify the URL actually
