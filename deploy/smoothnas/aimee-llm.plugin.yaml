@@ -1,0 +1,63 @@
+apiVersion: smoothnas.io/v1
+kind: Plugin
+metadata:
+  name: aimee-llm
+  version: 0.2.57
+  description: >-
+    aimee-llm — the unified Vulkan llama.cpp container: one GPU-offloaded
+    runtime + the aimee-llm gateway, serving embeddings (/embed, /embed_batch),
+    reranking (/rerank), and synthesis (/v1/chat/completions) from baked-in
+    GGUFs. Replaces the torch aimee-embedder + the standalone llama.cpp `llm`
+    container. The aimee-kb plugin points AIMEE_EMBEDDER_URL at this service.
+    GPU tier (.254): Qwen3-Embedding-4B (2560-dim) + ettin-reranker-400m +
+    gemma-4-12B, offloaded to the AMD 7900 XTX via Vulkan/RADV (AIMEE_LLM_NGL=99).
+  vendor: RakuenSoftware
+  homepage: https://github.com/RakuenSoftware/aimee
+profiles:
+  - default-limits
+  - aimee-stack
+  # GPU passthrough is delivered as an operator PluginProfile, NOT a manifest
+  # field: the smoothnas plugin manifest has no devices/ulimits surface (see the
+  # aimee-stack profile's own note), so device plumbing rides on lxc.rawConfig in
+  # a profile. Drop deploy/smoothnas/aimee-gpu.profile.yaml into
+  # /etc/smoothnas/plugin-profiles.d/ on the host BEFORE installing this plugin,
+  # else the install fails with `profile "aimee-gpu" not in catalog`. That profile
+  # is render-node-number-AGNOSTIC (binds the whole /dev/dri + a wildcard DRM
+  # cgroup allow), so it survives a renderD128 -> renderD129 renumber, a reboot,
+  # or an added GPU — which a hardcoded /dev/dri/renderD128 would not.
+  - aimee-gpu
+services:
+  - name: llm
+    artifact:
+      type: oci-image
+      # Versioned + :latest publishing is owned by main (auto-release.yml ->
+      # publish-images.yml). On `testing`, pin to :testing instead to validate a
+      # tested-but-unreleased build (publish-llm-testing.yml).
+      image: ghcr.io/rakuensoftware/aimee-llm-gpu:latest
+    container:
+      restartPolicy: unless-stopped
+    env:
+      # Offload all layers to the GPU (the 7900 XTX has the VRAM for the 4B embed
+      # + 12B synth tier). The CPU image defaults this to 0. The aimee-gpu profile
+      # makes the GPU visible; RADV/Vulkan inside the container enumerates whatever
+      # /dev/dri render node is present — no node path is hardcoded anywhere.
+      AIMEE_LLM_NGL: "99"
+      AIMEE_LLM_PORT: "8080"
+      # Multi-GPU disambiguation only (single-GPU hosts need none): pin RADV to a
+      # specific adapter by PCI/vendor id rather than a fragile device-node path.
+      # AIMEE_LLM_VK_DEVICE / MESA_VK_DEVICE_SELECT: "1002:744c"
+      # The gateway requires a bearer token. Provide it via the plugin's env
+      # override at deploy time from the secret store (vault / Docker secret /
+      # .gitignore'd per-host .env) — NEVER a checked-in plaintext value. Document
+      # its rotation alongside the deploy (runbook §3).
+      # AIMEE_LLM_AUTH_TOKEN: "<set-at-deploy-time-not-in-git>"
+    ports:
+      # The embed/rerank/synth gateway. hostExpose so the aimee-kb plugin can reach
+      # it across the runtime bridge gateway at http://10.100.0.1:8080 — set the
+      # kb's AIMEE_EMBEDDER_URL to that (the gateway preserves the /embed,
+      # /embed_batch, /rerank contract). Not exposed off-host.
+      - name: gateway
+        port: 8080
+        protocol: tcp
+        expose: false
+        hostExpose: true
