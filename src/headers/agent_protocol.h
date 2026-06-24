@@ -15,7 +15,9 @@ typedef struct
    char *arguments; /* malloc'd */
 } parsed_tool_call_t;
 
-typedef struct
+/* Named tag so low-level headers (e.g. openai_shape.h) can forward-declare
+ * `parsed_response_t` by pointer without including this agent-pipeline header. */
+typedef struct parsed_response
 {
    int is_tool_call;
    char *content; /* malloc'd, NULL if tool call */
