@@ -22,6 +22,7 @@
 #include "cJSON.h"
 #include "delegate_driver.h"
 #include "gateway_policy.h"
+#include "gateway_pipeline.h"
 #include "ingress_preinject.h"
 #include "json_fluent.h"
 #include "server_http.h"
@@ -182,6 +183,73 @@ static void translate_request(const cJSON *req, const delegate_driver_t *driver,
    *out_tools = anthropic_tools_to_openai(cJSON_GetObjectItemCaseSensitive(req, "tools"));
 }
 
+static void messages_apply_preinject(cJSON *req); /* defined below; used by the memory stage */
+
+/* ---- Gateway request pipeline (universal-gateway P2a) -------------------------
+ * The two inline request transforms (memory/context injection, tool policing) are
+ * run as ordered stages over a `gw_request_t` rather than hand-sequenced at each
+ * call site, so the seam is one shared, testable pipeline. translate_request stays
+ * a TERMINAL render step after the pipeline (it produces the provider shape rather
+ * than mutating `raw`). Behavior is identical to the previous inline prelude. */
+
+/* Memory/context pre-injection stage. The `if (!r->parity)` guard replicates the
+ * original top-level `if (!parity)` gate: only memory injection is parity-gated (the
+ * Anthropic-native passthrough must not perturb Claude Code's cached prefix). A
+ * future parity-gated stage must carry its own guard — the pipeline runs every
+ * stage; it does not gate them. */
+static int gw_stage_memory(gw_request_t *r, void *ud)
+{
+   (void)ud;
+   if (!r->parity)
+      messages_apply_preinject(r->raw);
+   return 0; /* injection is accounting-neutral here; not an intervention count */
+}
+
+/* Tool-policing stage: strip subagent-spawning tools etc. Returns the number of
+ * tools stripped (already the contract of gateway_policy_apply_request). */
+static int gw_stage_tool_policing(gw_request_t *r, void *ud)
+{
+   (void)ud;
+   return gateway_policy_apply_request(r->raw, 0 /* Anthropic tool shape */);
+}
+
+/* Model-pin stage (P2b): force the served model to the configured primary's model
+ * when the policy is on (no-op by default). Resolves the P1 single-model-shim
+ * regression — an operator running a fixed-model Anthropic-compatible shim enables
+ * it so an arbitrary client model name is not forwarded and rejected upstream.
+ * Returns 1 if the model was changed. */
+static int gw_stage_model_pin(gw_request_t *r, void *ud)
+{
+   const agent_t *ag = (const agent_t *)r->ag;
+   (void)ud;
+   return gateway_policy_pin_model(r->raw, ag ? ag->model : NULL);
+}
+
+/* Run the request pipeline over an inbound Anthropic /v1/messages request, in
+ * place, with the same stages and order as the prior inline prelude (memory →
+ * policy), plus the model-pin policy. Returns total interventions (≥0) or <0 on a
+ * stage error. */
+static int messages_run_request_pipeline(cJSON *req, const delegate_driver_t *driver,
+                                         const agent_t *ag, int parity, int stream)
+{
+   gw_request_t r = {
+       .raw = req,
+       .driver = driver,
+       .ag = ag,
+       /* parity == driver_is_anthropic(driver), so serving_api follows it (the
+        * client is always Anthropic /v1/messages here) — no second predicate call. */
+       .serving_api = parity ? GW_API_ANTHROPIC : GW_API_OPENAI,
+       .parity = parity,
+       .stream = stream,
+   };
+   static const gw_stage_t stages[] = {
+       {gw_stage_memory, NULL, "memory"},
+       {gw_stage_tool_policing, NULL, "tool_policing"},
+       {gw_stage_model_pin, NULL, "model_pin"},
+   };
+   return gw_pipeline_run_request(&r, stages, sizeof(stages) / sizeof(stages[0]));
+}
+
 /* Build the provider request body via the selected delegate driver. `stream`
  * toggles the provider stream flag. Returns a malloc'd JSON string (caller
  * frees), or NULL. */
@@ -339,11 +407,19 @@ static int messages_buffered(const char *body, char *resp, int cap)
    driver = delegate_driver_get(ag->provider);
    /* Exact-parity passthrough only applies to the Anthropic-native path. */
    int parity = driver_is_anthropic(driver);
-   if (!parity)
-      messages_apply_preinject(req);
-   /* Gateway tool policing (e.g. strip subagent tools) on the inbound Anthropic
-    * request, before translate/build. No-op unless a policy is configured. */
-   gateway_policy_apply_request(req, 0);
+   /* Request stages (memory injection, tool policing) over the canonical IR, then
+    * translate as the terminal render step. Same order/behavior as the prior
+    * inline prelude; no-op stages when nothing is configured. A <0 return is a
+    * stage that hard-failed: abort rather than forward a half-altered request (no
+    * stage returns <0 today; the intervention count is plumbed for P2b's audit). */
+   if (messages_run_request_pipeline(req, driver, ag, parity, 0 /* buffered */) < 0)
+   {
+      status = write_error(resp, cap, 500, "api_error", "gateway request pipeline failed");
+      goto cleanup;
+   }
+   /* Re-read `model`: the model-pin stage may have replaced req's "model" node, so
+    * the pointer cached above (line ~397) could now dangle. */
+   model = jo_cstr(req, "model");
    translate_request(req, driver, ag, &messages, &tools, &system_text);
    if (delegate_build_url(driver, ag, url, sizeof(url)) != 0 ||
        agent_resolve_auth(ag, auth, sizeof(auth)) != 0)
@@ -635,11 +711,25 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
    driver = delegate_driver_get(ag->provider);
    /* Exact-parity passthrough only applies to the Anthropic-native path. */
    int parity = driver_is_anthropic(driver);
-   if (!parity)
-      messages_apply_preinject(req);
-   /* Gateway tool policing (e.g. strip subagent tools) on the inbound Anthropic
-    * request, before translate/build. No-op unless a policy is configured. */
-   gateway_policy_apply_request(req, 0);
+   /* Request stages (memory injection, tool policing) over the canonical IR, then
+    * translate as the terminal render step. Same order/behavior as the prior
+    * inline prelude. A <0 return is a stage that hard-failed: emit a clean empty
+    * stream (matching the setup-failure path) so the client's SSE reader
+    * terminates, then abort rather than forward a half-altered request. (No stage
+    * returns <0 today; the count is plumbed for P2b's audit.) */
+   if (messages_run_request_pipeline(req, driver, ag, parity, 1 /* stream */) < 0)
+   {
+      xl = anthropic_stream_begin(msg_id, model, 0, emit, ctx);
+      if (xl)
+      {
+         anthropic_stream_finish(xl);
+         anthropic_stream_free(xl);
+      }
+      goto cleanup;
+   }
+   /* Re-read `model`: the model-pin stage may have replaced req's "model" node, so
+    * the pointer cached at the top of this function could now dangle. */
+   model = jo_cstr(req, "model");
    translate_request(req, driver, ag, &messages, &tools, &system_text);
    if (delegate_build_url(driver, ag, url, sizeof(url)) != 0 ||
        agent_resolve_auth(ag, auth, sizeof(auth)) != 0)
