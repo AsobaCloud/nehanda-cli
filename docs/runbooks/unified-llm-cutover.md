@@ -31,8 +31,16 @@ release (no in-image rollback flag); a post-cutover revert is a deploy-tag rollb
 
 ## 2. Build + publish the images
 
-CI (`.github/workflows/publish-images.yml`) builds `aimee-llm-cpu` + `aimee-llm-gpu` on
-merge to `main` and pushes to ghcr. To build out-of-band (e.g. on a PVE CT with docker):
+CI builds + publishes both tiers as part of the normal release cycle:
+- **main:** `.github/workflows/publish-images.yml` (via `auto-release.yml`) builds
+  `aimee-llm-cpu` + `aimee-llm-gpu` on every release and tags them `:<version>` + `:latest`
+  (multi-arch). They are in both the `build` and the `merge` matrices — the merge step is
+  what applies the tags, so a build that pushes only by digest leaves `tags:null`.
+- **testing:** `.github/workflows/publish-llm-testing.yml` builds both tiers on `testing`
+  pushes that touch `Dockerfile.aimee-llm` or the gateway/supervisor scripts, tagged
+  `:testing` (+ `:testing-<sha>`, amd64) — a tested-but-unreleased image for `.254`.
+
+To build out-of-band (e.g. on a PVE CT with docker):
 
 ```
 docker build -f Dockerfile.aimee-llm -t aimee-llm:cpu .
@@ -48,7 +56,15 @@ docker build -f Dockerfile.aimee-llm -t aimee-llm:gpu \
 
 `.254` runs containers via **tierd** (LXC), not raw docker, with GPU passthrough via
 `/dev/dri/renderD128` (Vulkan/RADV — **not** ROCm/`kfd`). Deploy the GPU image as a tierd
-plugin (manifest-swap, per the `.254` deploy memory), GPU device + `AIMEE_LLM_NGL=99`.
+plugin (manifest-swap, per the `.254` deploy memory) + `AIMEE_LLM_NGL=99`. The in-repo
+manifest is `deploy/smoothnas/aimee-llm.plugin.yaml` (pin its image to `:testing` for
+staging, `:latest`/`:<version>` for production). GPU passthrough is delivered as an operator
+profile, not a manifest device field (the manifest has no `devices` surface) — install it
+FIRST or the plugin install fails with `profile "aimee-gpu" not in catalog`:
+`sudo cp deploy/smoothnas/aimee-gpu.profile.yaml /etc/smoothnas/plugin-profiles.d/aimee-gpu.yaml`.
+That profile is render-node-number-agnostic (whole-`/dev/dri` bind + a wildcard DRM cgroup
+allow), so it survives a `renderD128` → `renderD129` renumber rather than pinning a node
+path; Vulkan/RADV inside the container enumerates whatever node is present.
 Point the kb at it: `AIMEE_EMBEDDER_URL=http://aimee-llm:8080` (the gateway preserves the
 `/embed`+`/embed_batch`+`/rerank` contract, so `embed-remote.py`/`rerank-remote.py` are
 untouched). Set the kb's `embedding_model` to the new identity (activates the P1 guard) and
