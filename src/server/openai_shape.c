@@ -1,6 +1,12 @@
 /* openai_shape.c: OpenAI-compatible JSON shaping helpers (no sockets, no network). */
 #include "openai_shape.h"
 #include "cJSON.h"
+/* openai_responses_emit_policed needs the full parsed_response_t definition.
+ * aimee.h must precede agent_protocol.h (the MAX_PATH_LEN macro agent_types.h
+ * uses) — kept local to this .c rather than forced on every openai_shape.h
+ * includer. */
+#include "aimee.h"
+#include "agent_protocol.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1365,4 +1371,113 @@ int openai_format_error(char *resp, int cap, const char *type, const char *messa
    int len = snprintf(resp, (size_t)cap, "%s", s);
    free(s);
    return (len < 0 || len >= cap) ? -1 : len;
+}
+
+/* Emit the OpenAI /v1/responses SSE event sequence for a parsed_response_t
+ * that carries `calls[]`. Extracted from the inline emit loop in
+ * responses_stream_handler so it is unit-testable in isolation
+ * (test_openai_chat_policed.c) without stubbing the entire
+ * agent_execute_messages pipeline.
+ *
+ * Behavior:
+ *   - Always emits `response.created` first.
+ *   - If parsed.call_count > 0: emits one set of per-call frames
+ *     (output_item.added, function_call_arguments.delta, .done,
+ *     output_item.done) per surviving call, then `response.completed`
+ *     with all calls in `output[]`.
+ *   - If parsed.call_count == 0 (P2c all-dropped case): emits
+ *     `response.created` + `response.completed` with empty `output[]`.
+ *
+ * The wire shape is what the upstream OpenAI responses backend
+ * emits for a tool-call reply; the policed-shape is identical
+ * (the police function only drops denied entries, never re-orders
+ * or adds).
+ */
+void openai_responses_emit_policed(const parsed_response_t *parsed, const char *id,
+                                   const char *model, long created, openai_sse_emit_fn emit,
+                                   void *ctx, char *frame, size_t frame_cap)
+{
+   int n = parsed ? parsed->call_count : 0;
+
+   /* response.created (always first). */
+   if (openai_format_responses_created(id, model, created, frame, frame_cap) > 0)
+      emit(ctx, "response.created", frame);
+
+   if (n > 0)
+   {
+      cJSON *output = cJSON_CreateArray();
+      for (int i = 0; i < n; i++)
+      {
+         const char *name = parsed->calls[i].name;
+         const char *cid = parsed->calls[i].id;
+         const char *args = parsed->calls[i].arguments ? parsed->calls[i].arguments : "{}";
+         char fc_id[80];
+         snprintf(fc_id, sizeof(fc_id), "%s-fc-%d", id, i);
+
+         char added[256];
+         if (openai_format_responses_fc_item_added(fc_id, cid, name, i, added, sizeof(added)) > 0)
+            emit(ctx, "response.output_item.added", added);
+
+         size_t acap = strlen(args) * 6 + 256;
+         char *af = malloc(acap);
+         if (af)
+         {
+            if (openai_format_responses_fc_args_delta(fc_id, i, args, af, (int)acap) > 0)
+               emit(ctx, "response.function_call_arguments.delta", af);
+            if (openai_format_responses_fc_args_done(fc_id, i, args, af, (int)acap) > 0)
+               emit(ctx, "response.function_call_arguments.done", af);
+            free(af);
+         }
+
+         size_t dcap = strlen(args) * 6 + strlen(name) + strlen(cid) + 512;
+         char *df = malloc(dcap);
+         if (df)
+         {
+            if (openai_format_responses_fc_item_done(fc_id, cid, name, args, i, df, (int)dcap) > 0)
+               emit(ctx, "response.output_item.done", df);
+            free(df);
+         }
+         if (output)
+            cJSON_AddItemToArray(
+                output, openai_responses_function_call_item(fc_id, cid, name, args, "completed"));
+      }
+
+      size_t ccap = 4096;
+      for (int i = 0; i < n; i++)
+         ccap += (parsed->calls[i].arguments ? strlen(parsed->calls[i].arguments) : 0) * 6 + 256;
+      char *cf = malloc(ccap);
+      if (cf)
+      {
+         if (openai_format_responses_completed_items(id, model, created, output,
+                                                     parsed->prompt_tokens,
+                                                     parsed->completion_tokens, cf, (int)ccap) > 0)
+            emit(ctx, "response.completed", cf);
+         free(cf);
+      }
+      else
+         cJSON_Delete(output);
+   }
+   else
+   {
+      /* P2c all-dropped: police removed every tool_call. Emit a clean
+       * empty-output `response.completed` so the client's SSE reader
+       * terminates cleanly with a recognizable end-of-turn shape. */
+      cJSON *empty_output = cJSON_CreateArray();
+      int pt = parsed ? parsed->prompt_tokens : 0;
+      int ct = parsed ? parsed->completion_tokens : 0;
+      size_t ccap = 4096;
+      char *cf = malloc(ccap);
+      if (cf)
+      {
+         /* completed_items takes ownership of empty_output (attaches it to
+          * the response object it serializes, and frees it on every error
+          * path), so we must NOT delete it here — that was a double free. */
+         if (openai_format_responses_completed_items(id, model, created, empty_output, pt, ct, cf,
+                                                     (int)ccap) > 0)
+            emit(ctx, "response.completed", cf);
+         free(cf);
+      }
+      else
+         cJSON_Delete(empty_output);
+   }
 }

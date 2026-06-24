@@ -1107,60 +1107,24 @@ static int responses_stream_handler(const char *body, server_http_sse_event_emit
 
    if (erc == 0 && parsed.is_tool_call && parsed.call_count > 0)
    {
-      /* Tool calls: relay each as a function_call item for Codex to execute. */
-      cJSON *output = cJSON_CreateArray();
-      for (int i = 0; i < parsed.call_count; i++)
-      {
-         const char *name = parsed.calls[i].name;
-         const char *cid = parsed.calls[i].id;
-         const char *args = parsed.calls[i].arguments ? parsed.calls[i].arguments : "{}";
-         char fc_id[80];
-         snprintf(fc_id, sizeof(fc_id), "%s-fc-%d", id, i);
+      /* P2c streaming: when gateway_prevent_subagents is ON, run the police
+       * function on the parsed struct first (drops denied subagent tool_call
+       * entries in place; preserves upstream stop_reason in partial-drop,
+       * rewrites to "end_turn" on all-dropped). When OFF, this is a no-op
+       * and the dispatch below runs byte-for-byte identical to today's loop.
+       * Police contract is finalized in PR #677 (buffered) and PR #679
+       * (streaming Anthropic). */
+      int police_drops = 0;
+      if (gateway_prevent_subagents_enabled())
+         police_drops = gateway_policy_police_parsed_response(&parsed);
+      (void)police_drops; /* drop count plumbed through the pipeline total
+                             for the future P2b audit pass; today the only
+                             visible effect is the parsed.calls[] mutation. */
 
-         char added[256];
-         if (openai_format_responses_fc_item_added(fc_id, cid, name, i, added, sizeof(added)) > 0)
-            emit(ctx, "response.output_item.added", added);
-
-         size_t acap = strlen(args) * 6 + 256;
-         char *af = malloc(acap);
-         if (af)
-         {
-            if (openai_format_responses_fc_args_delta(fc_id, i, args, af, (int)acap) > 0)
-               emit(ctx, "response.function_call_arguments.delta", af);
-            if (openai_format_responses_fc_args_done(fc_id, i, args, af, (int)acap) > 0)
-               emit(ctx, "response.function_call_arguments.done", af);
-            free(af);
-         }
-
-         size_t dcap = strlen(args) * 6 + strlen(name) + strlen(cid) + 512;
-         char *df = malloc(dcap);
-         if (df)
-         {
-            if (openai_format_responses_fc_item_done(fc_id, cid, name, args, i, df, (int)dcap) > 0)
-               emit(ctx, "response.output_item.done", df);
-            free(df);
-         }
-         if (output)
-            cJSON_AddItemToArray(
-                output, openai_responses_function_call_item(fc_id, cid, name, args, "completed"));
-      }
-
-      size_t ccap = 4096;
-      for (int i = 0; i < parsed.call_count; i++)
-         ccap += (parsed.calls[i].arguments ? strlen(parsed.calls[i].arguments) : 0) * 6 + 256;
-      char *cf = malloc(ccap);
-      if (cf)
-      {
-         if (openai_format_responses_completed_items(id, model, created, output,
-                                                     parsed.prompt_tokens, parsed.completion_tokens,
-                                                     cf, (int)ccap) > 0)
-            emit(ctx, "response.completed", cf);
-         free(cf);
-      }
-      else
-         cJSON_Delete(output);
+      openai_responses_emit_policed(&parsed, id, model, created, emit, ctx, frame, sizeof(frame));
    }
    else
+
    {
       /* Text turn: a single assistant message item carrying the content. */
       const char *txt =
