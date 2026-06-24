@@ -1,0 +1,45 @@
+# Operator profile: pass the host GPU through to the aimee-llm container for
+# Vulkan/RADV offload (the inner llama-server processes run with AIMEE_LLM_NGL>0).
+#
+# Why a profile and not a manifest field: the SmoothNAS plugin manifest has no
+# `devices` surface (same reason aimee-stack delivers a ulimit this way), so the
+# device plumbing rides on lxc.rawConfig here.
+#
+# Why this is render-node-number-agnostic (the whole point): a hardcoded
+# `/dev/dri/renderD128` breaks easily — the DRM render-node minor is assigned in
+# probe order, so a reboot, a second GPU, or an iGPU+dGPU combo can shift it to
+# renderD129+. Instead this:
+#   1. allows the ENTIRE DRM device major (226 = card* + renderD*) via a wildcard
+#      cgroup rule, so the exact minor never matters for permissions; and
+#   2. bind-mounts the whole /dev/dri directory (card nodes + renderD* + the
+#      stable by-path/ PCI symlinks) `optional`-ly, so whatever node the kernel
+#      enumerated this boot is present and RADV picks it up — nothing names a
+#      specific node. (Single GPU here; for multi-GPU, pin the adapter in the
+#      aimee-llm manifest via MESA_VK_DEVICE_SELECT by PCI/vendor id, still not a
+#      device-node path.)
+# Exposes ONLY the Vulkan render path (/dev/dri); /dev/kfd (ROCm) is deliberately
+# NOT passed through — aimee-llm uses the vendor-agnostic Vulkan build.
+#
+# Install (on the SmoothNAS host), BEFORE installing the aimee-llm plugin:
+#   sudo cp aimee-gpu.profile.yaml /etc/smoothnas/plugin-profiles.d/aimee-gpu.yaml
+# then reference it from the manifest:
+#   profiles:
+#     - aimee-gpu
+# Referencing a profile not present on the host fails the install with
+# `profile "aimee-gpu" not in catalog`, so drop this file in FIRST.
+apiVersion: smoothnas.io/v1
+kind: PluginProfile
+metadata:
+  name: aimee-gpu
+  description: >-
+    Pass the host GPU's DRM render path through to aimee-llm for Vulkan offload,
+    without pinning a specific /dev/dri render-node minor (survives renderD128 ->
+    renderD129 renumbering, reboots, and added GPUs). Vulkan render only; no ROCm
+    /dev/kfd.
+lxc:
+  rawConfig:
+    # Permit the whole DRM device major (226: card* + renderD*) — minor-agnostic.
+    - "lxc.cgroup2.devices.allow = c 226:* rwm"
+    # Bring in every /dev/dri node (render + card + by-path PCI symlinks) at once;
+    # `optional` so a missing node never blocks container start.
+    - "lxc.mount.entry = /dev/dri dev/dri none bind,optional,create=dir 0 0"
