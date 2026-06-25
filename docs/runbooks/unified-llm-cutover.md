@@ -31,8 +31,16 @@ release (no in-image rollback flag); a post-cutover revert is a deploy-tag rollb
 
 ## 2. Build + publish the images
 
-CI (`.github/workflows/publish-images.yml`) builds `aimee-llm-cpu` + `aimee-llm-gpu` on
-merge to `main` and pushes to ghcr. To build out-of-band (e.g. on a PVE CT with docker):
+CI builds + publishes both tiers as part of the normal release cycle:
+- **main:** `.github/workflows/publish-images.yml` (via `auto-release.yml`) builds
+  `aimee-llm-cpu` + `aimee-llm-gpu` on every release and tags them `:<version>` + `:latest`
+  (multi-arch). They are in both the `build` and the `merge` matrices — the merge step is
+  what applies the tags, so a build that pushes only by digest leaves `tags:null`.
+- **testing:** `.github/workflows/publish-llm-testing.yml` builds both tiers on `testing`
+  pushes that touch `Dockerfile.aimee-llm` or the gateway/supervisor scripts, tagged
+  `:testing` (+ `:testing-<sha>`, amd64) — a tested-but-unreleased image for `.254`.
+
+To build out-of-band (e.g. on a PVE CT with docker):
 
 ```
 docker build -f Dockerfile.aimee-llm -t aimee-llm:cpu .
@@ -46,10 +54,17 @@ docker build -f Dockerfile.aimee-llm -t aimee-llm:gpu \
 
 ## 3. Deploy to `.254` (tierd / LXC, GPU)
 
-`.254` runs containers via **tierd** (LXC), not raw docker, with GPU passthrough via
-`/dev/dri/renderD128` (Vulkan/RADV — **not** ROCm/`kfd`). Deploy the GPU image as a tierd
-plugin (manifest-swap, per the `.254` deploy memory), GPU device + `AIMEE_LLM_NGL=99`.
-Point the kb at it: `AIMEE_EMBEDDER_URL=http://aimee-llm:8080` (the gateway preserves the
+`.254` runs containers via **tierd** (LXC), not raw docker, with GPU passthrough via the
+Vulkan/RADV render path (**not** ROCm/`kfd`). Deploy the GPU image as a tierd plugin
+(manifest-swap, per the `.254` deploy memory) + `AIMEE_LLM_NGL=99`. The in-repo manifest is
+`deploy/smoothnas/aimee-llm.plugin.yaml` (pin its image to `:testing` for staging,
+`:latest`/`:<version>` for production). GPU passthrough uses the **built-in `gpu-amd`
+profile** (compiled into tierd — the one Wolf/Steam use), so there is no custom profile to
+install and no node path to pin; verified on .254 the container enumerates `Vulkan0 : AMD
+Radeon Graphics (RADV GFX1100)` and offloads to VRAM. The gateway is host-published on
+**:8742** (NOT :8080 — Wolf's WolfLeash UI host-publishes 8080, and two plugins on one host
+port silently collide: the runtime DNATs both, one wins and the other is unreachable though
+"running"). Point the kb at it: `AIMEE_EMBEDDER_URL=http://10.100.0.1:8742` (the gateway preserves the
 `/embed`+`/embed_batch`+`/rerank` contract, so `embed-remote.py`/`rerank-remote.py` are
 untouched). Set the kb's `embedding_model` to the new identity (activates the P1 guard) and
 `embedding_dim` to the tier's dim (2560 for the 4B GPU tier). **Verify the URL actually

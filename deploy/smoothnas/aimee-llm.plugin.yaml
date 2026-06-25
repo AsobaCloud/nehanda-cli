@@ -1,0 +1,63 @@
+apiVersion: smoothnas.io/v1
+kind: Plugin
+metadata:
+  name: aimee-llm
+  version: 0.2.57
+  description: >-
+    aimee-llm — the unified Vulkan llama.cpp container: one GPU-offloaded
+    runtime + the aimee-llm gateway, serving embeddings (/embed, /embed_batch),
+    reranking (/rerank), and synthesis (/v1/chat/completions) from baked-in
+    GGUFs. Replaces the torch aimee-embedder + the standalone llama.cpp `llm`
+    container. The aimee-kb plugin points AIMEE_EMBEDDER_URL at this service.
+    GPU tier (.254): Qwen3-Embedding-4B (2560-dim) + ettin-reranker-400m +
+    gemma-4-12B, offloaded to the AMD 7900 XTX via Vulkan/RADV (AIMEE_LLM_NGL=99).
+  vendor: RakuenSoftware
+  homepage: https://github.com/RakuenSoftware/aimee
+profiles:
+  - default-limits
+  # GPU passthrough via the BUILT-IN `gpu-amd` profile (compiled into tierd; the
+  # same one Wolf/Steam use for AMD GPUs). It passes the host /dev/dri render path
+  # through and is render-node-number-agnostic — no hardcoded /dev/dri/renderD128,
+  # no custom operator profile to install, no tierd restart. Verified on .254:
+  # the container enumerates `Vulkan0 : AMD Radeon Graphics (RADV GFX1100)` and
+  # offloads the 4B+12B models to VRAM. (For a non-AMD host use the matching
+  # built-in vendor profile.)
+  - gpu-amd
+services:
+  - name: llm
+    artifact:
+      type: oci-image
+      # Versioned + :latest publishing is owned by main (auto-release.yml ->
+      # publish-images.yml). On `testing`, pin to :testing instead to validate a
+      # tested-but-unreleased build (publish-llm-testing.yml).
+      image: ghcr.io/rakuensoftware/aimee-llm-gpu:latest
+    container:
+      restartPolicy: unless-stopped
+    env:
+      # Offload all layers to the GPU (the 7900 XTX has the VRAM for the 4B embed
+      # + 12B synth tier). The CPU image defaults this to 0.
+      AIMEE_LLM_NGL: "99"
+      # Gateway port. 8742 (aimee's 874x range: server 8740, kb 8741) — NOT 8080,
+      # which Wolf's WolfLeash UI host-publishes. A hostExpose port is published on
+      # the HOST, so two plugins on the same port silently collide (the runtime
+      # DNATs both; one wins and the other is unreachable though "running"). Keep
+      # this off any port another installed plugin host-exposes.
+      AIMEE_LLM_PORT: "8742"
+      # Multi-GPU disambiguation only (single-GPU hosts need none): pin RADV to a
+      # specific adapter by PCI/vendor id rather than a fragile device-node path.
+      # AIMEE_LLM_VK_DEVICE / MESA_VK_DEVICE_SELECT: "1002:744c"
+      # The gateway requires a bearer token. Provide it via the plugin's env
+      # override at deploy time from the secret store (vault / Docker secret /
+      # .gitignore'd per-host .env) — NEVER a checked-in plaintext value. Document
+      # its rotation alongside the deploy (runbook §3).
+      # AIMEE_LLM_AUTH_TOKEN: "<set-at-deploy-time-not-in-git>"
+    ports:
+      # The embed/rerank/synth gateway. hostExpose so the aimee-kb plugin can reach
+      # it across the runtime bridge gateway at http://10.100.0.1:8742 — set the
+      # kb's AIMEE_EMBEDDER_URL to that (the gateway preserves the /embed,
+      # /embed_batch, /rerank contract). Not exposed off-host.
+      - name: gateway
+        port: 8742
+        protocol: tcp
+        expose: false
+        hostExpose: true

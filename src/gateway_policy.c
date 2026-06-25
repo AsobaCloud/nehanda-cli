@@ -1,9 +1,11 @@
 /* gateway_policy.c: per-call gateway request/response policy. See gateway_policy.h.
  * CORE layer: cJSON + config + guardrails only; no DB, network, or agent state. */
+#include "aimee.h" /* size macros for agent_types.h (MAX_PATH_LEN) */
 #include "gateway_policy.h"
 #include "cJSON.h"
 #include "config.h"
 #include "json_fluent.h" /* jo_cstr */
+#include <stdlib.h>      /* free — for the dropped-entry arguments cleanup in P2c */
 #include <string.h>
 
 /* From guardrails (guardrails_orchestrator.c). Forward-declared rather than
@@ -18,7 +20,7 @@ static int is_subagent_tool_name(const char *name)
    return name && name[0] && strcmp(guardrails_canonical_tool_name(name), "Subagent") == 0;
 }
 
-static int prevent_subagents_enabled(void)
+int gateway_prevent_subagents_enabled(void)
 {
    config_t cfg;
    config_load(&cfg);
@@ -55,7 +57,7 @@ int gateway_policy_strip_tools(cJSON *tools, int tools_openai_shape)
    cJSON *t;
    int stripped = 0;
 
-   if (!cJSON_IsArray(tools) || !prevent_subagents_enabled())
+   if (!cJSON_IsArray(tools) || !gateway_prevent_subagents_enabled())
       return 0;
 
    for (t = tools->child; t;)
@@ -120,4 +122,74 @@ int gateway_policy_pin_model(cJSON *req, const char *agent_model)
    cJSON_DeleteItemFromObjectCaseSensitive(req, "model");
    cJSON_AddStringToObject(req, "model", agent_model);
    return 1;
+}
+
+/* Response-side (P2c). Same canonical mapping and config gate as the request
+ * side, exposed as a predicate so the buffered/streamed paths can gate cheaply
+ * (the predicate does the config_load + canonical-name lookup, so the call
+ * site stays one line). */
+int gateway_policy_is_denied_tool(const char *name)
+{
+   if (!name || !name[0])
+      return 0;
+   if (!gateway_prevent_subagents_enabled())
+      return 0;
+   return is_subagent_tool_name(name);
+}
+
+/* Response-side tool policing: memmove-compact denied entries out of `p->calls[]`
+ * and finalize `p->stop_reason` so it agrees with the wire emitted by
+ * `anthropic_response_from_parsed`. See gateway_policy.h for the stop-reason
+ * rules and the full set of fields the function does NOT touch. */
+int gateway_policy_police_parsed_response(parsed_response_t *p)
+{
+   int drops = 0;
+   int n, i, w;
+
+   if (!p)
+      return 0;
+   if (!gateway_prevent_subagents_enabled())
+      return 0;
+
+   n = p->call_count;
+   if (n <= 0)
+      return 0;
+
+   /* Single pass: read index `i`, write index `w`. Surviving entries are
+    * shifted down to the front of the array in their original order. Dropped
+    * entries' `arguments` strings are freed eagerly — the slot is then
+    * overwritten by the next survivor, so `agent_free_parsed_response`'s
+    * 0..call_count-1 sweep would otherwise leak the dropped strings. */
+   w = 0;
+   for (i = 0; i < n; i++)
+   {
+      const parsed_tool_call_t *src = &p->calls[i];
+      if (is_subagent_tool_name(src->name))
+      {
+         free(src->arguments);
+         p->calls[i].arguments = NULL;
+         drops++;
+         continue;
+      }
+      if (w != i)
+         p->calls[w] = *src;
+      w++;
+   }
+   p->call_count = w;
+   /* Stop-reason finalization: if the upstream did not set a reason
+    * (stop_reason[0] == '\0'), derive from the surviving call_count so the
+    * audit row and the renderer's fallback (line 435 of anthropic_ingress.c,
+    * `parsed->stop_reason[0] ? parsed->stop_reason : n_calls > 0 ? "tool_use"
+    * : "end_turn"`) agree on a non-empty value. If the upstream DID set a
+    * reason (e.g. "max_tokens" for a truncated reply, or "stop_sequence" /
+    * "refusal"), preserve it verbatim — see the doc comment above for the
+    * partial-drop preservation rationale. The all-dropped case always
+    * rewrites to "end_turn" because the wire's "tool_use" reply became an
+    * "end_turn" reply (the model emitted a tool_use reply; the police
+    * removed every block; the client now sees end_turn). */
+   if (p->stop_reason[0] == '\0' || w == 0)
+   {
+      snprintf(p->stop_reason, sizeof(p->stop_reason), "%s", w > 0 ? "tool_use" : "end_turn");
+   }
+   return drops;
 }

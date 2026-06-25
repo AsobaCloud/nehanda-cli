@@ -218,6 +218,13 @@ char *ingress_preinject_build(const char *query, int request_disabled)
    (void)request_disabled;
    return g_stub_preinject_env ? strdup(g_stub_preinject_env) : NULL;
 }
+/* Link-only: the OpenAI branch of the shared gw_stage_memory references this, but
+ * these /v1/messages whitebox tests only exercise the Anthropic branch. */
+char *ingress_preinject_apply(const char *instructions, const char *envelope)
+{
+   (void)instructions;
+   return envelope ? strdup(envelope) : NULL;
+}
 
 /* HTTP-layer stub: agent_http_last_retry_after has no upstream socket here, so 0
  * (no Retry-After) suffices. */
@@ -238,6 +245,21 @@ int gateway_policy_pin_model(cJSON *req, const char *agent_model)
    (void)req;
    (void)agent_model;
    return 0; /* pin is off in these shape tests; covered by test_gateway_policy */
+}
+/* P2c streaming branch gate: off by default in these whitebox shape tests
+ * (the real predicate is exercised by test_anthropic_http-p2c). */
+int gateway_prevent_subagents_enabled(void)
+{
+   return 0;
+}
+/* P2c (response-side tool policing) is exercised by its own dedicated
+ * integration test (unit-test-anthropic-http-p2c) which links the real
+ * gateway_policy.o. In these whitebox shape tests we stub it to a no-op
+ * so the response shape is unaltered. */
+int gateway_policy_police_parsed_response(parsed_response_t *p)
+{
+   (void)p;
+   return 0;
 }
 
 #include "../server/anthropic_http.c"

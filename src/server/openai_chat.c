@@ -19,6 +19,7 @@
 #include "openai_shape.h"
 #include "ingress_preinject.h"
 #include "gateway_pipeline.h"       /* gw_request_t + gw_pipeline_run_request — shared seam */
+#include "gw_stage_memory.h"        /* gw_stage_memory + gw_memory_system_prompt (P3) */
 #include "dogfood.h"                /* dogfood_autolabel_next_turn_live */
 #include "learning_implicit.h"      /* learning_implicit_detect_turn */
 #include "openai_responses_store.h" /* previous_response_id continuation store */
@@ -151,7 +152,7 @@ static int run_completion(int chat, const char *body, char *resp, int cap)
     * so the §4 dedup key must hash it (a stale reply must not be replayed after
     * the injected memory/context changes). On a cache miss it is reused for the
     * provider call below; on a hit it is freed unused. */
-   char *pi_env = ingress_preinject_build(prompt, 0);
+   char *pi_env = gw_memory_system_prompt(prompt);
 
    /* Resolve the backend BEFORE dedup so the key carries the resolved
     * provider/model — two requests resolving to a different backend must not
@@ -629,7 +630,7 @@ static int responses_handler(const char *body, char *resp, int cap)
    memset(&result, 0, sizeof(result));
    /* P1 pre-injection: prepend the <aimee-context> envelope as the system
     * prompt (config ingress_preinject_enabled; no-op when off/empty). */
-   char *pi_env = ingress_preinject_build(full, 0);
+   char *pi_env = gw_memory_system_prompt(full);
    int erc = agent_execute(ag, pi_env, full, max_tokens, temperature, &result);
    free(pi_env);
 
@@ -742,7 +743,7 @@ static int chat_stream_handler(const char *body, server_http_sse_emit emit, void
    memset(&result, 0, sizeof(result));
    /* P1 pre-injection: prepend the <aimee-context> envelope as the system
     * prompt (config ingress_preinject_enabled; no-op when off/empty). */
-   char *pi_env = ingress_preinject_build(prompt, 0);
+   char *pi_env = gw_memory_system_prompt(prompt);
    int erc = agent_execute(ag, pi_env, prompt, max_tokens, temperature, &result);
    free(pi_env);
    free(prompt);
@@ -812,7 +813,7 @@ static int completion_stream_handler(const char *body, server_http_sse_emit emit
    memset(&result, 0, sizeof(result));
    /* P1 pre-injection: prepend the <aimee-context> envelope as the system
     * prompt (config ingress_preinject_enabled; no-op when off/empty). */
-   char *pi_env = ingress_preinject_build(prompt, 0);
+   char *pi_env = gw_memory_system_prompt(prompt);
    int erc = agent_execute(ag, pi_env, prompt, max_tokens, temperature, &result);
    free(pi_env);
    free(prompt);
@@ -854,28 +855,11 @@ static int completion_stream_handler(const char *body, server_http_sse_emit emit
  * back. Behavior is identical to the prior inline memory block + the P2b tool
  * strip it replaces. */
 
-/* Memory/context pre-injection stage (OpenAI shape). NOT parity-gated: the
- * /v1/responses proxy always translates, so memory always applies (gated only by
- * config, inside ingress_preinject_build). `ud` is the chat-shape `messages` the
- * recall query is derived from — the same source as the prior inline site, so
- * recall is byte-unchanged. Merges the envelope into raw.instructions. */
-static int gw_stage_openai_memory(gw_request_t *r, void *ud)
-{
-   const cJSON *messages = (const cJSON *)ud;
-   char *query = ingress_preinject_query_from_messages(messages);
-   char *env = ingress_preinject_build(query, 0);
-   free(query);
-   if (!env)
-      return 0;
-   cJSON *cur = cJSON_GetObjectItemCaseSensitive(r->raw, "instructions");
-   char *merged = ingress_preinject_apply(cur ? cur->valuestring : NULL, env);
-   free(env);
-   if (!merged)
-      return 0;
-   cJSON_ReplaceItemInObjectCaseSensitive(r->raw, "instructions", cJSON_CreateString(merged));
-   free(merged);
-   return 1;
-}
+/* Memory/context pre-injection is now the shared gw_stage_memory (gw_stage_memory.c)
+ * with mem_target = GW_MEM_OPENAI_INSTRUCTIONS: the /v1/responses proxy always
+ * translates, so memory always applies (gated only by config, inside the stage),
+ * merging the envelope into raw.instructions. `ud` stays the chat-shape `messages`
+ * the recall query is derived from, so recall is byte-unchanged. */
 
 /* Tool-policing stage (OpenAI tool shape): strip subagent-spawning tools from
  * raw.tools. Mirrors the Anthropic ingress's policing stage; same contract as
@@ -934,11 +918,12 @@ static int agent_execute_messages(const agent_t *agent, cJSON *messages, cJSON *
        .driver = driver,
        .ag = agent,
        .serving_api = GW_API_OPENAI,
+       .mem_target = GW_MEM_OPENAI_INSTRUCTIONS,
        .parity = 1, /* client OpenAI == serving OpenAI; informational for these stages */
        .stream = 0,
    };
    const gw_stage_t stages[] = {
-       {gw_stage_openai_memory, messages, "memory"},
+       {gw_stage_memory, messages, "memory"},
        {gw_stage_openai_tool_policing, NULL, "tool_policing"},
    };
    gw_pipeline_run_request(&gr, stages, sizeof(stages) / sizeof(stages[0]));
@@ -1107,60 +1092,24 @@ static int responses_stream_handler(const char *body, server_http_sse_event_emit
 
    if (erc == 0 && parsed.is_tool_call && parsed.call_count > 0)
    {
-      /* Tool calls: relay each as a function_call item for Codex to execute. */
-      cJSON *output = cJSON_CreateArray();
-      for (int i = 0; i < parsed.call_count; i++)
-      {
-         const char *name = parsed.calls[i].name;
-         const char *cid = parsed.calls[i].id;
-         const char *args = parsed.calls[i].arguments ? parsed.calls[i].arguments : "{}";
-         char fc_id[80];
-         snprintf(fc_id, sizeof(fc_id), "%s-fc-%d", id, i);
+      /* P2c streaming: when gateway_prevent_subagents is ON, run the police
+       * function on the parsed struct first (drops denied subagent tool_call
+       * entries in place; preserves upstream stop_reason in partial-drop,
+       * rewrites to "end_turn" on all-dropped). When OFF, this is a no-op
+       * and the dispatch below runs byte-for-byte identical to today's loop.
+       * Police contract is finalized in PR #677 (buffered) and PR #679
+       * (streaming Anthropic). */
+      int police_drops = 0;
+      if (gateway_prevent_subagents_enabled())
+         police_drops = gateway_policy_police_parsed_response(&parsed);
+      (void)police_drops; /* drop count plumbed through the pipeline total
+                             for the future P2b audit pass; today the only
+                             visible effect is the parsed.calls[] mutation. */
 
-         char added[256];
-         if (openai_format_responses_fc_item_added(fc_id, cid, name, i, added, sizeof(added)) > 0)
-            emit(ctx, "response.output_item.added", added);
-
-         size_t acap = strlen(args) * 6 + 256;
-         char *af = malloc(acap);
-         if (af)
-         {
-            if (openai_format_responses_fc_args_delta(fc_id, i, args, af, (int)acap) > 0)
-               emit(ctx, "response.function_call_arguments.delta", af);
-            if (openai_format_responses_fc_args_done(fc_id, i, args, af, (int)acap) > 0)
-               emit(ctx, "response.function_call_arguments.done", af);
-            free(af);
-         }
-
-         size_t dcap = strlen(args) * 6 + strlen(name) + strlen(cid) + 512;
-         char *df = malloc(dcap);
-         if (df)
-         {
-            if (openai_format_responses_fc_item_done(fc_id, cid, name, args, i, df, (int)dcap) > 0)
-               emit(ctx, "response.output_item.done", df);
-            free(df);
-         }
-         if (output)
-            cJSON_AddItemToArray(
-                output, openai_responses_function_call_item(fc_id, cid, name, args, "completed"));
-      }
-
-      size_t ccap = 4096;
-      for (int i = 0; i < parsed.call_count; i++)
-         ccap += (parsed.calls[i].arguments ? strlen(parsed.calls[i].arguments) : 0) * 6 + 256;
-      char *cf = malloc(ccap);
-      if (cf)
-      {
-         if (openai_format_responses_completed_items(id, model, created, output,
-                                                     parsed.prompt_tokens, parsed.completion_tokens,
-                                                     cf, (int)ccap) > 0)
-            emit(ctx, "response.completed", cf);
-         free(cf);
-      }
-      else
-         cJSON_Delete(output);
+      openai_responses_emit_policed(&parsed, id, model, created, emit, ctx, frame, sizeof(frame));
    }
    else
+
    {
       /* Text turn: a single assistant message item carrying the content. */
       const char *txt =

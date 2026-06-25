@@ -33,6 +33,26 @@ typedef enum
    GW_API_OPENAI = 1,
 } gw_api_t;
 
+/* How the memory stage renders the <aimee-context> envelope into `raw`. Finer
+ * than gw_api_t because the two OpenAI request shapes inject differently and
+ * MUST stay byte-identical to their pre-consolidation behavior:
+ *   ANTHROPIC_MESSAGES   — append a trailing system text block (cache-safe),
+ *                          via messages_apply_preinject; parity-gated.
+ *   OPENAI_INSTRUCTIONS  — merge env into `raw.instructions` as env+"\n\n"+prior
+ *                          (the /v1/responses Codex path); NOT parity-gated.
+ *   OPENAI_SYSTEM_PROMPT — set `raw.instructions` to the RAW env (no trailing
+ *                          newlines): the legacy chat/completions handlers that
+ *                          pass the envelope straight to agent_execute as the
+ *                          system prompt. NOT parity-gated. Do NOT route this
+ *                          through ingress_preinject_apply — that would add
+ *                          "\n\n" and break byte-identity. */
+typedef enum
+{
+   GW_MEM_ANTHROPIC_MESSAGES = 0,
+   GW_MEM_OPENAI_INSTRUCTIONS = 1,
+   GW_MEM_OPENAI_SYSTEM_PROMPT = 2,
+} gw_mem_target_t;
+
 /* Canonical request IR. `raw` is BORROWED: the caller owns the cJSON request and
  * frees it; stages mutate it in place and must never free or replace it. `driver`
  * and `ag` are opaque (the stage implementations own the concrete types). INVARIANT:
@@ -40,12 +60,13 @@ typedef enum
  * Anthropic /v1/messages, so `parity == (serving_api == GW_API_ANTHROPIC)`). */
 typedef struct
 {
-   struct cJSON *raw;    /* borrowed; stages mutate in place, never free */
-   const void *driver;   /* opaque delegate_driver_t* for stage impls */
-   const void *ag;       /* opaque agent_t* for stage impls */
-   gw_api_t serving_api; /* derived from the driver */
-   int parity;           /* serving_api == client_api (no translation needed) */
-   int stream;           /* this call is an SSE stream */
+   struct cJSON *raw;          /* borrowed; stages mutate in place, never free */
+   const void *driver;         /* opaque delegate_driver_t* for stage impls */
+   const void *ag;             /* opaque agent_t* for stage impls */
+   gw_api_t serving_api;       /* derived from the driver */
+   gw_mem_target_t mem_target; /* how the memory stage renders the envelope */
+   int parity;                 /* serving_api == client_api (no translation needed) */
+   int stream;                 /* this call is an SSE stream */
 } gw_request_t;
 
 /* A request stage: inspect/alter `r->raw` in place. Returns the number of
