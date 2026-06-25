@@ -581,11 +581,15 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
       code_items[i].structural_weight = 0;
    }
 
-   /* Signal B — graph callers of `symbol` (key = file_path; structural edge). */
+   /* Signal B — graph callers of `symbol` (key = file_path; structural edge).
+    * Pass `proj` (NULL when absent) to match Signal A and the existing
+    * /v1/code/callers route — canonical_index_find_callers takes its all-projects
+    * SQL path on NULL, so both legs scope identically instead of one searching all
+    * projects (NULL) while the other got "" (which is not the all-projects sentinel). */
    int ng = 0;
    if (symbol[0])
    {
-      ng = canonical_index_find_callers(proj ? proj : "", symbol, ghits, HYBRID_PER_SIGNAL);
+      ng = canonical_index_find_callers(proj, symbol, ghits, HYBRID_PER_SIGNAL);
       if (ng < 0)
          ng = 0;
       for (int i = 0; i < ng; i++)
