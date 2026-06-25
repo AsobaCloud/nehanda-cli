@@ -194,6 +194,14 @@ int server_tls_init_default(void)
    snprintf(key, sizeof(key), "%s/tls/server.key", config_default_dir());
    config_t cfg;
    config_load(&cfg);
+   /* Secure-by-default: when a tls_port is configured but no cert exists, the
+    * server provisions a self-signed one rather than fall back to a plaintext
+    * listener (the remote path now REQUIRES TLS — plaintext /v1 is loopback-only).
+    * An operator-supplied cert at the same path is left untouched. mTLS still
+    * needs an operator-issued client CA, so this self-signed path is server-TLS
+    * only (mtls==0); when mTLS is required the operator must supply the cert. */
+   if (cfg.server_api_mtls == 0)
+      pki_ensure_self_signed_server_cert(cert, key);
    /* When mTLS is on, ensure aimee's client CA exists (create-or-load) and the
     * revocation snapshot is loaded BEFORE server_tls_init loads the client CA
     * file and the verify callback starts consulting the snapshot. */
