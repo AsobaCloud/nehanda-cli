@@ -218,8 +218,9 @@ RUN chmod +x /usr/local/bin/aimee-combined-entrypoint
 # Runs as root: the entrypoint bootstraps the webchat PAM user and runs webchat
 # (pam_unix needs /etc/shadow), then drops aimee-kb + aimee-server to "aimee".
 WORKDIR /var/lib/aimee
-# 8740 = server /v1; 8741 = kb /v1; 8443 = aimee-webchat browser UI (HTTPS).
-EXPOSE 8740 8741 8443
+# 8740 = server /v1 (plaintext, loopback-only); 8743 = server /v1 over native TLS
+# (the remote thin-client port); 8741 = kb /v1; 8443 = aimee-webchat UI (HTTPS).
+EXPOSE 8740 8743 8741 8443
 
 # NOTE: the server's/kb's worker threads need a 64 MB stack (the 8 MB container
 # default overflows during startup and the process segfaults). The entrypoint
