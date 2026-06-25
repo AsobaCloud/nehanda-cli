@@ -64,6 +64,49 @@ static void test_code_callers_ok(void)
    assert(strstr(buf, "\"next_cursor\":null") != NULL);
 }
 
+/* §5 hybrid retrieval: fuse lexical-code + graph-callers (RRF) + memory "why". */
+static void test_code_hybrid_ok(void)
+{
+   char buf[2048];
+   int s = kb_http_route_ex("GET", "/v1/code/hybrid",
+                            "query=needle&symbol=target_fn&project=proj-alpha&max_results=10", NULL,
+                            NULL, NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"status\":\"ok\"") != NULL);
+   assert(strstr(buf, "\"results\"") != NULL);
+   /* Both signals contribute a file, each labeled + enriched from its source. */
+   assert(strstr(buf, "\"file_path\":\"src/search.c\"") != NULL); /* lexical-code leg */
+   assert(strstr(buf, "\"signals\":[\"code\"]") != NULL);
+   assert(strstr(buf, "\"snippet\":\"int needle") != NULL);
+   assert(strstr(buf, "\"file_path\":\"src/caller.c\"") != NULL); /* graph-callers leg */
+   assert(strstr(buf, "\"signals\":[\"graph\"]") != NULL);
+   assert(strstr(buf, "\"caller\":\"caller_fn\"") != NULL);
+   /* Memory recall surfaces as typed "why" context, not a fused row. */
+   assert(strstr(buf, "\"why\"") != NULL);
+   assert(strstr(buf, "why needle exists") != NULL);
+}
+
+static void test_code_hybrid_missing_query(void)
+{
+   char buf[256];
+   int s = kb_http_route_ex("GET", "/v1/code/hybrid", "symbol=target_fn", NULL, NULL, NULL, 0, buf,
+                            sizeof(buf));
+   assert(s == 400);
+   assert(strstr(buf, "missing query") != NULL);
+}
+
+/* No symbol => graph leg empty; lexical-code + memory still fuse/return. */
+static void test_code_hybrid_no_symbol(void)
+{
+   char buf[2048];
+   int s = kb_http_route_ex("GET", "/v1/code/hybrid", "query=needle&project=proj-alpha", NULL, NULL,
+                            NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"file_path\":\"src/search.c\"") != NULL);
+   assert(strstr(buf, "\"file_path\":\"src/caller.c\"") == NULL); /* no graph leg */
+   assert(strstr(buf, "why needle exists") != NULL);
+}
+
 static void test_code_project_stats_missing_project(void)
 {
    char buf[256];
@@ -578,4 +621,3 @@ static void test_scope_admin_token_full_access(void)
                             sizeof(buf));
    assert(s != 403 && s != 401);
 }
-
