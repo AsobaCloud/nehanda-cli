@@ -163,17 +163,40 @@ static void ce_mark_retry_or_fail(int64_t job_id, int attempts, int max_attempts
    aimee_pg_finalize(st);
 }
 
-/* Resolve sidecar command: use opts->extract_command if set, else find
- * scripts/curator-extract.py relative to the running binary. */
-static void ce_resolve_command(const kb_curator_extract_opts_t *opts, char *out, size_t len)
+/* Pick the curator-extract sidecar command from a candidate list. Shared by the
+ * doc and code extract stages and exposed for testing. The script is invoked as
+ * `python3 <path>`, so it only needs to be READABLE — the previous code checked
+ * access(X_OK), which rejected the shipped 0644 script. */
+void kb_curator_pick_sidecar_command(const char *explicit_cmd, const char *const *candidates,
+                                     int n_candidates, char *out, size_t len)
 {
-   if (opts->extract_command[0])
+   if (explicit_cmd && explicit_cmd[0])
    {
-      snprintf(out, len, "%s", opts->extract_command);
+      snprintf(out, len, "%s", explicit_cmd);
       return;
    }
+   for (int i = 0; i < n_candidates; i++)
+   {
+      if (candidates[i] && candidates[i][0] && access(candidates[i], R_OK) == 0)
+      {
+         snprintf(out, len, "python3 %s", candidates[i]);
+         return;
+      }
+   }
+   /* Last resort: cwd-relative — only resolves when run from a repo checkout. */
+   snprintf(out, len, "python3 scripts/curator-extract.py");
+}
 
-   /* Try /proc/self/exe on Linux to locate the binary and find scripts/ */
+/* Resolve the sidecar command, searching the real install locations for
+ * curator-extract.py. The container images COPY scripts to /opt/aimee/scripts
+ * (binary at /usr/local/bin), so the old <bindir>/../scripts heuristic computed
+ * /usr/local/scripts and never matched — falling back to a cwd-relative path
+ * that does not resolve from the kb working dir (/var/lib/aimee), stalling every
+ * extract job. Try the image path first, then the dev/build tree. */
+void kb_curator_resolve_sidecar_command(const kb_curator_extract_opts_t *opts, char *out,
+                                        size_t len)
+{
+   char exe_rel[768] = "";
    char exe[512];
    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
    if (n > 0)
@@ -183,18 +206,15 @@ static void ce_resolve_command(const kb_curator_extract_opts_t *opts, char *out,
       if (slash)
       {
          *slash = '\0';
-         /* binary is in <build>/; scripts/ is at <repo>/scripts/ */
-         char candidate[768];
-         snprintf(candidate, sizeof(candidate), "%s/../scripts/curator-extract.py", exe);
-         if (access(candidate, X_OK) == 0)
-         {
-            snprintf(out, len, "python3 %s", candidate);
-            return;
-         }
+         snprintf(exe_rel, sizeof(exe_rel), "%s/../scripts/curator-extract.py", exe);
       }
    }
-
-   snprintf(out, len, "python3 scripts/curator-extract.py");
+   const char *candidates[] = {
+       "/opt/aimee/scripts/curator-extract.py", /* container image (Dockerfile COPY target) */
+       exe_rel[0] ? exe_rel : NULL,             /* dev/build tree: binary beside scripts/ */
+   };
+   kb_curator_pick_sidecar_command(opts->extract_command, candidates,
+                                   (int)(sizeof(candidates) / sizeof(candidates[0])), out, len);
 }
 
 /* ── Artifact write ─────────────────────────────────────────────────────── */
@@ -344,7 +364,7 @@ int kb_curator_extract_one(const kb_curator_extract_opts_t *opts)
    }
 
    char cmd[768];
-   ce_resolve_command(opts, cmd, sizeof(cmd));
+   kb_curator_resolve_sidecar_command(opts, cmd, sizeof(cmd));
 
    /* Route through the §2 dispatch: a configured Tier-A provider (incl. the
     * bundled-Gemma LLM_ENDPOINT env) runs in-process via provider_client; else
