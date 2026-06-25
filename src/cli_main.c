@@ -850,7 +850,7 @@ static int launch_session_with_input(int json_output, int debug, int default_lau
     * client's working tree over the reverse-channel so those tools act here (the
     * client never absorbs the engine or a DB). A co-located server uses the local
     * socket as before. */
-   int remote = cli_v1_remote_endpoint_is_tcp();
+   int remote = cli_v1_remote_endpoint_is_network();
    const char *sock = NULL;
    if (remote)
    {
@@ -1383,7 +1383,7 @@ static char *acp_dispatch_prompt(const char *content, const char *session_id)
 {
    /* ACP turns run the agent locally (see launch_session_with_input); a remote
     * /v1 endpoint cannot serve them. */
-   if (cli_v1_remote_endpoint_is_tcp())
+   if (cli_v1_remote_endpoint_is_network())
       return NULL;
    const char *sock = cli_ensure_server_for_method("chat.send_stream");
    if (!sock)
@@ -1779,7 +1779,7 @@ int main(int argc, char **argv)
     * root lives on THIS host, which the server cannot read. Resolve + register +
     * ingest from the client rather than forwarding the raw path (which the
     * server would try to realpath against its own filesystem and reject). */
-   if (cli_v1_remote_endpoint_is_tcp())
+   if (cli_v1_remote_endpoint_is_network())
    {
       if (strcmp(cmd, "workspace") == 0 && sub_argc >= 1 && strcmp(sub_argv[0], "add") == 0)
          return cli_workspace_add_remote(sub_argc >= 2 ? sub_argv[1] : NULL);

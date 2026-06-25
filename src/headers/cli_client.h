@@ -218,10 +218,12 @@ int cli_v1_forward(const char *socket_path, const cli_v1_route_t *route, int jso
  * aimee.api.client_endpoint set). Callers skip the local-socket preflight. */
 int cli_v1_has_remote_endpoint(void);
 
-/* True only when the configured endpoint is a remote "tcp:host:port" (not a
- * local "unix:" path). Interactive commands (chat/launch) refuse a remote
- * endpoint because the agent/tools/worktree run on the client host. */
-int cli_v1_remote_endpoint_is_tcp(void);
+/* True only when the configured endpoint is a remote network endpoint —
+ * "tcp:host:port" (http) or "tls:host:port" (https) — not a local "unix:" path.
+ * Interactive commands (chat/launch) refuse a remote endpoint because the
+ * agent/tools/worktree run on the client host; the thin-client workspace/index
+ * push uses it to know the server cannot read this host's files. */
+int cli_v1_remote_endpoint_is_network(void);
 
 /* Resolve the remote /v1 endpoint ("tcp:host:port" / "unix:path") and bearer for
  * the HTTP transport (env AIMEE_API_ENDPOINT / AIMEE_API_BEARER, else aimee.yaml
