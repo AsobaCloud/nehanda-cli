@@ -1,12 +1,16 @@
 # Aimee as the universal LLM gateway: dual-API surface, model-derived proxy/translate, and a general inspect/alter pipeline
 
 - **State:** reviewed — roundtable sign-off; **implementing.** P1 (derive
-  proxy/translate, delete the `claude_proxy_parity` flag) is complete (#658); the
-  remaining work is the `gateway_pipeline` core module + tool-policing (P2),
-  memory-as-a-stage (P3), and delegate unification (P4). (R1
-  surfaced 3 findings; R2: Findings A
-  & B confirmed RESOLVED by security · architect · qa; Finding C resolved via the
-  model-pin decision below). User proposal-gate decisions folded in. *Note: the
+  proxy/translate, delete the `claude_proxy_parity` flag) is complete (#658); P2a
+  (request pipeline scaffold over a canonical IR) is complete (#669); P2b (model-pin
+  policy stage) is complete (#671); P2c (response-side tool policing — buffered
+  AND streaming paths) is complete (#677, #679); the OpenAI-ingress
+  response-policing sibling slice (streaming `/v1/responses`, mirroring the
+  Anthropic path through the shared `gateway_policy_police_parsed_response`)
+  is complete (#682). Remaining work: P3 (memory-as-a-stage) and P4 (delegate
+  unification). (R1 surfaced 3 findings; R2: Findings A &
+  B confirmed RESOLVED by security · architect · qa; Finding C resolved via the
+  model-pin decision below.) User proposal-gate decisions folded in. *Note: the
   delegate transcripts were truncated by aimee's citation-replay verification
   (stale code index on the review host); verdicts were front-loaded and captured.*
   One non-blocking item carried to the plan: spell out the OpenAI streaming
