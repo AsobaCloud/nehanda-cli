@@ -3,6 +3,47 @@
  * unit under the 2000-line hard limit. Included (with
  * test_kb_http_routes_endpoints.inc) just before main(); all helpers and
  * fixtures live in test_kb_http_routes.c above the include point. */
+/* Full memory_t layout (mirrors headers/memory.h) so the stub writes each field
+ * at the offset the handler — compiled against the real struct — reads. The main
+ * file keeps a truncated local memory_t for other stubs, so we cast a void* here
+ * rather than redeclare the type, exactly like canonical_index_code_search. Lives
+ * here (with the hybrid test it feeds) to keep test_kb_http_routes.c under the
+ * 2000-line build-integrity limit. */
+typedef struct
+{
+   int64_t id;
+   char tier[4];
+   char kind[16];
+   char key[512];
+   char headline[512];
+   char content[2048];
+   char use_cases[1024];
+   double confidence;
+   int use_count;
+   char last_used_at[32];
+   char created_at[32];
+   char updated_at[32];
+   char source_session[128];
+   double salience;
+   char provenance_category[32];
+   double retrieval_score;
+   int hybrid_rank;
+} test_full_memory_t;
+
+int db2_memory_find_facts_like(const char *query, int limit, void *out, int max)
+{
+   assert(out);
+   if (!query || strcmp(query, "needle") != 0 || limit < 1 || max < 1)
+      return 0;
+   test_full_memory_t *m = (test_full_memory_t *)out;
+   memset(&m[0], 0, sizeof(m[0]));
+   m[0].id = 7;
+   snprintf(m[0].kind, sizeof(m[0].kind), "decision");
+   snprintf(m[0].headline, sizeof(m[0].headline), "why needle exists");
+   snprintf(m[0].content, sizeof(m[0].content), "chose needle over haystack for O(1) lookup");
+   return 1;
+}
+
 static void test_code_structure_ok(void)
 {
    char buf[512];
