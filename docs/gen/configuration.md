@@ -22,7 +22,7 @@ aimee config set <key> <value>    # set one value
 
 Structured options (arrays, nested objects — e.g. `ensemble.reference_models`) are not CLI-settable; they are written into the config file under the sections listed at the end.
 
-## CLI-settable keys (110)
+## CLI-settable keys (111)
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -78,6 +78,7 @@ Structured options (arrays, nested objects — e.g. `ensemble.reference_models`)
 | `kb_evidence_emit_enabled` | bool | Emit evidence records from KB ingest. |
 | `kb_mining_enabled` | bool | Enable background KB mining. |
 | `kb_mining_min_poll_s` | int | Minimum interval (s) between KB mining polls. |
+| `kb_pdf_ingest_enabled` | bool | Route PDF uploads through the structured geometry extractor (kb_doc_pdf) instead of plain pdftotext (default off). |
 | `kb_search_max_results` | int | Default max results for KB search. |
 | `learning_implicit_citation_continuation` | bool | Implicit-learning signal: citation on continuation. |
 | `learning_implicit_citation_repair` | bool | Implicit-learning signal: citation on repair. |
