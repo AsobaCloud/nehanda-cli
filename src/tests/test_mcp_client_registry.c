@@ -239,7 +239,7 @@ static void test_namespaced_tools_and_dispatch(void)
    int saw_delegate_background_absent = 0;
    int saw_delegate_cwd = 0;
    int saw_delegate_status = 0;
-   int saw_job_start_queue_desc = 0;
+   int saw_job_family = 0;
    int saw_skill_manage = 0;
    int saw_skill_manage_cwd = 0;
    cJSON *tool = NULL;
@@ -250,13 +250,10 @@ static void test_namespaced_tools_and_dispatch(void)
          saw_namespaced = 1;
       if (cJSON_IsString(tool_name) && strcmp(tool_name->valuestring, "delegate_status") == 0)
          saw_delegate_status = 1;
-      if (cJSON_IsString(tool_name) && strcmp(tool_name->valuestring, "job_start") == 0)
-      {
-         cJSON *desc = cJSON_GetObjectItemCaseSensitive(tool, "description");
-         if (cJSON_IsString(desc) && strstr(desc->valuestring, "Queue a coordinated job") &&
-             !strstr(desc->valuestring, "dispatches plan steps"))
-            saw_job_start_queue_desc = 1;
-      }
+      /* job_start/job_status were collapsed into the `job` family (P4b); the
+       * member description no longer appears standalone. Verify the family tool. */
+      if (cJSON_IsString(tool_name) && strcmp(tool_name->valuestring, "job") == 0)
+         saw_job_family = 1;
       if (cJSON_IsString(tool_name) && strcmp(tool_name->valuestring, "skill_manage") == 0)
       {
          saw_skill_manage = 1;
@@ -285,7 +282,7 @@ static void test_namespaced_tools_and_dispatch(void)
    assert(saw_delegate_background_absent);
    assert(saw_delegate_cwd);
    assert(saw_delegate_status);
-   assert(saw_job_start_queue_desc);
+   assert(saw_job_family);
    assert(saw_skill_manage);
    assert(saw_skill_manage_cwd);
    cJSON_Delete(public_tools);
