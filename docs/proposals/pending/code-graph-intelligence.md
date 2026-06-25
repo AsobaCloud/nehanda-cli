@@ -158,6 +158,18 @@ memory top-M by recency·relevance), so fusion cost is bounded. Surfaced via a n
 `/v1/code/context` (or an extended `/v1/code/search`) + an MCP tool the primary agent
 calls before grepping.
 
+**Status — fusion core shipped.** The RRF scoring model is implemented as a pure,
+self-contained module `src/kb/kb_rrf.c` (`kb_rrf_fuse`): it takes N ranked signal
+lists + per-signal weights + the RRF constant `k`, and returns one ranking by
+`Σ_s w_s/(k+rank_s)`, robust to absent signals, with deterministic tie-breaks
+(structural-trust desc, then id) and a cross-signal-consensus boost. Fully unit
+tested (`unit-test-kb-rrf`): exact rank-blend math, weighting, consensus-beats-single,
+absent-signal robustness, determinism under input-order permutation, truncation.
+The remaining wiring — embedding the query, gathering the three signal lists
+(`db2_entity_edge_*` graph neighborhood, `pgvec_code_search` vector, memory recall),
+the `/v1/code/hybrid` route + MCP tool, and the config-tunable weights — is the next
+increment (needs the live embedder, so it is integration-tier rather than shim-tested).
+
 ## §6 Live + cross-session memory fusion
 
 - **Incremental updates** on default-branch movement (post-merge / fetch hook +
@@ -218,8 +230,9 @@ agent's hot path.
 ## Tests
 
 - Unit: projection-sync **idempotency** (sync twice → identical edge set + zero-work
-  second pass); provenance tagging; **RRF fusion ordering** (rank blend + tie-break);
-  surprising-links relevance gate (quality floor + threshold).
+  second pass); provenance tagging; **RRF fusion ordering** (rank blend + tie-break)
+  — shipped as `unit-test-kb-rrf`; surprising-links relevance gate (quality floor +
+  threshold).
 - Integration: `workspace add` of a sample repo → all three layers populated +
   searchable (extends the docker e2e); incremental update on file change.
 - Source selection (`unit-test-code-collect`): the canonical collector indexes the
