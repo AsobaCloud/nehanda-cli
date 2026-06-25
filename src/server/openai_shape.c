@@ -1373,20 +1373,25 @@ int openai_format_error(char *resp, int cap, const char *type, const char *messa
    return (len < 0 || len >= cap) ? -1 : len;
 }
 
-/* Emit the OpenAI /v1/responses SSE event sequence for a parsed_response_t
+/* Emit the OpenAI /v1/responses tool-call SSE tail for a parsed_response_t
  * that carries `calls[]`. Extracted from the inline emit loop in
  * responses_stream_handler so it is unit-testable in isolation
  * (test_openai_chat_policed.c) without stubbing the entire
  * agent_execute_messages pipeline.
  *
+ * The caller emits the leading `response.created` envelope event exactly once
+ * for EVERY path (error / text / tool-call); this helper emits ONLY the
+ * tool-call tail and must NOT re-emit `response.created`, otherwise the
+ * tool-call path would double it on the wire (an OpenAI/Codex protocol
+ * violation).
+ *
  * Behavior:
- *   - Always emits `response.created` first.
  *   - If parsed.call_count > 0: emits one set of per-call frames
  *     (output_item.added, function_call_arguments.delta, .done,
  *     output_item.done) per surviving call, then `response.completed`
  *     with all calls in `output[]`.
- *   - If parsed.call_count == 0 (P2c all-dropped case): emits
- *     `response.created` + `response.completed` with empty `output[]`.
+ *   - If parsed.call_count == 0 (P2c all-dropped case) or parsed is NULL:
+ *     emits a single `response.completed` with empty `output[]`.
  *
  * The wire shape is what the upstream OpenAI responses backend
  * emits for a tool-call reply; the policed-shape is identical
@@ -1395,13 +1400,12 @@ int openai_format_error(char *resp, int cap, const char *type, const char *messa
  */
 void openai_responses_emit_policed(const parsed_response_t *parsed, const char *id,
                                    const char *model, long created, openai_sse_emit_fn emit,
-                                   void *ctx, char *frame, size_t frame_cap)
+                                   void *ctx)
 {
    int n = parsed ? parsed->call_count : 0;
 
-   /* response.created (always first). */
-   if (openai_format_responses_created(id, model, created, frame, frame_cap) > 0)
-      emit(ctx, "response.created", frame);
+   if (!emit)
+      return; /* fail closed: no transport to emit on */
 
    if (n > 0)
    {
@@ -1442,9 +1446,13 @@ void openai_responses_emit_policed(const parsed_response_t *parsed, const char *
                 output, openai_responses_function_call_item(fc_id, cid, name, args, "completed"));
       }
 
-      size_t ccap = 4096;
+      /* ccap: 4096 base (envelope/usage) + id/model, plus per call: args worst-
+       * case JSON-escaped (×6 — a byte can expand to \uXXXX) + name + call_id +
+       * 256 slack for that item's JSON keys/braces/commas/status/fc_id suffix. */
+      size_t ccap = 4096 + strlen(id ? id : "") + strlen(model ? model : "");
       for (int i = 0; i < n; i++)
-         ccap += (parsed->calls[i].arguments ? strlen(parsed->calls[i].arguments) : 0) * 6 + 256;
+         ccap += (parsed->calls[i].arguments ? strlen(parsed->calls[i].arguments) : 0) * 6 +
+                 strlen(parsed->calls[i].name) + strlen(parsed->calls[i].id) + 256;
       char *cf = malloc(ccap);
       if (cf)
       {
@@ -1465,7 +1473,7 @@ void openai_responses_emit_policed(const parsed_response_t *parsed, const char *
       cJSON *empty_output = cJSON_CreateArray();
       int pt = parsed ? parsed->prompt_tokens : 0;
       int ct = parsed ? parsed->completion_tokens : 0;
-      size_t ccap = 4096;
+      size_t ccap = 4096 + strlen(id ? id : "") + strlen(model ? model : "");
       char *cf = malloc(ccap);
       if (cf)
       {
