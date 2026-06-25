@@ -24,7 +24,7 @@
 #   scripts/aimee-server-docker-smoke.sh --up --down # also tear down after
 #
 # Env:
-#   SERVER_URL    base URL of the server /v1 API  (default http://localhost:8740)
+#   SERVER_URL    base URL of the server /v1 API  (default https://localhost:8743)
 #   KB_URL        base URL of the kb /v1 API      (default http://localhost:8741)
 #   BEARER        server bearer token             (default aimee-local-dev)
 #   COMPOSE_FILE  compose file(s), space-separated (default compose.server.yaml);
@@ -36,7 +36,7 @@
 
 set -euo pipefail
 
-SERVER_URL="${SERVER_URL:-http://localhost:8740}"
+SERVER_URL="${SERVER_URL:-https://localhost:8743}"
 KB_URL="${KB_URL:-http://localhost:8741}"
 BEARER="${BEARER:-aimee-local-dev}"
 COMPOSE_FILE="${COMPOSE_FILE:-compose.server.yaml}"
@@ -79,7 +79,8 @@ check() {
   # check <name> <expected-substring> <curl-args...>
   local name="$1" expect="$2"; shift 2
   local body
-  if body="$(curl -fsS --max-time 20 "${AUTH[@]}" "$@" 2>/dev/null)" && [[ "$body" == *"$expect"* ]]; then
+  # -k: the server's /v1 TLS uses an auto-provisioned self-signed cert (harmless for the kb's http URL).
+  if body="$(curl -fsS -k --max-time 20 "${AUTH[@]}" "$@" 2>/dev/null)" && [[ "$body" == *"$expect"* ]]; then
     green "  PASS  $name"
     PASS=$((PASS + 1))
   else
@@ -94,7 +95,7 @@ check_status() {
   # check_status <name> <expected-http-code> <curl-args...>  (no auth header added)
   local name="$1" want="$2"; shift 2
   local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$@" 2>/dev/null || true)"
+  code="$(curl -s -k -o /dev/null -w '%{http_code}' --max-time 15 "$@" 2>/dev/null || true)"
   if [[ "$code" == "$want" ]]; then
     green "  PASS  $name (HTTP $code)"
     PASS=$((PASS + 1))
