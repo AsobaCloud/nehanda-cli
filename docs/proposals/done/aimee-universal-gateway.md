@@ -1,14 +1,16 @@
 # Aimee as the universal LLM gateway: dual-API surface, model-derived proxy/translate, and a general inspect/alter pipeline
 
-- **State:** reviewed — roundtable sign-off; **implementing.** P1 (derive
+- **State:** ✅ **COMPLETE — all phases shipped; proposal done.** P1 (derive
   proxy/translate, delete the `claude_proxy_parity` flag) is complete (#658); P2a
   (request pipeline scaffold over a canonical IR) is complete (#669); P2b (model-pin
   policy stage) is complete (#671); P2c (response-side tool policing — buffered
   AND streaming paths) is complete (#677, #679); the OpenAI-ingress
   response-policing sibling slice (streaming `/v1/responses`, mirroring the
   Anthropic path through the shared `gateway_policy_police_parsed_response`)
-  is complete (#682). Remaining work: P3 (memory-as-a-stage) and P4 (delegate
-  unification). (R1 surfaced 3 findings; R2: Findings A &
+  is complete (#682); P3 (memory injection as one shared pipeline stage) is complete
+  (#685); P4 (delegate unification — route aimee's own outbound model-call loop
+  through the pipeline so tool-policing applies to delegate calls) is complete (#695).
+  (R1 surfaced 3 findings; R2: Findings A &
   B confirmed RESOLVED by security · architect · qa; Finding C resolved via the
   model-pin decision below.) User proposal-gate decisions folded in. *Note: the
   delegate transcripts were truncated by aimee's citation-replay verification
@@ -152,13 +154,20 @@ Properties:
   existing translation into it; add the first policy stage: **tool policing**
   (configurable tool allow/deny; the subagent/`Task` strip on request + disallowed
   `tool_use` rejection on response). Bounded, per-call, opt-in by policy.
-- **P3 — memory as a stage.** Both ingresses already call
-  `ingress_preinject_build` ad-hoc (anthropic_http.c, openai_chat.c). Fold those
-  into **one** shared memory/context pipeline stage (DRY), cache-safe, identical
-  rendered bytes.
-- **P4 — unify delegates + symmetric coverage.** Route the OpenAI ingress and the
-  delegate call path through the same pipeline so policy/memory/translation apply
-  uniformly to every model call.
+- **P3 — memory as a stage. ✅ SHIPPED (#685).** Both ingresses called
+  `ingress_preinject_build` ad-hoc (anthropic_http.c, openai_chat.c); folded into
+  **one** shared memory/context pipeline stage (`server/gw_stage_memory.c`), cache-safe,
+  identical rendered bytes.
+- **P4 — unify delegates + symmetric coverage. ✅ SHIPPED (#695).** The OpenAI ingress
+  was routed through the pipeline in #672; #695 routes aimee's own outbound model-call
+  loop (the shared primary+delegate `agent_execute_with_tools_internal`) through the
+  same pipeline via the new `gateway_delegate.{c,h}` module, so a config-enabled
+  tool-policing policy (`gateway_prevent_subagents`) applies to delegate calls — both
+  request side (subagent-strip) and response side (police a denied `tool_use`), gated to
+  delegates so aimee's own primary delegation is never stripped. Memory and model-pin are
+  deliberately not re-run on aimee's own calls (memory would double-inject over
+  `agent_build_exec_context_ex`; model-pin would clobber the per-turn fallback model).
+  Covered by `src/tests/test_gateway_p4_delegate.c`.
 
 ## Acceptance criteria
 
