@@ -1,7 +1,24 @@
 # Proposal: aimee-kb LLM endpoint config + zero-config default CPU container
 
-**Status:** pending
+**Status:** IN PROGRESS — P1 (config surface) complete in #694; P2 (zero-config default CPU sibling) is the open deploy-tier residual.
 **Owner:** deploy/kb
+
+> **Reconciliation (2026-06-25).** **P1 — config surface — is complete and shipped in
+> #694** (`bee9fa7`): `AIMEE_LLM_URL` drives embed/rerank/synth (curator Tier-A + Tier-B
+> at `{url}/v1`); `AIMEE_EMBEDDER_URL`/`AIMEE_RERANKER_URL` per-service overrides with the
+> documented precedence; consumed by the C in-process embed path
+> (`config_embedding_command`), `embed-remote.py`, `rerank-remote.py`, and
+> `kb_curator_provider` (both tiers); the dead `embedder:8080`/`llm:8080` baked `ENV`
+> defaults are removed from the kb `Dockerfile` (`Dockerfile.combined` keeps them);
+> embedding dim stays explicit (default 1024). Precedence + fallback are unit-tested
+> (`src/tests/test_kb_curator_provider.c`). **P2 — zero-config default CPU sibling — is the
+> only residual**, and it is **deploy-tier**: a SmoothNAS plugin / compose change
+> (`deploy/smoothnas/aimee-kb.plugin.yaml`) that conditionally brings up an `aimee-llm-cpu`
+> sibling and points the kb at it when `AIMEE_LLM_URL` is unset — orchestration that needs
+> the SmoothNAS runtime + Docker + the CPU image to validate, so it is deferred to an
+> environment that can exercise it (same class as the deployment/CI residual in
+> [autonomous-dev-execution-substrate.md](autonomous-dev-execution-substrate.md) §3). The
+> proposal stays in `pending/` until P2 lands.
 
 ## Principle
 
