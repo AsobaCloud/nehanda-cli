@@ -81,6 +81,21 @@ extern "C"
                                        const char *relation, const char *target, int relation_id,
                                        int subject_kind, int object_kind, int structural_weight);
 
+   /* One edge of a project's visible projection graph (for analytics / read-out).
+    * structural_weight is derived from the relation's structural trust. */
+   typedef struct
+   {
+      char source[512]; /* kept in sync with KB_GRAPH_NODE_MAX so analytics doesn't */
+      char relation[64];
+      char target[512]; /* collapse two long node names under a truncated prefix    */
+      int structural_weight;
+   } code_projection_edge_t;
+
+   /* List the edges of project's currently-visible generation into out[] (up to
+    * max). Returns the count written (0 if no visible generation), or -1 on error.
+    * Used by graph analytics (§4 hub/centrality) — a read-only projection. */
+   int db2_code_projection_list_edges(const char *project, code_projection_edge_t *out, int max);
+
    /* --- Full project sync --- */
 
    /* Sync all code-index facts for project into entity_edges under gen_id.
