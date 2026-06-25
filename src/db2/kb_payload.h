@@ -33,6 +33,7 @@ extern "C"
       int line_start;
       int line_end;
       char content[8192];
+      char doc_kind[16]; /* '' for normal docs, 'pdf' for structured-PDF chunks */
    } db2_kb_document_row_t;
 
    /* Look up a kb_documents row scoped by (id, project). Returns 1 on
@@ -155,6 +156,38 @@ extern "C"
    int db2_kb_txn_begin(void);
    int db2_kb_txn_commit(void);
    void db2_kb_txn_rollback(void);
+
+   /* structured-pdf Phase 2 retrieval. A PDF chunk matched by search_chunks. */
+   typedef struct
+   {
+      int64_t chunk_id;
+      char document_key[1024];
+      char content[8192];
+      int page_start;
+      int page_end;
+      char sensitivity_class[16];
+   } db2_kb_pdf_chunk_t;
+
+   /* Lexical (case-insensitive content match) search over structured-PDF chunks, scoped to
+    * (optional) project. ALWAYS excludes doc_kind != 'pdf' and quarantine_state='pending'
+    * (restricted/pending documents are withheld). `query` is matched as a literal substring
+    * (LIKE metacharacters are escaped). Returns the number of chunks written (<= max). */
+   int db2_kb_pdf_search_chunks(const char *project, const char *query, int max,
+                                db2_kb_pdf_chunk_t *out);
+
+   /* One coordinate region (a PDF line) for a citation. */
+   typedef struct
+   {
+      int page_no;
+      double x0, y0, x1, y1; /* normalized [0,1], top-left origin */
+      char quote[1024];
+      int line_index;
+      char content_type[16];
+   } db2_kb_pdf_region_t;
+
+   /* Fetch a chunk's regions ordered by line_index (the line-level citations). Returns the
+    * number written (<= max). */
+   int db2_kb_doc_regions_for_chunk(int64_t chunk_id, db2_kb_pdf_region_t *out, int max);
 
 #ifdef __cplusplus
 }
