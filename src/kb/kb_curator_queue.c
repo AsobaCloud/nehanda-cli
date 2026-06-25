@@ -36,8 +36,15 @@ int kb_curator_queue_docs_for_project(const char *project)
    if (!conn)
       return -1;
 
+   /* structured-PDF safety: PDF chunks (doc_kind='pdf') are NEVER curated. Curator
+    * extraction turns chunk content into searchable derived artifacts (claims/narrative)
+    * that surface through general /v1/search and are not subject to the access-gated
+    * search_chunks path or the quarantine withholding — so feeding PDF content here would
+    * leak it (including restricted documents) out of the access-controlled surface. PDFs
+    * are reachable only via the search_chunks tool. */
    static const char *sql = "SELECT id FROM kb_documents"
                             " WHERE project = ?1"
+                            " AND doc_kind <> 'pdf'"
                             " AND id NOT IN ("
                             "   SELECT document_id FROM kb_async_jobs"
                             "   WHERE kind = 'extract_doc'"

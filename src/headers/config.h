@@ -355,6 +355,8 @@ typedef struct config
     * this so an arbitrary client model name is not forwarded and rejected upstream. */
    int gateway_pin_model;
    int typed_facts_enabled;      /* typed-fact knowledge layer master gate (default off) */
+   int kb_pdf_ingest_enabled;    /* structured-pdf: route PDF uploads through the geometry
+                                    extractor (kb_doc_pdf) instead of plain pdftotext (default off) */
    int kb_evidence_emit_enabled; /* auditable-correctness: emit per-turn retrieval_event (default
                                     off) */
    int fidelity_check_enabled; /* auditable-correctness P3: run the fidelity judge on terminal-text

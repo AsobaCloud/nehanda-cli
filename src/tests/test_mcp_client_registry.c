@@ -239,7 +239,7 @@ static void test_namespaced_tools_and_dispatch(void)
    int saw_delegate_background_absent = 0;
    int saw_delegate_cwd = 0;
    int saw_delegate_status = 0;
-   int saw_job_start_queue_desc = 0;
+   int saw_job_family = 0;
    int saw_skill_manage = 0;
    int saw_skill_manage_cwd = 0;
    cJSON *tool = NULL;
@@ -250,13 +250,10 @@ static void test_namespaced_tools_and_dispatch(void)
          saw_namespaced = 1;
       if (cJSON_IsString(tool_name) && strcmp(tool_name->valuestring, "delegate_status") == 0)
          saw_delegate_status = 1;
-      if (cJSON_IsString(tool_name) && strcmp(tool_name->valuestring, "job_start") == 0)
-      {
-         cJSON *desc = cJSON_GetObjectItemCaseSensitive(tool, "description");
-         if (cJSON_IsString(desc) && strstr(desc->valuestring, "Queue a coordinated job") &&
-             !strstr(desc->valuestring, "dispatches plan steps"))
-            saw_job_start_queue_desc = 1;
-      }
+      /* job_start/job_status were collapsed into the `job` family (P4b); the
+       * member description no longer appears standalone. Verify the family tool. */
+      if (cJSON_IsString(tool_name) && strcmp(tool_name->valuestring, "job") == 0)
+         saw_job_family = 1;
       if (cJSON_IsString(tool_name) && strcmp(tool_name->valuestring, "skill_manage") == 0)
       {
          saw_skill_manage = 1;
@@ -285,7 +282,7 @@ static void test_namespaced_tools_and_dispatch(void)
    assert(saw_delegate_background_absent);
    assert(saw_delegate_cwd);
    assert(saw_delegate_status);
-   assert(saw_job_start_queue_desc);
+   assert(saw_job_family);
    assert(saw_skill_manage);
    assert(saw_skill_manage_cwd);
    cJSON_Delete(public_tools);
@@ -489,10 +486,72 @@ static void test_tools_list_surface(void)
    cJSON_Delete(tools);
 }
 
+/* P1/P2 presentation profile: "core"/"lean" (the P2 default) shrinks the served
+ * tools/list to the Tier-0 set; explicit "full"/unknown fail open. */
+static int profile_core_has(const char *n, const char *const *set)
+{
+   for (int i = 0; set[i]; i++)
+      if (strcmp(n, set[i]) == 0)
+         return 1;
+   return 0;
+}
+static void test_tool_profile_filter(void)
+{
+   /* Mirror of MCP_CORE_TOOLS in mcp_tool_profile.c — kept in sync intentionally.
+    * Includes the P2 discovery meta-tools find_tools/describe_tool. */
+   static const char *const core[] = {
+       "get_help",        "find_tools",    "describe_tool", "search_docs",
+       "search_memory",   "memory_recall", "get_identity",  "find_symbol",
+       "ast_grep_search", "git",           "delegate",      "ensemble_review",
+       "ask_user",        "send_message",  "note",          NULL};
+   int expect = 0;
+   for (int i = 0; core[i]; i++)
+      expect++;
+   assert(profile_core_has("find_tools", core) && profile_core_has("describe_tool", core));
+
+   /* Control the env so the default is deterministic across CI runners. */
+   unsetenv("AIMEE_MCP_TOOL_PROFILE");
+
+   /* Explicit "full" and an unknown profile are no-ops (fail open). */
+   cJSON *t = mcp_build_tools_list();
+   int full = cJSON_GetArraySize(t);
+   assert(full > expect);
+   assert(mcp_filter_tools_for_profile(t, "full") == 0 && cJSON_GetArraySize(t) == full);
+   assert(mcp_filter_tools_for_profile(t, "nonsense") == 0 && cJSON_GetArraySize(t) == full);
+   cJSON_Delete(t);
+
+   /* P2 default: env unset + NULL profile resolves to "core" and filters. */
+   assert(strcmp(mcp_tool_profile_effective(NULL), "core") == 0);
+   t = mcp_build_tools_list();
+   assert(mcp_filter_tools_for_profile(t, NULL) == full - expect);
+   assert(cJSON_GetArraySize(t) == expect);
+   cJSON_Delete(t);
+
+   /* "core" keeps exactly the Tier-0 set — and every named core tool exists in
+    * the built list (kept count == expected count proves none was dropped). */
+   t = mcp_build_tools_list();
+   int removed = mcp_filter_tools_for_profile(t, "core");
+   assert(removed == full - expect);
+   assert(cJSON_GetArraySize(t) == expect);
+   cJSON *tool = NULL;
+   cJSON_ArrayForEach(tool, t)
+   {
+      cJSON *nm = cJSON_GetObjectItemCaseSensitive(tool, "name");
+      assert(cJSON_IsString(nm) && profile_core_has(nm->valuestring, core));
+   }
+   cJSON_Delete(t);
+
+   /* "lean" is an alias for "core". */
+   t = mcp_build_tools_list();
+   assert(mcp_filter_tools_for_profile(t, "lean") == full - expect);
+   cJSON_Delete(t);
+}
+
 int main(void)
 {
    printf("test_mcp_client_registry\n");
    test_tools_list_surface();
+   test_tool_profile_filter();
    test_boot_and_lazy_tools();
    test_namespaced_tools_and_dispatch();
    test_failed_client_does_not_abort_boot();

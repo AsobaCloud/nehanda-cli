@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-SERVER_URL="${SERVER_URL:-http://localhost:8740}"
+SERVER_URL="${SERVER_URL:-https://localhost:8743}"
 KB_URL="${KB_URL:-http://localhost:8741}"
 BEARER="${BEARER:-aimee-local-dev}"
 COMPOSE_FILE="${COMPOSE_FILE:-compose.combined.yaml}"
@@ -65,7 +65,7 @@ FAIL=0
 check() {
   local name="$1" expect="$2"; shift 2
   local body
-  if body="$(curl -fsS --max-time 20 "${AUTH[@]}" "$@" 2>/dev/null)" && [[ "$body" == *"$expect"* ]]; then
+  if body="$(curl -fsS -k --max-time 20 "${AUTH[@]}" "$@" 2>/dev/null)" && [[ "$body" == *"$expect"* ]]; then
     green "  PASS  $name"; PASS=$((PASS + 1))
   else
     red   "  FAIL  $name"
@@ -77,7 +77,7 @@ check() {
 check_status() {
   local name="$1" want="$2"; shift 2
   local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$@" 2>/dev/null || true)"
+  code="$(curl -s -k -o /dev/null -w '%{http_code}' --max-time 15 "$@" 2>/dev/null || true)"
   if [[ "$code" == "$want" ]]; then
     green "  PASS  $name (HTTP $code)"; PASS=$((PASS + 1))
   else

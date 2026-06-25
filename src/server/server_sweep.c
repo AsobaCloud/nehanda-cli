@@ -366,6 +366,7 @@ int handle_dev_sweep(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    if (agent_load_config(&acfg) != 0)
       return server_send_error(conn, "could not load agents.json", NULL);
    ensemble_default_panel_from_agents(&cfg, &acfg);
+   ensemble_filter_panel_availability(&cfg, &acfg); /* drop unkeyed/unhealthy proposers */
    if (cfg.ensemble_reference_count <= 0)
       return server_send_error(conn, "no enabled agent to propose with", NULL);
    const char *proposer = cfg.ensemble_reference_models[0];

@@ -6,6 +6,7 @@
 #include "osv_check.h"
 #include "toolset.h"
 #include "cJSON.h"
+#include "log.h"
 
 #include <string.h>
 
@@ -59,23 +60,10 @@ static cJSON *server_mcp_audit_item(const config_mcp_client_t *client, const osv
    return obj;
 }
 
-int handle_mcp_tools_list(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
+/* Server-only tools (not in the shared mcp_build_tools_list): primary-session,
+ * persona, and role admin that only the server can service. */
+static void append_server_only_tools(cJSON *tools)
 {
-   (void)ctx;
-   (void)req;
-
-   cJSON *resp = cJSON_CreateObject();
-   if (!resp)
-      return server_send_error(conn, "out of memory", NULL);
-
-   cJSON *tools = mcp_build_tools_list();
-   if (!tools)
-   {
-      cJSON_Delete(resp);
-      return server_send_error(conn, "out of memory", NULL);
-   }
-
-   /* Server-only tools not in the shared list */
    {
       cJSON *s = cJSON_CreateObject();
       cJSON_AddStringToObject(s, "type", "object");
@@ -184,6 +172,48 @@ int handle_mcp_tools_list(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
           "run.");
       cJSON_AddItemToObject(t, "inputSchema", s);
       cJSON_AddItemToArray(tools, t);
+   }
+}
+
+/* The full served tool surface (shared built-ins + discovery + server-only),
+ * BEFORE any presentation-profile filtering. Used by tools/list and by the
+ * find_tools/describe_tool discovery handlers so discovery sees every tool. */
+cJSON *mcp_build_full_served_list(void)
+{
+   cJSON *tools = mcp_build_tools_list();
+   if (tools)
+      append_server_only_tools(tools);
+   return tools;
+}
+
+int handle_mcp_tools_list(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
+{
+   (void)ctx;
+   (void)req;
+
+   cJSON *resp = cJSON_CreateObject();
+   if (!resp)
+      return server_send_error(conn, "out of memory", NULL);
+
+   cJSON *tools = mcp_build_full_served_list();
+   if (!tools)
+   {
+      cJSON_Delete(resp);
+      return server_send_error(conn, "out of memory", NULL);
+   }
+
+   /* Presentation profile: shrink the initial tools/list for external MCP
+    * clients. Default "core" (lean) is lossless — find_tools/describe_tool reach
+    * the rest; set AIMEE_MCP_TOOL_PROFILE=full to present everything. Applied at
+    * the served-list choke point so mcp_build_tools_list() (and its golden test)
+    * stays intact. */
+   {
+      const char *profile = mcp_tool_profile_effective(NULL);
+      int total = cJSON_GetArraySize(tools);
+      int removed = mcp_filter_tools_for_profile(tools, NULL);
+      if (removed > 0)
+         LOG_INFO("mcp-tools", "tools/list profile '%s': presenting %d tools (hid %d)", profile,
+                  total - removed, removed);
    }
 
    cJSON_AddStringToObject(resp, "status", "ok");
