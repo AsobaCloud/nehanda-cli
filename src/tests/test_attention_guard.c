@@ -166,6 +166,105 @@ static void test_guard_enforcement(void)
    printf("enforcement OK\n");
 }
 
+/* Pure decision tests for the session-isolation guard. */
+static void test_session_isolation_decision(void)
+{
+   const char *wt = "/home/u/repo/.aimee/worktrees/ab12/main/src/x.c";
+   const char *primary = "/home/u/repo/src/x.c";
+   const char *wt_cwd = "/home/u/repo/.aimee/worktrees/ab12/main";
+   const char *primary_cwd = "/home/u/repo";
+
+   /* Read/raw-scan ops are never blocked, regardless of location. */
+   assert(attn_session_isolation_blocked(ATTN_OP_READ, primary, primary_cwd) == 0);
+   assert(attn_session_isolation_blocked(ATTN_OP_RAW_SCAN, primary, primary_cwd) == 0);
+
+   /* Mutating op with an absolute target inside a managed worktree -> allowed. */
+   assert(attn_session_isolation_blocked(ATTN_OP_SOFT, wt, primary_cwd) == 0);
+   assert(attn_session_isolation_blocked(ATTN_OP_HARD, wt, primary_cwd) == 0);
+
+   /* Mutating op with an absolute target in the primary checkout -> BLOCKED,
+    * even if cwd happens to be a worktree (escaping the worktree). */
+   assert(attn_session_isolation_blocked(ATTN_OP_SOFT, primary, primary_cwd) == 1);
+   assert(attn_session_isolation_blocked(ATTN_OP_SOFT, primary, wt_cwd) == 1);
+
+   /* Relative / no file_path -> cwd is authoritative. */
+   assert(attn_session_isolation_blocked(ATTN_OP_SOFT, "src/x.c", wt_cwd) == 0);
+   assert(attn_session_isolation_blocked(ATTN_OP_SOFT, "src/x.c", primary_cwd) == 1);
+   assert(attn_session_isolation_blocked(ATTN_OP_HARD, NULL, wt_cwd) == 0);
+   assert(attn_session_isolation_blocked(ATTN_OP_HARD, NULL, primary_cwd) == 1);
+
+   /* The loose "/.aimee-" prefix is NOT treated as a managed worktree (only the
+    * canonical "/.aimee/worktrees/" counts) — avoids false-matching e.g. a
+    * user's "/.aimee-notes" dir. */
+   assert(attn_session_isolation_blocked(ATTN_OP_SOFT, "/tmp/.aimee-xyz/src/x.c", primary_cwd) ==
+          1);
+
+   /* Path-traversal escape OUT of a worktree is blocked (lexically normalized). */
+   assert(attn_session_isolation_blocked(
+              ATTN_OP_SOFT, "/repo/.aimee/worktrees/x/main/../../../src/y.c", primary_cwd) == 1);
+   /* '..' that stays WITHIN the worktree is still allowed. */
+   assert(attn_session_isolation_blocked(
+              ATTN_OP_SOFT, "/repo/.aimee/worktrees/x/main/sub/../file.c", primary_cwd) == 0);
+   /* A relative target whose '..' climbs out of a worktree cwd is blocked. */
+   assert(attn_session_isolation_blocked(ATTN_OP_SOFT, "../../../etc/x", wt_cwd) == 1);
+
+   /* Fail-closed when both target and cwd are unknown. */
+   assert(attn_session_isolation_blocked(ATTN_OP_SOFT, NULL, NULL) == 1);
+   printf("isolation decision OK\n");
+}
+
+/* Functional test: the require_session_worktree gate. The handler uses the real
+ * process cwd (the build dir — not a managed worktree), so an Edit with an
+ * absolute file_path drives the decision deterministically. */
+static void test_isolation_enforcement(void)
+{
+   snprintf(g_home, sizeof(g_home), "/tmp/aimee_iso_test_%d", (int)getpid());
+   mkdir(g_home, 0700);
+   char cfgpath[400];
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", g_home);
+
+#define EDIT_PRIMARY_HOOK                                                                          \
+   "{\"session_id\":\"isotest\",\"tool_name\":\"Edit\","                                           \
+   "\"tool_input\":{\"file_path\":\"/home/u/repo/src/x.c\"}}"
+#define EDIT_WORKTREE_HOOK                                                                         \
+   "{\"session_id\":\"isotest\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":"             \
+   "\"/home/u/repo/.aimee/worktrees/ab/main/src/x.c\"}}"
+#define READ_PRIMARY_HOOK                                                                          \
+   "{\"session_id\":\"isotest\",\"tool_name\":\"Read\","                                           \
+   "\"tool_input\":{\"file_path\":\"/home/u/repo/src/x.c\"}}"
+
+   /* (1) Inert by default: no config -> mutating op on the primary checkout allowed. */
+   rm_path(cfgpath);
+   g_stdin_json = EDIT_PRIMARY_HOOK;
+   assert(handle_attention_guard() == 0);
+
+   /* (2) Explicit false also disabled. */
+   write_config("require_session_worktree: false\n");
+   assert(handle_attention_guard() == 0);
+
+   /* (3) Enabled: an Edit on the primary checkout is BLOCKED. */
+   write_config("require_session_worktree: true\n");
+   assert(handle_attention_guard() == 2);
+
+   /* (4) Enabled: an Edit whose target is inside a managed worktree is allowed. */
+   g_stdin_json = EDIT_WORKTREE_HOOK;
+   assert(handle_attention_guard() == 0);
+
+   /* (5) Enabled: a Read on the primary checkout is allowed (non-mutating). */
+   g_stdin_json = READ_PRIMARY_HOOK;
+   assert(handle_attention_guard() == 0);
+
+   /* (6) AIMEE_GUARD=0 bypasses even a blockable mutating op. */
+   setenv("AIMEE_GUARD", "0", 1);
+   g_stdin_json = EDIT_PRIMARY_HOOK;
+   assert(handle_attention_guard() == 0);
+   unsetenv("AIMEE_GUARD");
+
+   rm_path(cfgpath);
+   g_stdin_json = NULL;
+   printf("isolation enforcement OK\n");
+}
+
 int main(void)
 {
    printf("attention_guard: ");
@@ -173,6 +272,8 @@ int main(void)
    test_weight();
    test_score();
    test_guard_enforcement();
+   test_session_isolation_decision();
+   test_isolation_enforcement();
    printf("all tests passed\n");
    return 0;
 }

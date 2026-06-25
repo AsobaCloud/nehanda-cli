@@ -782,6 +782,8 @@ int config_save(const config_t *cfg)
                               cfg->ingress_preinject_assembly_budget);
    if (cfg->ingress_max_raw_scans != 0)
       cJSON_AddNumberToObject(root, "ingress_max_raw_scans", cfg->ingress_max_raw_scans);
+   if (cfg->require_session_worktree)
+      cJSON_AddBoolToObject(root, "require_session_worktree", 1);
    if (cfg->typed_facts_enabled)
       cJSON_AddBoolToObject(root, "typed_facts_enabled", 1);
    if (!cfg->css_style_graph_enabled) /* default-on: persist only the opt-out */
