@@ -7,6 +7,8 @@
 #include "db1.h"
 #include "server_delegate_monitor.h" /* delegate heartbeat begin/end (keep slow delegates alive) */
 #include "server_compute_impl.h"
+#include "agent_config.h"
+#include "gateway_policy.h"
 #include "presence.h"
 #include "compute_pool.h"
 #include "agent.h"
@@ -1663,6 +1665,29 @@ int handle_tool_execute(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    }
 
    return 0; /* Response will be sent by worker thread */
+}
+
+/* enforce-delegate-only: provider the CORE gateway policy calls to learn whether
+ * usable delegates exist (so it strips provider-native sub-agent tools from
+ * proxied requests — Codex et al. can't spawn their own sub-agents). Reads
+ * agents.json, so cache for a short TTL — it runs on the gateway hot path.
+ * Registered by server_install_gateway_delegate_policy() at boot. */
+static int gw_delegate_available_provider(void)
+{
+   static time_t cached_at = 0;
+   static int cached = 0;
+   time_t now = time(NULL);
+   if (cached_at == 0 || now - cached_at > 30)
+   {
+      cached = agent_any_delegate_available();
+      cached_at = now;
+   }
+   return cached;
+}
+
+void server_install_gateway_delegate_policy(void)
+{
+   gateway_policy_set_delegates_available_provider(gw_delegate_available_provider);
 }
 
 /* Conn-free async delegate launch: create a durable, pollable delegate job and
