@@ -13,6 +13,8 @@
 #include "delegate_driver.h"
 #include "delegate_role.h"
 #include "delegate_xml_fallback.h"
+#include "gateway_delegate.h"
+#include "gateway_policy.h"
 #include "http_retry.h"
 #include "log.h"
 #include "middleware.h"
@@ -703,6 +705,20 @@ native_provider_http:
       else
          req = agent_build_request_openai(&fb_agent, messages, active_tools, tok, temperature);
 
+      /* Universal-gateway P4: run aimee's own outbound call through the same request
+       * pipeline the proxy ingresses use, so a config-enabled tool-policing policy
+       * (gateway_prevent_subagents) applies to delegate calls. Mutates req in place;
+       * a <0 return is a hard stage failure — abort rather than forward a half-altered
+       * request (mirrors anthropic_http.c). Gated to delegates (role != NULL); the
+       * primary shares the pipeline but is not policed here. */
+      if (gateway_delegate_run_request_pipeline(
+              req, gateway_delegate_tool_shape(anthropic, chatgpt, gemini), role != NULL) < 0)
+      {
+         snprintf(out->error, sizeof(out->error), "gateway request pipeline failed");
+         cJSON_Delete(req);
+         break;
+      }
+
       char *body = cJSON_PrintUnformatted(req);
       cJSON_Delete(req);
       if (!body)
@@ -889,6 +905,15 @@ native_provider_http:
          }
       }
       free(response_body);
+
+      /* Universal-gateway P4 (response side): police a denied tool_use the model
+       * emitted anyway. Shape-agnostic — operates on the normalized parsed_response_t,
+       * so it covers every provider (incl. gemini). Config-gated internally and gated
+       * to delegate calls here: the primary spawns delegates via the very Task/Subagent
+       * tool this would drop, so policing the primary's response would neuter aimee's
+       * own delegation. Drop count discarded, as in the ingress (anthropic_http.c). */
+      if (role != NULL)
+         gateway_policy_police_parsed_response(&parsed);
 
       /* Log response trace */
       agent_trace_log(0, turn, "response", parsed.content ? parsed.content : "(tool_calls)", NULL,
