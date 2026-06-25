@@ -802,3 +802,130 @@ int db2_kb_pdf_quarantine_reject(const char *project, const char *document_key)
                             " RETURNING id";
    return kb_pdf_quarantine_apply(sql, project, document_key);
 }
+
+static void fill_region_row(aimee_pg_stmt_t *st, db2_kb_pdf_region_t *r)
+{
+   memset(r, 0, sizeof(*r));
+   r->page_no = aimee_pg_column_int(st, 0);
+   r->x0 = aimee_pg_column_double(st, 1);
+   r->y0 = aimee_pg_column_double(st, 2);
+   r->x1 = aimee_pg_column_double(st, 3);
+   r->y1 = aimee_pg_column_double(st, 4);
+   const char *q = aimee_pg_column_text(st, 5);
+   r->line_index = aimee_pg_column_int(st, 6);
+   const char *ct = aimee_pg_column_text(st, 7);
+   snprintf(r->quote, sizeof(r->quote), "%s", q ? q : "");
+   snprintf(r->content_type, sizeof(r->content_type), "%s", ct ? ct : "");
+}
+
+int db2_kb_pdf_open_page(const char *project, const char *document_key, int page_no,
+                         db2_kb_pdf_region_t *out, int max)
+{
+   if (!out || max <= 0 || !project || !*project || !document_key || !*document_key)
+      return 0;
+   void *conn = db2_conn();
+   if (!conn)
+      return 0;
+   /* Join to kb_documents so the chunk's quarantine gate applies — a pending (restricted)
+    * document's page is withheld even though kb_doc_regions has no quarantine column. */
+   static const char *sql =
+       "SELECT r.page_no, r.x0, r.y0, r.x1, r.y1, r.quote, r.line_index, r.content_type"
+       " FROM kb_doc_regions r JOIN kb_documents d ON d.id = r.chunk_id"
+       " WHERE r.document_key = ?1 AND r.page_no = ?2 AND d.project = ?3"
+       "   AND d.doc_kind = 'pdf' AND d.quarantine_state <> 'pending'"
+       " ORDER BY r.line_index LIMIT ?4";
+   char err[KBP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return 0;
+   aimee_pg_bind_text(st, "?1", document_key);
+   aimee_pg_bind_int(st, "?2", page_no);
+   aimee_pg_bind_text(st, "?3", project);
+   aimee_pg_bind_int(st, "?4", max);
+   int n = 0;
+   while (n < max && aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+      fill_region_row(st, &out[n++]);
+   aimee_pg_finalize(st);
+   return n;
+}
+
+int db2_kb_pdf_open_neighbors(const char *project, int64_t chunk_id, db2_kb_pdf_chunk_t *out,
+                              int max)
+{
+   if (!out || max <= 0 || chunk_id <= 0 || !project || !*project)
+      return 0;
+   void *conn = db2_conn();
+   if (!conn)
+      return 0;
+   /* The prev/next chunks of chunk_id in reading order (via prev_chunk_id/next_chunk_id), each
+    * subject to the quarantine gate AND scoped to `project` — without the project predicate a
+    * caller could enumerate chunk_ids and read another scope's PDF content (cross-scope IDOR),
+    * so both the anchor chunk and its neighbours must be in the caller's project. */
+   static const char *sql =
+       "SELECT n.id, n.file_path, n.content, n.page_start, n.page_end, n.sensitivity_class"
+       " FROM kb_documents c JOIN kb_documents n"
+       "   ON (n.id = c.prev_chunk_id OR n.id = c.next_chunk_id)"
+       " WHERE c.id = ?1 AND c.project = ?2 AND n.project = ?2"
+       "   AND c.quarantine_state <> 'pending'" /* don't navigate FROM a quarantined chunk */
+       "   AND n.doc_kind = 'pdf' AND n.quarantine_state <> 'pending'"
+       " ORDER BY n.chunk_index LIMIT ?3";
+   char err[KBP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return 0;
+   aimee_pg_bind_int64(st, "?1", chunk_id);
+   aimee_pg_bind_text(st, "?2", project);
+   aimee_pg_bind_int(st, "?3", max);
+   int n = 0;
+   while (n < max && aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+   {
+      memset(&out[n], 0, sizeof(out[n]));
+      out[n].chunk_id = aimee_pg_column_int64(st, 0);
+      const char *fp = aimee_pg_column_text(st, 1);
+      const char *ct = aimee_pg_column_text(st, 2);
+      const char *sc = aimee_pg_column_text(st, 5);
+      snprintf(out[n].document_key, sizeof(out[n].document_key), "%s", fp ? fp : "");
+      snprintf(out[n].content, sizeof(out[n].content), "%s", ct ? ct : "");
+      out[n].page_start = aimee_pg_column_int(st, 3);
+      out[n].page_end = aimee_pg_column_int(st, 4);
+      snprintf(out[n].sensitivity_class, sizeof(out[n].sensitivity_class), "%s", sc ? sc : "");
+      n++;
+   }
+   aimee_pg_finalize(st);
+   return n;
+}
+
+int db2_kb_pdf_inspect_structure(const char *project, const char *document_key,
+                                 db2_kb_pdf_outline_t *out, int max)
+{
+   if (!out || max <= 0 || !project || !*project || !document_key || !*document_key)
+      return 0;
+   void *conn = db2_conn();
+   if (!conn)
+      return 0;
+   static const char *sql =
+       "SELECT chunk_index, page_start, page_end, heading_path FROM kb_documents"
+       " WHERE project = ?1 AND file_path = ?2 AND doc_kind = 'pdf'"
+       "   AND quarantine_state <> 'pending'"
+       " ORDER BY chunk_index LIMIT ?3";
+   char err[KBP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return 0;
+   aimee_pg_bind_text(st, "?1", project);
+   aimee_pg_bind_text(st, "?2", document_key);
+   aimee_pg_bind_int(st, "?3", max);
+   int n = 0;
+   while (n < max && aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+   {
+      memset(&out[n], 0, sizeof(out[n]));
+      out[n].chunk_index = aimee_pg_column_int(st, 0);
+      out[n].page_start = aimee_pg_column_int(st, 1);
+      out[n].page_end = aimee_pg_column_int(st, 2);
+      const char *hp = aimee_pg_column_text(st, 3);
+      snprintf(out[n].heading_path, sizeof(out[n].heading_path), "%s", hp ? hp : "");
+      n++;
+   }
+   aimee_pg_finalize(st);
+   return n;
+}
