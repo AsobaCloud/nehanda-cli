@@ -12,6 +12,7 @@
 #include "../db2/db_postgres.h"
 #include "../db2/kb_payload.h"
 #include "kb_doc_pdf.h"
+#include "kb_http_pdf.h"
 
 #define PASS(name) printf("  PASS: %s\n", (name))
 
@@ -241,15 +242,100 @@ static void test_ingest_shim(void)
    PASS("ingest_shim");
 }
 
+/* Phase 2: search_chunks retrieves PDF chunks with line-level citations, withholds
+ * restricted/quarantined docs, and the general document fetch reports doc_kind='pdf'
+ * (the chokepoint kb_fetch_doc_row uses to keep PDFs out of plain search). */
+static void test_search_chunks_shim(void)
+{
+   db2_test_shim_open();
+
+   kb_pdf_ingest_stats_t stats;
+   assert(kb_doc_pdf_ingest_xhtml("proj", "report.pdf", "h1", FIXTURE_2PAGE, "internal", &stats) ==
+          2);
+   assert(kb_doc_pdf_ingest_xhtml("proj", "secret.pdf", "h2", FIXTURE_2PAGE, "restricted",
+                                  &stats) == 2);
+
+   db2_kb_pdf_chunk_t chunks[16];
+   /* "world" appears on page 1 of both docs, but the restricted one is withheld. */
+   int n = db2_kb_pdf_search_chunks("proj", "world", 16, chunks);
+   assert(n == 1);
+   assert(strcmp(chunks[0].document_key, "report.pdf") == 0);
+   assert(strcmp(chunks[0].sensitivity_class, "internal") == 0);
+   assert(chunks[0].page_start == 1 && chunks[0].page_end == 1);
+   assert(strstr(chunks[0].content, "Hello world") != NULL);
+
+   /* Case-insensitive + line-level citations from kb_doc_regions. */
+   db2_kb_pdf_region_t regs[16];
+   int rn = db2_kb_doc_regions_for_chunk(chunks[0].chunk_id, regs, 16);
+   assert(rn == 2); /* page-1 chunk has 2 lines */
+   assert(regs[0].line_index == 0 && regs[0].page_no == 1);
+   assert(strcmp(regs[0].quote, "Hello world") == 0);
+   assert(regs[0].x0 >= 0 && regs[0].x0 <= 1); /* normalized bbox */
+
+   /* Case-insensitive match. */
+   assert(db2_kb_pdf_search_chunks("proj", "HELLO", 16, chunks) == 1);
+   /* A term only on page 2 matches the page-2 chunk, not page 1. */
+   n = db2_kb_pdf_search_chunks("proj", "Second page", 16, chunks);
+   assert(n == 1 && chunks[0].page_start == 2);
+   /* No match → no results. */
+   assert(db2_kb_pdf_search_chunks("proj", "nonexistent-zzz", 16, chunks) == 0);
+   /* LIKE metacharacters in the query are literal, not wildcards. */
+   assert(db2_kb_pdf_search_chunks("proj", "%", 16, chunks) == 0);
+
+   /* The general document fetch now reports doc_kind='pdf' — the value kb_fetch_doc_row
+    * uses to exclude PDF chunks from plain /v1/search. */
+   db2_kb_pdf_chunk_t one[4];
+   assert(db2_kb_pdf_search_chunks("proj", "world", 4, one) == 1);
+   db2_kb_document_row_t row;
+   assert(db2_kb_document_fetch(one[0].chunk_id, "proj", &row) == 1);
+   assert(strcmp(row.doc_kind, "pdf") == 0);
+
+   /* End-to-end through the /v1/pdf/search route handler (param parse → SQL → JSON). */
+   char buf[16384];
+   int st = handle_get_pdf_search_route("GET", "query=world&project=proj", buf, sizeof(buf));
+   assert(st == 200);
+   assert(strstr(buf, "report.pdf") != NULL);
+   assert(strstr(buf, "secret.pdf") == NULL); /* restricted withheld */
+   assert(strstr(buf, "\"citations\"") != NULL);
+   assert(strstr(buf, "\"page_no\":1") != NULL);
+   assert(strstr(buf, "\"bbox\"") != NULL);
+   assert(handle_get_pdf_search_route("GET", "project=proj", buf, sizeof(buf)) ==
+          400);                                                                     /* no query */
+   assert(handle_get_pdf_search_route("POST", "query=x", buf, sizeof(buf)) == 405); /* method */
+
+   /* doc_kind exclusion also covers content-reading sweeps outside search: a PDF named like
+    * a convention source must NOT be pulled into agent-facing conventions (the same filter
+    * the curator extraction queue uses to keep PDF content out of derived artifacts). */
+   assert(kb_doc_pdf_ingest_xhtml("proj", "docs/adr/0001.pdf", "ha", FIXTURE_2PAGE, "internal",
+                                  &stats) == 2);
+   assert(db2_kb_documents_insert_chunk("proj", "docs/adr/0002.md", "hb", 0, "", 0, 0,
+                                        "decision content", 2) > 0);
+   db2_kb_convention_row_t conv[16];
+   int cn = db2_kb_documents_list_convention_candidates(conv, 16);
+   int saw_md = 0, saw_pdf = 0;
+   for (int i = 0; i < cn; i++)
+   {
+      if (strstr(conv[i].file_path, ".md"))
+         saw_md = 1;
+      if (strstr(conv[i].file_path, ".pdf"))
+         saw_pdf = 1;
+   }
+   assert(saw_md && !saw_pdf); /* the .md candidate is surfaced; the .pdf is excluded */
+
+   db2_test_shim_close();
+   PASS("search_chunks_shim");
+}
+
 int main(void)
 {
-   printf("structured-pdf Phase 1 (kb_doc_pdf) tests:\n");
+   printf("structured-pdf (kb_doc_pdf) tests:\n");
    test_parse();
    test_normalize();
    test_chunk_page_boundary();
    test_chunk_line_cap();
    test_degraded_no_line_tags();
    test_ingest_shim();
+   test_search_chunks_shim();
    printf("ALL PASS\n");
    return 0;
 }

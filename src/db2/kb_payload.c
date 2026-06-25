@@ -9,6 +9,7 @@
 #include "cJSON.h"
 #include "db2_internal.h"
 
+#include <ctype.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -79,11 +80,12 @@ int db2_kb_document_fetch(int64_t id, const char *project, db2_kb_document_row_t
     * resolve the rows pgvec_kb_search returns across all projects. A named
     * project still scopes the lookup. */
    int has_project = (project && project[0]);
-   const char *sql =
-       has_project ? "SELECT id, file_path, file_hash, heading_path, line_start, line_end, content"
-                     " FROM kb_documents WHERE id = ?1 AND project = ?2"
-                   : "SELECT id, file_path, file_hash, heading_path, line_start, line_end, content"
-                     " FROM kb_documents WHERE id = ?1";
+   const char *sql = has_project ? "SELECT id, file_path, file_hash, heading_path, line_start, "
+                                   "line_end, content, doc_kind"
+                                   " FROM kb_documents WHERE id = ?1 AND project = ?2"
+                                 : "SELECT id, file_path, file_hash, heading_path, line_start, "
+                                   "line_end, content, doc_kind"
+                                   " FROM kb_documents WHERE id = ?1";
    char err[KBP_ERRBUF] = "";
    aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
    if (!st)
@@ -99,12 +101,14 @@ int db2_kb_document_fetch(int64_t id, const char *project, db2_kb_document_row_t
       const char *fh = aimee_pg_column_text(st, 2);
       const char *hp = aimee_pg_column_text(st, 3);
       const char *ct = aimee_pg_column_text(st, 6);
+      const char *dk = aimee_pg_column_text(st, 7);
       snprintf(out->file_path, sizeof(out->file_path), "%s", fp ? fp : "");
       snprintf(out->file_hash, sizeof(out->file_hash), "%s", fh ? fh : "");
       snprintf(out->heading_path, sizeof(out->heading_path), "%s", hp ? hp : "");
       out->line_start = aimee_pg_column_int(st, 4);
       out->line_end = aimee_pg_column_int(st, 5);
       snprintf(out->content, sizeof(out->content), "%s", ct ? ct : "");
+      snprintf(out->doc_kind, sizeof(out->doc_kind), "%s", dk ? dk : "");
       hit = 1;
    }
    aimee_pg_finalize(st);
@@ -119,15 +123,19 @@ int db2_kb_documents_list_convention_candidates(db2_kb_convention_row_t *out, in
    if (!conn)
       return 0;
 
+   /* doc_kind <> 'pdf': a PDF whose file_path happens to match a convention pattern
+    * (e.g. docs/adr/0007.pdf) must not have its content pulled into agent-facing
+    * conventions — PDF content stays behind the access-gated search_chunks tool. */
    static const char *sql = "SELECT project, file_path, heading_path, content FROM kb_documents"
-                            " WHERE file_path LIKE '%CONTRIBUTING%'"
+                            " WHERE doc_kind <> 'pdf' AND ("
+                            "       file_path LIKE '%CONTRIBUTING%'"
                             "    OR file_path LIKE '%AGENTS.md'"
                             "    OR file_path LIKE '%STYLE%'"
                             "    OR file_path LIKE '%CODING%'"
                             "    OR file_path LIKE '%.aimee-rules%'"
                             "    OR file_path LIKE '%.aimee/rules.md'"
                             "    OR file_path LIKE '%.aimee/context.md'"
-                            "    OR file_path LIKE '%/adr/%'"
+                            "    OR file_path LIKE '%/adr/%')"
                             " ORDER BY project, file_path, chunk_index"
                             " LIMIT ?1";
    char err[KBP_ERRBUF] = "";
@@ -629,4 +637,123 @@ int64_t db2_kb_doc_regions_insert(int64_t chunk_id, const char *document_key, in
       new_id = aimee_pg_column_int64(st, 0);
    aimee_pg_finalize(st);
    return new_id;
+}
+
+/* Build a case-folded LIKE pattern "%<escaped query>%" into `dst` (size `cap`). LIKE
+ * metacharacters %, _, and the escape char \ are backslash-escaped so the query matches as
+ * a literal substring. The query is lowercased to pair with lower(content) for a
+ * case-insensitive match on both Postgres and the sqlite shim. */
+static void build_like_pattern(const char *query, char *dst, size_t cap)
+{
+   size_t o = 0;
+   if (cap == 0)
+      return;
+   if (o < cap - 1)
+      dst[o++] = '%';
+   for (const char *p = query; p && *p && o + 2 < cap; p++)
+   {
+      char c = *p;
+      if (c == '%' || c == '_' || c == '\\')
+         dst[o++] = '\\';
+      dst[o++] = (char)tolower((unsigned char)c);
+   }
+   if (o < cap - 1)
+      dst[o++] = '%';
+   dst[o] = '\0';
+}
+
+int db2_kb_pdf_search_chunks(const char *project, const char *query, int max,
+                             db2_kb_pdf_chunk_t *out)
+{
+   if (!out || max <= 0 || !query)
+      return 0;
+   void *conn = db2_conn();
+   if (!conn)
+      return 0;
+
+   int has_project = (project && project[0]);
+   const char *sql =
+       has_project ? "SELECT id, file_path, content, page_start, page_end, sensitivity_class"
+                     " FROM kb_documents"
+                     " WHERE doc_kind = 'pdf' AND quarantine_state <> 'pending' AND project = ?1"
+                     "   AND lower(content) LIKE ?2 ESCAPE '\\'"
+                     " ORDER BY id LIMIT ?3"
+                   : "SELECT id, file_path, content, page_start, page_end, sensitivity_class"
+                     " FROM kb_documents"
+                     " WHERE doc_kind = 'pdf' AND quarantine_state <> 'pending'"
+                     "   AND lower(content) LIKE ?1 ESCAPE '\\'"
+                     " ORDER BY id LIMIT ?2";
+   char err[KBP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return 0;
+
+   char pat[512];
+   build_like_pattern(query, pat, sizeof(pat));
+   if (has_project)
+   {
+      aimee_pg_bind_text(st, "?1", project);
+      aimee_pg_bind_text(st, "?2", pat);
+      aimee_pg_bind_int(st, "?3", max);
+   }
+   else
+   {
+      aimee_pg_bind_text(st, "?1", pat);
+      aimee_pg_bind_int(st, "?2", max);
+   }
+
+   int n = 0;
+   while (n < max && aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+   {
+      memset(&out[n], 0, sizeof(out[n]));
+      out[n].chunk_id = aimee_pg_column_int64(st, 0);
+      const char *fp = aimee_pg_column_text(st, 1);
+      const char *ct = aimee_pg_column_text(st, 2);
+      const char *sc = aimee_pg_column_text(st, 5);
+      snprintf(out[n].document_key, sizeof(out[n].document_key), "%s", fp ? fp : "");
+      snprintf(out[n].content, sizeof(out[n].content), "%s", ct ? ct : "");
+      out[n].page_start = aimee_pg_column_int(st, 3);
+      out[n].page_end = aimee_pg_column_int(st, 4);
+      snprintf(out[n].sensitivity_class, sizeof(out[n].sensitivity_class), "%s", sc ? sc : "");
+      n++;
+   }
+   aimee_pg_finalize(st);
+   return n;
+}
+
+int db2_kb_doc_regions_for_chunk(int64_t chunk_id, db2_kb_pdf_region_t *out, int max)
+{
+   if (!out || max <= 0 || chunk_id <= 0)
+      return 0;
+   void *conn = db2_conn();
+   if (!conn)
+      return 0;
+
+   static const char *sql = "SELECT page_no, x0, y0, x1, y1, quote, line_index, content_type"
+                            " FROM kb_doc_regions WHERE chunk_id = ?1 ORDER BY line_index LIMIT ?2";
+   char err[KBP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return 0;
+   aimee_pg_bind_int64(st, "?1", chunk_id);
+   aimee_pg_bind_int(st, "?2", max);
+
+   int n = 0;
+   while (n < max && aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+   {
+      memset(&out[n], 0, sizeof(out[n]));
+      out[n].page_no = aimee_pg_column_int(st, 0);
+      out[n].x0 = aimee_pg_column_double(st, 1);
+      out[n].y0 = aimee_pg_column_double(st, 2);
+      out[n].x1 = aimee_pg_column_double(st, 3);
+      out[n].y1 = aimee_pg_column_double(st, 4);
+      const char *q = aimee_pg_column_text(st, 5);
+      out[n].line_index = aimee_pg_column_int(st, 6);
+      const char *ctype = aimee_pg_column_text(st, 7);
+      snprintf(out[n].quote, sizeof(out[n].quote), "%s", q ? q : "");
+      snprintf(out[n].content_type, sizeof(out[n].content_type), "%s", ctype ? ctype : "");
+      n++;
+   }
+   aimee_pg_finalize(st);
+   return n;
 }

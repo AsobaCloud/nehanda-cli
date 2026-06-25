@@ -783,11 +783,11 @@ int kb_doc_pdf_ingest(const char *project, const char *file_path, const char *fi
          n_regions++;
       }
 
-      /* Phase 1b deliberately does NOT enqueue 'embed_raw' for PDF chunks: with no vector
-       * for a PDF chunk, the existing vector search cannot surface it, so PDF content
-       * stays invisible to today's search by construction (the lexical path is filtered
-       * separately on doc_kind). Embedding + the access-controlled retrieval that makes
-       * these searchable land together in Phase 2. */
+      /* PDF chunks are NOT embedded: Phase 2 retrieval (search_chunks) is lexical over the
+       * chunk content, and leaving PDFs out of the vector index keeps them out of the
+       * vector-only /v1/search by construction. (Vector retrieval for PDFs is a follow-up;
+       * when it lands, the kb_fetch_doc_row doc_kind exclusion already keeps embedded PDFs
+       * out of general search.) */
       prev_id = id;
    }
 
