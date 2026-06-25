@@ -513,3 +513,112 @@ void db2_kb_documents_link_neighbours(int64_t doc_id, int64_t prev_id)
       }
    }
 }
+
+/* structured-pdf Phase 1: like db2_kb_documents_insert_chunk but also stamps the
+ * PDF-specific columns in the same INSERT (doc_kind='pdf', the caller's
+ * chunk_strategy — 'heading' or the 'page' fallback — and the page_start/page_end
+ * span). Kept separate from the 9-arg insert so the markdown path is untouched. */
+int64_t db2_kb_documents_insert_chunk_pdf(const char *project, const char *file_path,
+                                          const char *file_hash, int chunk_index,
+                                          const char *heading_path, int line_start, int line_end,
+                                          const char *content, int token_count,
+                                          const char *chunk_strategy, int page_start, int page_end)
+{
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+
+   static const char *sql =
+       "INSERT INTO kb_documents"
+       " (project, file_path, file_hash, chunk_index, heading_path, line_start, line_end,"
+       "  content, token_count, doc_kind, chunk_strategy, page_start, page_end, updated_at)"
+       " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pdf', ?10, ?11, ?12, pg_now_text())"
+       " RETURNING id";
+   char err[KBP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_text(st, "?1", project ? project : "");
+   aimee_pg_bind_text(st, "?2", file_path ? file_path : "");
+   aimee_pg_bind_text(st, "?3", file_hash ? file_hash : "");
+   aimee_pg_bind_int(st, "?4", chunk_index);
+   aimee_pg_bind_text(st, "?5", heading_path ? heading_path : "");
+   aimee_pg_bind_int(st, "?6", line_start);
+   aimee_pg_bind_int(st, "?7", line_end);
+   aimee_pg_bind_text(st, "?8", content ? content : "");
+   aimee_pg_bind_int(st, "?9", token_count);
+   aimee_pg_bind_text(st, "?10", chunk_strategy ? chunk_strategy : "heading");
+   aimee_pg_bind_int(st, "?11", page_start);
+   aimee_pg_bind_int(st, "?12", page_end);
+   int64_t new_id = -1;
+   if (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+      new_id = aimee_pg_column_int64(st, 0);
+   aimee_pg_finalize(st);
+   return new_id;
+}
+
+/* Thin transaction wrappers (work on both Postgres and the sqlite test shim) so a
+ * multi-statement write — e.g. the structured-PDF delete-then-insert re-ingest — is
+ * all-or-nothing. Return 0 on success, <0 on error. */
+int db2_kb_txn_begin(void)
+{
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+   char err[KBP_ERRBUF] = "";
+   return aimee_pg_exec(conn, "BEGIN", err, sizeof(err)) == 0 ? 0 : -1;
+}
+
+int db2_kb_txn_commit(void)
+{
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+   char err[KBP_ERRBUF] = "";
+   return aimee_pg_exec(conn, "COMMIT", err, sizeof(err)) == 0 ? 0 : -1;
+}
+
+void db2_kb_txn_rollback(void)
+{
+   void *conn = db2_conn();
+   if (!conn)
+      return;
+   char err[KBP_ERRBUF] = "";
+   (void)aimee_pg_exec(conn, "ROLLBACK", err, sizeof(err));
+}
+
+/* structured-pdf Phase 1: insert one per-line coordinate region for a chunk. bbox
+ * is already normalized to [0,1] (top-left origin, per page) by the caller. */
+int64_t db2_kb_doc_regions_insert(int64_t chunk_id, const char *document_key, int page_no,
+                                  double x0, double y0, double x1, double y1, const char *quote,
+                                  int line_index, const char *content_type)
+{
+   void *conn = db2_conn();
+   if (!conn || chunk_id <= 0)
+      return -1;
+
+   static const char *sql =
+       "INSERT INTO kb_doc_regions"
+       " (chunk_id, document_key, page_no, x0, y0, x1, y1, quote, line_index, content_type)"
+       " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+       " RETURNING id";
+   char err[KBP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_int64(st, "?1", chunk_id);
+   aimee_pg_bind_text(st, "?2", document_key ? document_key : "");
+   aimee_pg_bind_int(st, "?3", page_no);
+   aimee_pg_bind_double(st, "?4", x0);
+   aimee_pg_bind_double(st, "?5", y0);
+   aimee_pg_bind_double(st, "?6", x1);
+   aimee_pg_bind_double(st, "?7", y1);
+   aimee_pg_bind_text(st, "?8", quote ? quote : "");
+   aimee_pg_bind_int(st, "?9", line_index);
+   aimee_pg_bind_text(st, "?10", content_type ? content_type : "text");
+   int64_t new_id = -1;
+   if (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+      new_id = aimee_pg_column_int64(st, 0);
+   aimee_pg_finalize(st);
+   return new_id;
+}
