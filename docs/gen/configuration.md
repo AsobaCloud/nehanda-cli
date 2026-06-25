@@ -130,14 +130,12 @@ Structured options (arrays, nested objects — e.g. `ensemble.reference_models`)
 | `openai_model` | string | OpenAI model name. |
 | `provider` | string | Default model provider. |
 | `reasoning_cap_enabled` | bool | Cap the model's reasoning effort. |
-| `require_session_worktree` | bool | — |
+| `require_session_worktree` | bool | Fail closed on mutating ops outside an aimee-managed worktree (session-isolation guard; default off). |
 | `typed_facts_enabled` | bool | Enable the typed-fact knowledge layer (master gate; default off). |
 | `verify_cross_project` | bool | Let `aimee git verify` span other projects. |
 | `verify_enabled` | bool | Master gate for `aimee git verify` (default off). |
 | `virtual_context_assembly_budget` | int | Token budget for virtual-context assembly. |
 | `virtual_context_enabled` | bool | Enable virtual-context assembly. |
-
-> **Undocumented** (add to `CFG_KEY_DESC` in gen-reference-docs.py): `require_session_worktree`
 
 ## Config-file sections (49)
 
