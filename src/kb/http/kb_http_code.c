@@ -5,6 +5,9 @@
 #include "cJSON.h"
 #include "db2/canonical_index.h"
 #include "db2/lifecycle.h"
+#include "db2/memory_query.h"
+#include "memory.h"
+#include "kb/kb_rrf.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -505,6 +508,214 @@ int handle_get_code_project_stats_route(const char *method, const char *query_st
    if (strcmp(method, "GET") != 0)
       return code_method_not_allowed(out_buf, out_cap);
    return handle_get_code_project_stats(query_string, out_buf, out_cap);
+}
+
+/* GET /v1/code/hybrid?query=<text>&symbol=<sym>&project=<proj>&max_results=N
+ *
+ * Hybrid code retrieval (proposal §5): fuse independently-ranked signals through
+ * Reciprocal Rank Fusion (kb_rrf_fuse) into one ranking, plus a memory "why"
+ * context. Two signals are fused in FILE-PATH space so consensus is meaningful —
+ * a file that is BOTH textually relevant to `query` AND structurally connected to
+ * `symbol` (calls it) rises to the top:
+ *   - "code"  : lexical search over file contents (canonical_index_code_search);
+ *   - "graph" : callers of `symbol` from the structural call graph
+ *               (canonical_index_find_callers), marked structural (tie-break).
+ * Memory recall (db2_memory_find_facts_like) is returned as a separate `why`
+ * array — the recorded reasoning behind the code, not a file, so it is context
+ * rather than a fused row. The vector signal (pgvec_code_search) slots in as a
+ * third fused leg once the query embedder is wired (integration-tier). */
+#define HYBRID_PER_SIGNAL 25
+#define HYBRID_WHY_MAX    5
+
+int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
+{
+   char query[512] = "";
+   char symbol[256] = "";
+   char project[256] = "";
+   if (!code_qparam(query_string, "query", query, sizeof(query)) || !query[0])
+      return code_scan_write_error(out_buf, out_cap, "missing query");
+   code_qparam(query_string, "symbol", symbol, sizeof(symbol));
+   code_qparam(query_string, "project", project, sizeof(project));
+   const char *proj = project[0] ? project : NULL;
+
+   int max_r = 20;
+   char mr[16] = "";
+   if (code_qparam(query_string, "max_results", mr, sizeof(mr)))
+      max_r = atoi(mr);
+   if (max_r < 1)
+      max_r = 1;
+   if (max_r > 100)
+      max_r = 100;
+
+   if (!db2_is_initialized())
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"knowledge service not initialized\"}");
+      return 503;
+   }
+
+   code_search_hit_t *chits = calloc(HYBRID_PER_SIGNAL, sizeof(*chits));
+   caller_hit_t *ghits = calloc(HYBRID_PER_SIGNAL, sizeof(*ghits));
+   memory_t *mems = calloc(HYBRID_PER_SIGNAL, sizeof(*mems));
+   kb_rrf_item_t *code_items = calloc(HYBRID_PER_SIGNAL, sizeof(*code_items));
+   kb_rrf_item_t *graph_items = calloc(HYBRID_PER_SIGNAL, sizeof(*graph_items));
+   kb_rrf_result_t *fused = calloc(HYBRID_PER_SIGNAL * 2, sizeof(*fused));
+   if (!chits || !ghits || !mems || !code_items || !graph_items || !fused)
+   {
+      free(chits);
+      free(ghits);
+      free(mems);
+      free(code_items);
+      free(graph_items);
+      free(fused);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+
+   /* Signal A — lexical code (key = file_path). */
+   int nc = canonical_index_code_search(query, proj, chits, HYBRID_PER_SIGNAL);
+   if (nc < 0)
+      nc = 0;
+   for (int i = 0; i < nc; i++)
+   {
+      snprintf(code_items[i].id, sizeof(code_items[i].id), "%s", chits[i].file_path);
+      code_items[i].structural_weight = 0;
+   }
+
+   /* Signal B — graph callers of `symbol` (key = file_path; structural edge). */
+   int ng = 0;
+   if (symbol[0])
+   {
+      ng = canonical_index_find_callers(proj ? proj : "", symbol, ghits, HYBRID_PER_SIGNAL);
+      if (ng < 0)
+         ng = 0;
+      for (int i = 0; i < ng; i++)
+      {
+         snprintf(graph_items[i].id, sizeof(graph_items[i].id), "%s", ghits[i].file_path);
+         graph_items[i].structural_weight = 1; /* a structural call edge */
+      }
+   }
+
+   kb_rrf_signal_t sigs[2] = {
+       {code_items, nc, 1.0, "code"},
+       {graph_items, ng, 1.0, "graph"},
+   };
+   int nf = kb_rrf_fuse(sigs, 2, KB_RRF_DEFAULT_K, fused, HYBRID_PER_SIGNAL * 2);
+   if (nf < 0)
+      nf = 0;
+   if (nf > max_r)
+      nf = max_r;
+
+   /* Memory "why" context (recorded reasoning, capped). */
+   int nm = db2_memory_find_facts_like(query, HYBRID_WHY_MAX, mems, HYBRID_PER_SIGNAL);
+   if (nm < 0)
+      nm = 0;
+   if (nm > HYBRID_WHY_MAX)
+      nm = HYBRID_WHY_MAX;
+
+   cJSON *resp = cJSON_CreateObject();
+   if (!resp)
+   {
+      free(chits);
+      free(ghits);
+      free(mems);
+      free(code_items);
+      free(graph_items);
+      free(fused);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+   cJSON_AddStringToObject(resp, "status", "ok");
+   cJSON_AddStringToObject(resp, "query", query);
+   if (symbol[0])
+      cJSON_AddStringToObject(resp, "symbol", symbol);
+   if (project[0])
+      cJSON_AddStringToObject(resp, "project", project);
+
+   cJSON *results = cJSON_AddArrayToObject(resp, "results");
+   for (int i = 0; results && i < nf; i++)
+   {
+      const char *fp = fused[i].id;
+      cJSON *row = cJSON_CreateObject();
+      if (!row)
+         continue;
+      cJSON_AddStringToObject(row, "file_path", fp);
+      cJSON_AddNumberToObject(row, "score", fused[i].score);
+      cJSON_AddNumberToObject(row, "signal_hits", fused[i].signal_hits);
+      cJSON_AddNumberToObject(row, "structural_weight", fused[i].structural_weight);
+      cJSON *which = cJSON_AddArrayToObject(row, "signals");
+      /* Enrich + label from whichever source(s) carried this file. */
+      for (int j = 0; j < nc; j++)
+         if (strcmp(chits[j].file_path, fp) == 0)
+         {
+            if (which)
+               cJSON_AddItemToArray(which, cJSON_CreateString("code"));
+            cJSON_AddStringToObject(row, "snippet", chits[j].snippet);
+            if (chits[j].content_hash[0])
+               cJSON_AddStringToObject(row, "content_hash", chits[j].content_hash);
+            break;
+         }
+      for (int j = 0; j < ng; j++)
+         if (strcmp(ghits[j].file_path, fp) == 0)
+         {
+            if (which)
+               cJSON_AddItemToArray(which, cJSON_CreateString("graph"));
+            cJSON_AddStringToObject(row, "caller", ghits[j].caller);
+            cJSON_AddNumberToObject(row, "caller_line", ghits[j].line);
+            break;
+         }
+      cJSON_AddItemToArray(results, row);
+   }
+
+   cJSON *why = cJSON_AddArrayToObject(resp, "why");
+   for (int i = 0; why && i < nm; i++)
+   {
+      cJSON *m = cJSON_CreateObject();
+      if (!m)
+         continue;
+      cJSON_AddNumberToObject(m, "id", (double)mems[i].id);
+      cJSON_AddStringToObject(m, "kind", mems[i].kind);
+      if (mems[i].headline[0])
+         cJSON_AddStringToObject(m, "headline", mems[i].headline);
+      cJSON_AddStringToObject(m, "content", mems[i].content);
+      cJSON_AddItemToArray(why, m);
+   }
+
+   char *s = cJSON_PrintUnformatted(resp);
+   int status = 200;
+   if (!s)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      status = 500;
+   }
+   else if (strlen(s) >= (size_t)out_cap)
+   {
+      /* Never return truncated (invalid) JSON: signal the caller to narrow. */
+      snprintf(out_buf, (size_t)out_cap,
+               "{\"error\":\"result too large; reduce max_results or narrow the "
+               "query\",\"code\":\"result_too_large\"}");
+      status = 413;
+   }
+   else
+   {
+      snprintf(out_buf, (size_t)out_cap, "%s", s);
+   }
+   free(s);
+   cJSON_Delete(resp);
+   free(chits);
+   free(ghits);
+   free(mems);
+   free(code_items);
+   free(graph_items);
+   free(fused);
+   return status;
+}
+
+int handle_get_code_hybrid_route(const char *method, const char *query_string, char *out_buf,
+                                 int out_cap)
+{
+   if (strcmp(method, "GET") != 0)
+      return code_method_not_allowed(out_buf, out_cap);
+   return handle_get_code_hybrid(query_string, out_buf, out_cap);
 }
 
 int handle_post_code_scan(const char *body, char *out_buf, int out_cap)
