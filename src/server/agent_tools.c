@@ -129,6 +129,35 @@ int agent_tools_parent_write_guard_blocks(const char *path, const char *cwd)
    return agent_tools_path_under_root(norm, g_parent_ro_root);
 }
 
+/* Session-isolation backstop (Layer 2, opt-in via require_session_worktree).
+ * Blocks a server-side agent/delegate write whose normalized target is NOT
+ * inside an aimee-managed worktree (path component .aimee/worktrees/...). This
+ * mirrors the client-side attention-guard
+ * (Layer 1) so aimee's own in-process agent writes obey the same isolation
+ * policy that a thin client's PreToolUse hook enforces — covering the case
+ * where session-start never provisioned a worktree. Default off (the config
+ * flag defaults to 0), so this is a no-op unless explicitly enabled. */
+int agent_tools_session_isolation_blocks(const char *path, const char *cwd)
+{
+   if (!path || !path[0])
+      return 0;
+   /* config_load here mirrors the per-call pattern already used elsewhere in
+    * this file (it is cheap and reads the cached config). Default-off: when the
+    * flag is unset — or the config is unreadable, which leaves the default 0 —
+    * this is a no-op, matching the feature's opt-in nature. */
+   config_t cfg;
+   config_load(&cfg);
+   if (!cfg.require_session_worktree)
+      return 0;
+   /* normalize_path resolves '.'/'..'/relative against cwd, closing traversal
+    * escapes. Match ONLY the canonical managed-worktree location (not the
+    * looser "/.aimee-" prefix is_aimee_worktree_path() accepts), consistent
+    * with the client-side attn_session_isolation_blocked check. */
+   char norm[MAX_PATH_LEN];
+   normalize_path(path, cwd, norm, sizeof(norm));
+   return strstr(norm, "/.aimee/worktrees/") != NULL ? 0 : 1;
+}
+
 static int tools_array_has_name(cJSON *tools, const char *name, int openai_format)
 {
    cJSON *tool = NULL;
