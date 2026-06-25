@@ -19,6 +19,7 @@
 #include "openai_shape.h"
 #include "ingress_preinject.h"
 #include "gateway_pipeline.h"       /* gw_request_t + gw_pipeline_run_request — shared seam */
+#include "gw_stage_memory.h"        /* gw_stage_memory + gw_memory_system_prompt (P3) */
 #include "dogfood.h"                /* dogfood_autolabel_next_turn_live */
 #include "learning_implicit.h"      /* learning_implicit_detect_turn */
 #include "openai_responses_store.h" /* previous_response_id continuation store */
@@ -151,7 +152,7 @@ static int run_completion(int chat, const char *body, char *resp, int cap)
     * so the §4 dedup key must hash it (a stale reply must not be replayed after
     * the injected memory/context changes). On a cache miss it is reused for the
     * provider call below; on a hit it is freed unused. */
-   char *pi_env = ingress_preinject_build(prompt, 0);
+   char *pi_env = gw_memory_system_prompt(prompt);
 
    /* Resolve the backend BEFORE dedup so the key carries the resolved
     * provider/model — two requests resolving to a different backend must not
@@ -629,7 +630,7 @@ static int responses_handler(const char *body, char *resp, int cap)
    memset(&result, 0, sizeof(result));
    /* P1 pre-injection: prepend the <aimee-context> envelope as the system
     * prompt (config ingress_preinject_enabled; no-op when off/empty). */
-   char *pi_env = ingress_preinject_build(full, 0);
+   char *pi_env = gw_memory_system_prompt(full);
    int erc = agent_execute(ag, pi_env, full, max_tokens, temperature, &result);
    free(pi_env);
 
@@ -742,7 +743,7 @@ static int chat_stream_handler(const char *body, server_http_sse_emit emit, void
    memset(&result, 0, sizeof(result));
    /* P1 pre-injection: prepend the <aimee-context> envelope as the system
     * prompt (config ingress_preinject_enabled; no-op when off/empty). */
-   char *pi_env = ingress_preinject_build(prompt, 0);
+   char *pi_env = gw_memory_system_prompt(prompt);
    int erc = agent_execute(ag, pi_env, prompt, max_tokens, temperature, &result);
    free(pi_env);
    free(prompt);
@@ -812,7 +813,7 @@ static int completion_stream_handler(const char *body, server_http_sse_emit emit
    memset(&result, 0, sizeof(result));
    /* P1 pre-injection: prepend the <aimee-context> envelope as the system
     * prompt (config ingress_preinject_enabled; no-op when off/empty). */
-   char *pi_env = ingress_preinject_build(prompt, 0);
+   char *pi_env = gw_memory_system_prompt(prompt);
    int erc = agent_execute(ag, pi_env, prompt, max_tokens, temperature, &result);
    free(pi_env);
    free(prompt);
@@ -854,28 +855,11 @@ static int completion_stream_handler(const char *body, server_http_sse_emit emit
  * back. Behavior is identical to the prior inline memory block + the P2b tool
  * strip it replaces. */
 
-/* Memory/context pre-injection stage (OpenAI shape). NOT parity-gated: the
- * /v1/responses proxy always translates, so memory always applies (gated only by
- * config, inside ingress_preinject_build). `ud` is the chat-shape `messages` the
- * recall query is derived from — the same source as the prior inline site, so
- * recall is byte-unchanged. Merges the envelope into raw.instructions. */
-static int gw_stage_openai_memory(gw_request_t *r, void *ud)
-{
-   const cJSON *messages = (const cJSON *)ud;
-   char *query = ingress_preinject_query_from_messages(messages);
-   char *env = ingress_preinject_build(query, 0);
-   free(query);
-   if (!env)
-      return 0;
-   cJSON *cur = cJSON_GetObjectItemCaseSensitive(r->raw, "instructions");
-   char *merged = ingress_preinject_apply(cur ? cur->valuestring : NULL, env);
-   free(env);
-   if (!merged)
-      return 0;
-   cJSON_ReplaceItemInObjectCaseSensitive(r->raw, "instructions", cJSON_CreateString(merged));
-   free(merged);
-   return 1;
-}
+/* Memory/context pre-injection is now the shared gw_stage_memory (gw_stage_memory.c)
+ * with mem_target = GW_MEM_OPENAI_INSTRUCTIONS: the /v1/responses proxy always
+ * translates, so memory always applies (gated only by config, inside the stage),
+ * merging the envelope into raw.instructions. `ud` stays the chat-shape `messages`
+ * the recall query is derived from, so recall is byte-unchanged. */
 
 /* Tool-policing stage (OpenAI tool shape): strip subagent-spawning tools from
  * raw.tools. Mirrors the Anthropic ingress's policing stage; same contract as
@@ -934,11 +918,12 @@ static int agent_execute_messages(const agent_t *agent, cJSON *messages, cJSON *
        .driver = driver,
        .ag = agent,
        .serving_api = GW_API_OPENAI,
+       .mem_target = GW_MEM_OPENAI_INSTRUCTIONS,
        .parity = 1, /* client OpenAI == serving OpenAI; informational for these stages */
        .stream = 0,
    };
    const gw_stage_t stages[] = {
-       {gw_stage_openai_memory, messages, "memory"},
+       {gw_stage_memory, messages, "memory"},
        {gw_stage_openai_tool_policing, NULL, "tool_policing"},
    };
    gw_pipeline_run_request(&gr, stages, sizeof(stages) / sizeof(stages[0]));
