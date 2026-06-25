@@ -1900,6 +1900,7 @@ $(TESTPREFIX)/unit-test-curator-code-unit: \
                                        $(OBJDIR)/tests/test_curator_code_unit.o \
                                        $(OBJDIR)/kb/kb_curator_queue.o \
                                        $(OBJDIR)/kb/kb_curator_extract_code.o \
+                                       $(OBJDIR)/kb/kb_curator_extract.o \
                                        $(OBJDIR)/kb/kb_curator_grounding.o \
                                        $(OBJDIR)/db2/artifacts.o \
                                        $(OBJDIR)/db2/feature_rows.o \
