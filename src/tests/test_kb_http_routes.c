@@ -554,29 +554,7 @@ int canonical_index_code_search(const char *query, const char *project, void *ou
    return 1;
 }
 
-typedef struct
-{
-   char project[128];
-   char file_path[MAX_PATH_LEN];
-   char caller[128];
-   int line;
-} test_caller_hit_t;
-
-int canonical_index_find_callers(const char *project, const char *symbol, void *out, int max)
-{
-   assert(symbol);
-   assert(out);
-   if (strcmp(symbol, "target_fn") != 0 || !project || strcmp(project, "proj-alpha") != 0)
-      return 0;
-   if (max < 1)
-      return 0;
-   test_caller_hit_t *hits = (test_caller_hit_t *)out;
-   snprintf(hits[0].project, sizeof(hits[0].project), "proj-alpha");
-   snprintf(hits[0].file_path, sizeof(hits[0].file_path), "src/caller.c");
-   snprintf(hits[0].caller, sizeof(hits[0].caller), "caller_fn");
-   hits[0].line = 44;
-   return 1;
-}
+/* canonical_index_find_callers stub lives in the _code.inc (line-count limit). */
 
 int memory_get_entity_profile(const char *e, void *out)
 {
@@ -1939,6 +1917,8 @@ int main(void)
    test_code_hybrid_ok();
    test_code_hybrid_missing_query();
    test_code_hybrid_no_symbol();
+   test_code_graph_hubs_ok();
+   test_code_graph_hubs_missing_project();
    test_code_project_stats_missing_project();
    test_code_project_stats_ok();
    test_code_project_stats_error_is_json();

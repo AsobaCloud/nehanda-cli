@@ -6,8 +6,10 @@
 #include "db2/canonical_index.h"
 #include "db2/lifecycle.h"
 #include "db2/memory_query.h"
+#include "db2/code_projection.h"
 #include "memory.h"
 #include "kb/kb_rrf.h"
+#include "kb/kb_graph_analytics.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -720,6 +722,133 @@ int handle_get_code_hybrid_route(const char *method, const char *query_string, c
    if (strcmp(method, "GET") != 0)
       return code_method_not_allowed(out_buf, out_cap);
    return handle_get_code_hybrid(query_string, out_buf, out_cap);
+}
+
+/* GET /v1/code/graph/hubs?project=<proj>&max_results=N
+ *
+ * Graph analytics (proposal §4): rank a project's most-connected symbols by
+ * degree centrality over the visible code projection graph — a refactor-risk
+ * signal ("editing this touches a lot"). Reads the published generation's edges
+ * (db2_code_projection_list_edges), computes hubs with the pure kb_graph_hubs,
+ * and returns the top N with in/out/weighted degree. Read-only. */
+#define HUBS_MAX_EDGES 10000
+
+int handle_get_code_graph_hubs(const char *query_string, char *out_buf, int out_cap)
+{
+   char project[256] = "";
+   if (!code_qparam(query_string, "project", project, sizeof(project)) || !project[0])
+      return code_scan_write_error(out_buf, out_cap, "missing project");
+
+   int max_r = 20;
+   char mr[16] = "";
+   if (code_qparam(query_string, "max_results", mr, sizeof(mr)))
+      max_r = atoi(mr);
+   if (max_r < 1)
+      max_r = 1;
+   if (max_r > 200)
+      max_r = 200;
+
+   if (!db2_is_initialized())
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"knowledge service not initialized\"}");
+      return 503;
+   }
+
+   code_projection_edge_t *edges = calloc(HUBS_MAX_EDGES, sizeof(*edges));
+   kb_graph_edge_t *gedges = calloc(HUBS_MAX_EDGES, sizeof(*gedges));
+   kb_graph_hub_t *hubs = calloc((size_t)max_r, sizeof(*hubs));
+   if (!edges || !gedges || !hubs)
+   {
+      free(edges);
+      free(gedges);
+      free(hubs);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+
+   int ne = db2_code_projection_list_edges(project, edges, HUBS_MAX_EDGES);
+   if (ne < 0)
+   {
+      free(edges);
+      free(gedges);
+      free(hubs);
+      snprintf(out_buf, (size_t)out_cap,
+               "{\"error\":\"projection graph unavailable (knowledge service not initialized)\"}");
+      return 503;
+   }
+   for (int i = 0; i < ne; i++)
+   {
+      snprintf(gedges[i].source, sizeof(gedges[i].source), "%s", edges[i].source);
+      snprintf(gedges[i].target, sizeof(gedges[i].target), "%s", edges[i].target);
+      gedges[i].weight = edges[i].structural_weight;
+   }
+   free(edges); /* converted; drop before kb_graph_hubs allocates its accumulator */
+   edges = NULL;
+
+   int nh = kb_graph_hubs(gedges, ne, hubs, max_r);
+   if (nh < 0)
+      nh = 0;
+
+   cJSON *resp = cJSON_CreateObject();
+   if (!resp)
+   {
+      free(gedges);
+      free(hubs);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+   cJSON_AddStringToObject(resp, "status", "ok");
+   cJSON_AddStringToObject(resp, "project", project);
+   cJSON_AddNumberToObject(resp, "edge_count", ne);
+   /* A full edge buffer means the projection graph was larger than the analytics
+    * cap, so the degree counts are over a (deterministic, source/target-ordered)
+    * prefix rather than the whole graph — surface that instead of implying totals. */
+   cJSON_AddBoolToObject(resp, "truncated", ne >= HUBS_MAX_EDGES);
+   cJSON *arr = cJSON_AddArrayToObject(resp, "hubs");
+   for (int i = 0; arr && i < nh; i++)
+   {
+      cJSON *h = cJSON_CreateObject();
+      if (!h)
+         continue;
+      cJSON_AddStringToObject(h, "node", hubs[i].node);
+      cJSON_AddNumberToObject(h, "degree", hubs[i].degree);
+      cJSON_AddNumberToObject(h, "in_degree", hubs[i].in_degree);
+      cJSON_AddNumberToObject(h, "out_degree", hubs[i].out_degree);
+      cJSON_AddNumberToObject(h, "weighted_degree", hubs[i].weighted_degree);
+      cJSON_AddItemToArray(arr, h);
+   }
+
+   char *s = cJSON_PrintUnformatted(resp);
+   int status = 200;
+   if (!s)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      status = 500;
+   }
+   else if (strlen(s) >= (size_t)out_cap)
+   {
+      snprintf(
+          out_buf, (size_t)out_cap,
+          "{\"error\":\"result too large; reduce max_results\",\"code\":\"result_too_large\"}");
+      status = 413;
+   }
+   else
+   {
+      snprintf(out_buf, (size_t)out_cap, "%s", s);
+   }
+   free(s);
+   cJSON_Delete(resp);
+   free(gedges);
+   free(hubs);
+   return status;
+}
+
+int handle_get_code_graph_hubs_route(const char *method, const char *query_string, char *out_buf,
+                                     int out_cap)
+{
+   if (strcmp(method, "GET") != 0)
+      return code_method_not_allowed(out_buf, out_cap);
+   return handle_get_code_graph_hubs(query_string, out_buf, out_cap);
 }
 
 int handle_post_code_scan(const char *body, char *out_buf, int out_cap)

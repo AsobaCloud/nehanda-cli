@@ -44,6 +44,68 @@ int db2_memory_find_facts_like(const char *query, int limit, void *out, int max)
    return 1;
 }
 
+/* canonical_index_find_callers stub (used by the callers + hybrid route tests
+ * below) — moved here from test_kb_http_routes.c to keep that file under the
+ * 2000-line build-integrity limit; cast a void* like the other canonical stubs. */
+typedef struct
+{
+   char project[128];
+   char file_path[MAX_PATH_LEN];
+   char caller[128];
+   int line;
+} test_caller_hit_t;
+
+int canonical_index_find_callers(const char *project, const char *symbol, void *out, int max)
+{
+   assert(symbol);
+   assert(out);
+   if (strcmp(symbol, "target_fn") != 0 || !project || strcmp(project, "proj-alpha") != 0)
+      return 0;
+   if (max < 1)
+      return 0;
+   test_caller_hit_t *hits = (test_caller_hit_t *)out;
+   snprintf(hits[0].project, sizeof(hits[0].project), "proj-alpha");
+   snprintf(hits[0].file_path, sizeof(hits[0].file_path), "src/caller.c");
+   snprintf(hits[0].caller, sizeof(hits[0].caller), "caller_fn");
+   hits[0].line = 44;
+   return 1;
+}
+
+/* Mirror of code_projection_edge_t (db2/code_projection.h) so the stub writes
+ * fields at the offsets the handler reads; cast a void* rather than include the
+ * db2 header (same pattern as the canonical_index stubs). */
+typedef struct
+{
+   char source[512];
+   char relation[64];
+   char target[512];
+   int structural_weight;
+} test_projection_edge_t;
+
+int db2_code_projection_list_edges(const char *project, void *out, int max)
+{
+   assert(out);
+   if (!project || strcmp(project, "proj-alpha") != 0 || max < 4)
+      return 0;
+   test_projection_edge_t *e = (test_projection_edge_t *)out;
+   /* hub: out=2 (->a,->b), in=1 (c->); a,b,c: degree 1 each. */
+   struct
+   {
+      const char *s, *r, *t;
+      int w;
+   } seed[] = {{"hub", "calls", "a", 1}, {"hub", "calls", "b", 1}, {"c", "calls", "hub", 1}};
+   int n = (int)(sizeof(seed) / sizeof(seed[0]));
+   for (int i = 0; i < n && i < max; i++)
+   {
+      memset(&e[i], 0, sizeof(e[i]));
+      snprintf(e[i].source, sizeof(e[i].source), "%s", seed[i].s);
+      snprintf(e[i].relation, sizeof(e[i].relation), "%s", seed[i].r);
+      snprintf(e[i].target, sizeof(e[i].target), "%s", seed[i].t);
+      e[i].structural_weight = seed[i].w;
+   }
+   return n;
+}
+
 static void test_code_structure_ok(void)
 {
    char buf[512];
@@ -153,6 +215,36 @@ static void test_code_project_stats_missing_project(void)
    char buf[256];
    int s =
        kb_http_route_ex("GET", "/v1/code/project-stats", "", NULL, NULL, NULL, 0, buf, sizeof(buf));
+   assert(s == 400);
+   assert(strstr(buf, "missing project") != NULL);
+}
+
+/* §4 graph analytics: hub/degree-centrality ranking over the projection graph. */
+static void test_code_graph_hubs_ok(void)
+{
+   char buf[1024];
+   int s = kb_http_route_ex("GET", "/v1/code/graph/hubs", "project=proj-alpha&max_results=10", NULL,
+                            NULL, NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"status\":\"ok\"") != NULL);
+   assert(strstr(buf, "\"edge_count\":3") != NULL);
+   assert(strstr(buf, "\"truncated\":false") != NULL);
+   /* hub is the top node: degree 3 (out 2, in 1). */
+   assert(strstr(buf, "\"node\":\"hub\"") != NULL);
+   assert(strstr(buf, "\"degree\":3") != NULL);
+   assert(strstr(buf, "\"out_degree\":2") != NULL);
+   assert(strstr(buf, "\"in_degree\":1") != NULL);
+   /* hub must appear before the leaf nodes in the ranked array. */
+   const char *hub = strstr(buf, "\"node\":\"hub\"");
+   const char *a = strstr(buf, "\"node\":\"a\"");
+   assert(hub && a && hub < a);
+}
+
+static void test_code_graph_hubs_missing_project(void)
+{
+   char buf[256];
+   int s =
+       kb_http_route_ex("GET", "/v1/code/graph/hubs", "", NULL, NULL, NULL, 0, buf, sizeof(buf));
    assert(s == 400);
    assert(strstr(buf, "missing project") != NULL);
 }

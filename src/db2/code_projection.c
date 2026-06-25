@@ -157,6 +157,44 @@ int64_t db2_code_projection_visible_id(const char *project)
    return id;
 }
 
+int db2_code_projection_list_edges(const char *project, code_projection_edge_t *out, int max)
+{
+   if (!project || !*project || !out || max <= 0)
+      return -1;
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+   /* Edges of the project's currently-visible generation. The JOIN to
+    * code_projection_generations on state='visible' guarantees we read the
+    * published graph, never a pending/superseded one. */
+   static const char *sql = "SELECT cpe.source, cpe.relation, cpe.target"
+                            " FROM code_projection_edges cpe"
+                            " JOIN code_projection_generations g ON g.id = cpe.generation_id"
+                            " WHERE cpe.project = ?1 AND g.state = 'visible'"
+                            " ORDER BY cpe.source, cpe.target"
+                            " LIMIT ?2";
+   char err[CP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_text(st, "?1", project);
+   aimee_pg_bind_int64(st, "?2", max);
+   int n = 0;
+   while (n < max && aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+   {
+      const char *src = aimee_pg_column_text(st, 0);
+      const char *rel = aimee_pg_column_text(st, 1);
+      const char *tgt = aimee_pg_column_text(st, 2);
+      snprintf(out[n].source, sizeof(out[n].source), "%s", src ? src : "");
+      snprintf(out[n].relation, sizeof(out[n].relation), "%s", rel ? rel : "");
+      snprintf(out[n].target, sizeof(out[n].target), "%s", tgt ? tgt : "");
+      out[n].structural_weight = structural_weight_for_relation(rel);
+      n++;
+   }
+   aimee_pg_finalize(st);
+   return n;
+}
+
 int db2_code_projection_project_fingerprint(const char *project, char *out, size_t out_len)
 {
    if (!project || !*project || !out || out_len == 0)
