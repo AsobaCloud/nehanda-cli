@@ -125,6 +125,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-kb-client-search \
                $(TESTPREFIX)/unit-test-kb-client-memory \
                $(TESTPREFIX)/unit-test-kb-graph \
+               $(TESTPREFIX)/unit-test-kb-rrf \
                $(TESTPREFIX)/unit-test-code-collect \
                $(TESTPREFIX)/unit-test-server-compute \
                $(TESTPREFIX)/unit-test-server-memory-benchmark \
@@ -1317,10 +1318,15 @@ $(TESTPREFIX)/unit-test-dstr: $(OBJDIR)/tests/test_dstr.o $(OBJDIR)/dstr.o
 # The aimee-client test compiles its in-process TLS mock only in WITH_TLS builds.
 $(OBJDIR)/tests/test_aimee_client.o: C_FLAGS += $(TLS_FLAGS)
 $(OBJDIR)/tests/test_kb_graph.o: C_FLAGS += -Ikb
+$(OBJDIR)/tests/test_kb_rrf.o: C_FLAGS += -Ikb
 
 $(TESTPREFIX)/unit-test-kb-graph: $(OBJDIR)/tests/test_kb_graph.o \
                                   $(OBJDIR)/kb/kb_service_graph.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(L_CORE)
+
+# Reciprocal Rank Fusion core (§5 hybrid retrieval scoring model). Pure: no DB.
+$(TESTPREFIX)/unit-test-kb-rrf: $(OBJDIR)/tests/test_kb_rrf.o $(OBJDIR)/kb/kb_rrf.o
+	$(TESTLINK) -o $@ $^ $(L_CORE) -lm
 
 # Code collector source selection (git default branch vs working tree). Drives
 # the real collector against throwaway git repos materialized under TMPDIR.
