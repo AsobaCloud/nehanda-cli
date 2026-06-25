@@ -1,10 +1,11 @@
 # Proposal: structured PDF ingestion + coordinate-anchored evidence layer (KB)
 
-- **State:** implementing — human sign-off given 2026-06-25; **Phase 1 complete (extractor +
-  geometry #702; upload routing + §6 sensitivity #706); Phase 2 complete (access-controlled
-  search_chunks citation retrieval #712).** Remaining: Phase 2 follow-ups (vector retrieval +
-  the server-ingress wiring that folds search_chunks into the agent envelope), the quarantine
-  admin route, and Phases 3–4 (tables/TSR, crops/OCR — both need local sidecar models). R3
+- **State:** implementing — human sign-off given 2026-06-25; **Phase 1 complete (#702/#706);
+  Phase 2 complete — search_chunks #712, §6 quarantine admin #715, and the §5 escalation read
+  tools open_page/open_neighbors/inspect_structure #717.** The full access-controlled KB evidence
+  surface is live. Remaining: the server-ingress wiring that names these tools in the agent
+  `<aimee-context>` explore-with set (so an agent auto-escalates to them), optional vector
+  retrieval, and Phases 3–4 (tables/TSR, crops/OCR — both need local sidecar models). R3
   roundtable sign-off (reviewer / architect / data-model Pass; security Conditional Pass —
   residual is the explicitly-deferred automated PII detection).
 - **Implementation status (2026-06-25).** **Phase 1 is being delivered in two increments.**
@@ -37,11 +38,16 @@
     kb_documents read path — `kb_fetch_doc_row` (both `/v1/search` legs), the curator
     extraction queue + worker (so PDF text never becomes a searchable derived artifact — a leak
     caught in review), and the convention-candidate sweep. PDFs stay un-embedded (retrieval is
-    lexical). Follow-ups: vector retrieval, and the server-ingress wiring (one `kb_client`
-    `search_chunks` call folded into `<aimee-context>` + the four escalation tools in
-    `explore-with`) that makes the tool agent-reachable.
-  - **Residual:** the quarantine ADMIN route (`pending → confirmed/rejected`) for structured
-    PDFs (they have no `docs` row, so it needs its own surface).
+    lexical).
+  - **§6 quarantine admin (PR #715).** Owner-only `POST /v1/pdf/quarantine` (confirm/reject) —
+    confirm releases a pending restricted PDF (it becomes search_chunks-retrievable), reject
+    purges it; scoped `… RETURNING id` so it acts on exactly the pending PDF chunks.
+  - **§5 escalation read tools (PR #717).** `GET /v1/pdf/page` (a page's full citation set),
+    `/v1/pdf/neighbors` (prev/next reading-order chunks, project-scoped to close a cross-scope
+    IDOR caught in review), `/v1/pdf/structure` (the document outline) — all quarantine-gated.
+  - **Follow-up (makes it agent-reachable):** the server-ingress wiring — a `kb_client`
+    `search_chunks` call folded into `<aimee-context>` + naming the escalation tools in the
+    `explore-with` set; optionally, vector retrieval for search_chunks.
   See **Review revisions (R1)** / **(R2)** / **(R3)** for the design history.
 - **Author:** JBailes
 - **Date:** 2026-06-13
