@@ -131,6 +131,29 @@ extern "C"
     * is non-positive. */
    void db2_kb_documents_link_neighbours(int64_t doc_id, int64_t prev_id);
 
+   /* structured-pdf Phase 1: insert a chunk row also stamping doc_kind='pdf',
+    * the caller's chunk_strategy ('heading' or 'page'), and the page_start/
+    * page_end span. Returns the new document id, or -1 on error. */
+   int64_t db2_kb_documents_insert_chunk_pdf(const char *project, const char *file_path,
+                                             const char *file_hash, int chunk_index,
+                                             const char *heading_path, int line_start, int line_end,
+                                             const char *content, int token_count,
+                                             const char *chunk_strategy, int page_start,
+                                             int page_end);
+
+   /* structured-pdf Phase 1: insert one per-line coordinate region for a chunk.
+    * bbox must already be normalized to [0,1] (top-left origin, per page).
+    * Returns the new region id, or -1 on error. */
+   int64_t db2_kb_doc_regions_insert(int64_t chunk_id, const char *document_key, int page_no,
+                                     double x0, double y0, double x1, double y1, const char *quote,
+                                     int line_index, const char *content_type);
+
+   /* Transaction wrappers (Postgres + sqlite shim). begin/commit return 0 on success,
+    * <0 on error; rollback is best-effort. */
+   int db2_kb_txn_begin(void);
+   int db2_kb_txn_commit(void);
+   void db2_kb_txn_rollback(void);
+
 #ifdef __cplusplus
 }
 #endif

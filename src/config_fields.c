@@ -50,6 +50,7 @@ const config_field_t config_fields[] = {
     {"require_session_worktree", offsetof(config_t, require_session_worktree), sizeof(int), 0,
      CFG_BOOL},
     {"typed_facts_enabled", offsetof(config_t, typed_facts_enabled), sizeof(int), 0, CFG_BOOL},
+    {"kb_pdf_ingest_enabled", offsetof(config_t, kb_pdf_ingest_enabled), sizeof(int), 0, CFG_BOOL},
     {"css_style_graph_enabled", offsetof(config_t, css_style_graph_enabled), sizeof(int), 0,
      CFG_BOOL},
     {"css_render_command", offsetof(config_t, css_render_command),

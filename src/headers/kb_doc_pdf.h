@@ -1,0 +1,113 @@
+/* kb_doc_pdf.h: structured-PDF ingestion, Phase 1 (first increment).
+ *
+ * Turns poppler `pdftotext -bbox-layout` XHTML into the existing kb_documents chunk
+ * spine PLUS per-line coordinate geometry in kb_doc_regions. The whole pipeline below
+ * starts from the XHTML STRING (the bbox-layout output), so it is pure and unit-testable
+ * with no subprocess: parse -> normalize -> chunk -> ingest. The actual `pdftotext`
+ * exec wrapper (with its subprocess timeout + temp-file hardening) and the upload-route
+ * wiring land in the next increment; this one has NO live call site and is exercised by
+ * its unit tests only — so nothing is exposed regardless of the kb_pdf_ingest_enabled flag.
+ *
+ * License note: poppler (the producer of the XHTML this parses) is run as a SEPARATE
+ * PROCESS by the operator's deploy; aimee never links or bundles it. This module only
+ * parses the text output across that process boundary.
+ *
+ * Chunking (Phase 1): deterministic PAGE-BOUNDARY chunking with a line-count cap — no
+ * font/heading heuristics (those are flaky across PDF producers and deferred). Every
+ * chunk therefore lies on a single page (page_start == page_end); the two columns exist
+ * so heading-spanning chunks can cross pages in a later increment. No text is ever
+ * dropped: every extracted line lands in exactly one chunk and one region row.
+ */
+#ifndef DEC_KB_DOC_PDF_H
+#define DEC_KB_DOC_PDF_H 1
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+/* A single extracted text line with its bounding box. After kb_pdf_normalize the bbox
+ * is in [0,1], top-left origin, normalized per page; before it, the raw pdftotext
+ * point coordinates. `text` is malloc'd (owned by the kb_pdf_doc_t). */
+typedef struct
+{
+   int page_no; /* 1-based */
+   double x0, y0, x1, y1;
+   char *text;
+} kb_pdf_line_t;
+
+typedef struct
+{
+   double width, height; /* page box in points, from the <page> element */
+   kb_pdf_line_t *lines;
+   int n_lines, cap_lines;
+} kb_pdf_page_t;
+
+typedef struct
+{
+   kb_pdf_page_t *pages;
+   int n_pages, cap_pages;
+   int normalized; /* 1 once kb_pdf_normalize has run */
+} kb_pdf_doc_t;
+
+/* One chunk + the lines that compose it (borrowed pointers into the kb_pdf_doc_t, so a
+ * chunk array must not outlive its doc). content is malloc'd (owned by the chunk). */
+typedef struct
+{
+   char *content;             /* lines joined by '\n' */
+   const kb_pdf_line_t **lines; /* malloc'd array of borrowed line pointers */
+   int n_lines;
+   int line_start, line_end;  /* 0-based global line ordinals across the doc */
+   int page_start, page_end;  /* MIN/MAX page_no over the chunk's lines */
+   int token_count;
+} kb_pdf_chunk_t;
+
+/* Parse `pdftotext -bbox-layout` XHTML into pages/lines (raw point coords). Tolerant of
+ * the surrounding <html>/<doc> wrapper and of pages that carry bare <word>s without
+ * <line> wrappers (each such word becomes its own line, so no text is lost). Returns 0
+ * on success (out fully owned by the caller; free with kb_pdf_free_doc), <0 on a hard
+ * error. An input with no pages yields a valid empty doc (0 pages), returning 0. */
+int kb_pdf_parse_bbox_layout(const char *xhtml, kb_pdf_doc_t *out);
+
+/* Normalize every line's bbox to [0,1] (x/width, y/height), top-left origin, clamped.
+ * Idempotent guard via doc->normalized. A page with non-positive width/height leaves its
+ * lines clamped to [0,0,0,0] rather than dividing by zero. */
+void kb_pdf_normalize(kb_pdf_doc_t *doc);
+
+/* Page-boundary chunking with a line cap. Allocates *chunks (free with
+ * kb_pdf_free_chunks). Returns the chunk count (>=0) or <0 on error. */
+int kb_pdf_chunk(const kb_pdf_doc_t *doc, kb_pdf_chunk_t **chunks, int *n_chunks);
+
+void kb_pdf_free_doc(kb_pdf_doc_t *doc);
+void kb_pdf_free_chunks(kb_pdf_chunk_t *chunks, int n_chunks);
+
+/* Result counters from an ingest. */
+typedef struct
+{
+   int chunks;
+   int regions;
+} kb_pdf_ingest_stats_t;
+
+/* Ingest an already-parsed-and-normalized doc into kb_documents + kb_doc_regions under
+ * (project, file_path, file_hash). Replaces any existing rows for (project, file_path)
+ * first (db2_kb_documents_delete_for_file; regions cascade), then writes chunks (one
+ * txn-equivalent sequence), links neighbours, writes one region per line, and best-effort
+ * enqueues 'embed_raw' per chunk (enqueue failure is non-fatal — a re-embed sweep
+ * recovers it). Returns the chunk count (>=0) or <0 on error. */
+int kb_doc_pdf_ingest(const char *project, const char *file_path, const char *file_hash,
+                      const kb_pdf_doc_t *doc, kb_pdf_ingest_stats_t *stats);
+
+/* Convenience: parse -> normalize -> ingest from raw bbox-layout XHTML. */
+int kb_doc_pdf_ingest_xhtml(const char *project, const char *file_path, const char *file_hash,
+                            const char *xhtml, kb_pdf_ingest_stats_t *stats);
+
+/* The page-boundary chunk line cap (exposed for tests). */
+#define KB_PDF_MAX_CHUNK_LINES 100
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* DEC_KB_DOC_PDF_H */
