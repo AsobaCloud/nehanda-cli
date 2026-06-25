@@ -149,12 +149,14 @@ git clone https://github.com/RakuenSoftware/aimee.git
 cd aimee
 docker compose -f compose.combined.yaml up --build -d
 
-# 2. Confirm it's live (default loopback bearer: aimee-local-dev)
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/health
+# 2. Confirm it's live (default bearer: aimee-local-dev; -k accepts the self-signed cert)
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/health
 ```
 
 Then install the thin client (prebuilt Linux/macOS/Windows binaries ship with each
-release), point it at the server with `aimee remote set http://host:8740 <token>`,
+release), point it at the server with `aimee remote set https://host:8743 <token>`
+(the server's `/v1` is TLS-only off-loopback with a self-signed cert, so set
+`AIMEE_TLS_INSECURE=1` or trust the cert),
 and register your tool's hooks with `./configure-hooks.sh`.
 
 The [Quickstart](docs/QUICKSTART.md) walks the Docker server and thin-client setup

@@ -52,7 +52,7 @@ execution of a workflow for one proposal. The **primary agent** is the manager
 Submit a proposal for autonomous execution:
 
 ```bash
-curl -sX POST http://127.0.0.1:8740/v1/dev/submit \
+curl -k -sX POST https://127.0.0.1:8743/v1/dev/submit \
   -H "Authorization: Bearer $AIMEE_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"proposal_md": "## Add a /healthz route returning {status:ok}\n\nWhy: ...\nAcceptance: GET /healthz returns 200 with {\"status\":\"ok\"}."}'

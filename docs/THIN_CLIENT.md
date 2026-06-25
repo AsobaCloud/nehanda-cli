@@ -28,9 +28,13 @@ It complements [WORKSPACES.md](WORKSPACES.md), [DELEGATES.md](DELEGATES.md), and
 Point the client at the server once:
 
 ```sh
-aimee remote set http://SERVER:8740 <bearer-token>
+aimee remote set https://SERVER:8743 <bearer-token>
 # or per-invocation: --server / AIMEE_SERVER_URL (+ --server-token / AIMEE_SERVER_TOKEN)
 ```
+
+The server's `/v1` is TLS-only off-loopback (`:8743`, auto-provisioned self-signed
+cert; plaintext `:8740` is loopback-only). Set `AIMEE_TLS_INSECURE=1` for the
+self-signed cert, or trust/pin it.
 
 A remote endpoint is "tcp" (`http(s)://host:port`) vs. a co-located unix socket.
 The behaviors below activate only for a **remote tcp** endpoint; co-located use
