@@ -2,14 +2,14 @@
  * built-in tool surface (name + sorted schema property keys + required), captured
  * via the DUMP_TOOLS path in test_mcp_client_registry.c. Regenerate after an
  * intentional tool change: DUMP_TOOLS=1 ./unit-test-mcp-client-registry 2>&1. */
-#define MCP_TOOLS_GOLDEN_COUNT 63
+#define MCP_TOOLS_GOLDEN_COUNT 43
 #define MCP_TOOLS_GOLDEN \
    "ask_user {choices,question} req:question\n" \
    "ast_grep_search {lang,path,pattern} req:lang,pattern\n" \
+   "attempt {approach,command,filter,lesson,outcome,task_context} req:command\n" \
    "autopilot {action,job_id,pipeline_id,plan_depth,plan_id,task} req:action\n" \
    "background {action,command,cwd,id,tail_lines} req:action\n" \
-   "clarify_answer {answer,session_id} req:answer,session_id\n" \
-   "clarify_start {description} req:description\n" \
+   "clarify {answer,command,description,session_id} req:command\n" \
    "dashboard_metrics {} req:\n" \
    "delegate {branch,cwd,persona,prompt,role} req:persona,prompt,role\n" \
    "delegate_reply {content,delegation_id} req:content,delegation_id\n" \
@@ -20,50 +20,30 @@
    "epistemic_directive {anchor_entity,anchor_file,cause,command,id,limit,note,priority,question,resolution_memory_id,state,suppress,topic,valid_until} req:command\n" \
    "find_symbol {identifier} req:identifier\n" \
    "find_tools {limit,query} req:\n" \
-   "get_context_block {block_type,limit,query} req:query\n" \
-   "get_entity {entity} req:entity\n" \
-   "get_entity_edges {entity,limit} req:entity\n" \
-   "get_episode {episode_key} req:episode_key\n" \
    "get_help {topic} req:\n" \
-   "get_host {name} req:name\n" \
    "get_identity {} req:\n" \
    "git {action,async,base,body,branch,command,count,depth,diff_stat,files,force,index,job_id,message,mirror,mode,name,number,path,prune,rebase,ref,remote,source,staged,stat_only,state,title,url,wait} req:command\n" \
-   "index {command,file_path,project,symbol} req:command\n" \
-   "job_start {max_concurrent,plan_id} req:plan_id\n" \
-   "job_status {job_id} req:job_id\n" \
-   "learning_propose {correction_text,description,evidence_refs,polarity,signal_type,target_key,target_memory_id,title,workflow_project,workflow_signal_type} req:signal_type\n" \
-   "learning_review {limit,sink,state} req:\n" \
-   "list_attempts {filter} req:\n" \
+   "graph {command,entity,episode_key,limit,query} req:command\n" \
+   "host {command,name} req:command\n" \
+   "index {command,file_path,paths,project,symbol} req:command\n" \
+   "job {command,job_id,max_concurrent,plan_id} req:command\n" \
+   "learning {command,correction_text,description,evidence_refs,limit,polarity,signal_type,sink,state,target_key,target_memory_id,title,workflow_project,workflow_signal_type} req:command\n" \
    "list_curiosity_items {limit,state} req:\n" \
-   "list_facts {} req:\n" \
-   "list_hosts {} req:\n" \
    "lsp {col,command,file,line,workspace} req:command\n" \
-   "memory_alerts {since} req:\n" \
-   "memory_briefing {limit_tokens} req:\n" \
-   "memory_explain_match {memory_id,query} req:memory_id,query\n" \
-   "memory_fact_history {key} req:key\n" \
-   "memory_get {handle,id} req:\n" \
-   "memory_maintain {dry_run,force,modes} req:\n" \
-   "memory_provenance {memory_id} req:memory_id\n" \
+   "memory {command,confidence,content,dry_run,force,handle,id,key,kind,memory_id,modes,query,reason,tier,verb} req:command\n" \
    "memory_recall {limit_tokens,session_start,task_hint} req:\n" \
-   "mutate {confidence,content,id,key,kind,reason,tier,verb} req:verb\n" \
    "note {command,content,limit,query,tag,tags,title} req:command\n" \
    "payload_rewrite_status {} req:\n" \
    "pipeline {admin,artifact,base_branch,brief,command,done_bar,head_branch,idea,operator_principal,pipeline_id,questions,reason,remote,repo_root,state,verdict,worktree_path} req:command\n" \
-   "preview_blast_radius {paths,project} req:paths,project\n" \
    "prospective_memory {action_text,anchor_entity,anchor_file,command,id,limit,recurrence,state,trigger_text,valid_until} req:command\n" \
-   "record_attempt {approach,lesson,outcome,task_context} req:approach,outcome\n" \
-   "roadmap_list {} req:\n" \
-   "roadmap_show {roadmap_id} req:roadmap_id\n" \
-   "rules_list {} req:\n" \
-   "rules_propose {reason,text} req:text\n" \
+   "recall {block_type,command,limit,limit_tokens,query,since} req:command\n" \
+   "roadmap {command,roadmap_id} req:command\n" \
+   "rules {command,reason,text} req:command\n" \
    "search_docs {max_results,query} req:query\n" \
-   "search_graph {limit,query} req:query\n" \
    "search_memory {filter,query} req:query\n" \
    "send_message {target,text} req:target,text\n" \
    "session {around_message_id,assignments,chain_id,channel,command,id,include_sources,limit,message,query,reason,session_id,speaker,template,window} req:command\n" \
    "skill_manage {absorbed_into,action,content,cwd,file_path,name,new_string,old_string,replace_all} req:action,name\n" \
    "store_workflow {project,rule,signal_type} req:rule,signal_type\n" \
    "task_list {limit,session_id,state} req:\n" \
-   "work_board {} req:\n" \
-   "work_list {status_filter} req:\n"
+   "work {command,status_filter} req:command\n"
