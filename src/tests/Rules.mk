@@ -1849,6 +1849,7 @@ $(TESTPREFIX)/unit-test-fact-ingest: $(OBJDIR)/tests/test_fact_ingest.o \
 
 $(TESTPREFIX)/unit-test-kb-doc-pdf: $(OBJDIR)/tests/test_kb_doc_pdf.o \
                                $(OBJDIR)/kb/kb_doc_pdf.o \
+                               $(OBJDIR)/kb/http/kb_http_pdf.o \
                                $(TEST_DATA_OBJS_MOCK)
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
@@ -2979,6 +2980,7 @@ $(TESTPREFIX)/unit-test-kb-http-routes: $(OBJDIR)/tests/test_kb_http_routes.o \
                      $(OBJDIR)/kb/kb_intel_payload.o \
                      $(OBJDIR)/kb/kb_bandit_registry.o \
                      $(OBJDIR)/kb/http/kb_http_code.o \
+                     $(OBJDIR)/kb/http/kb_http_pdf.o \
                      $(OBJDIR)/kb/http/kb_http_jobs.o \
                      $(OBJDIR)/cJSON.o \
                      $(OBJDIR)/log.o $(PLATFORM_BASIC_OBJS)
