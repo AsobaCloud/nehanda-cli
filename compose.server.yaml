@@ -9,10 +9,11 @@
 #
 #   docker compose -f compose.server.yaml up --build
 #
-# Server /v1 on :8740 (bearer "aimee-local-dev"); kb /v1 on :8741. The
-# aimee-webchat browser UI is on https://localhost:8443 (self-signed; log in as
+# Server /v1 on :8743 over native TLS (bearer "aimee-local-dev"; self-signed cert
+# auto-provisioned — pass curl -k or trust it); kb /v1 on :8741. The aimee-webchat
+# browser UI is on https://localhost:8443 (self-signed; log in as
 # AIMEE_WEBCHAT_USER / AIMEE_WEBCHAT_PASSWORD, default aimee / aimee-local-dev).
-#   curl -H "Authorization: Bearer aimee-local-dev" http://localhost:8740/v1/health
+#   curl -k -H "Authorization: Bearer aimee-local-dev" https://localhost:8743/v1/health
 services:
   postgres:
     restart: unless-stopped
@@ -147,7 +148,10 @@ services:
       # AIMEE_DELEGATE_KEY_MISTRAL: ${AIMEE_DELEGATE_KEY_MISTRAL:-}
       # AIMEE_DELEGATE_SECRETS_FILE: /run/secrets/aimee-delegates.json
     ports:
-      - "8740:8740"
+      # Remote /v1 is served over native TLS on 8743 (the server refuses to expose
+      # plaintext /v1 off-loopback). Plaintext 8740 stays bound to 127.0.0.1 inside
+      # the container (the healthcheck below still uses it) and is NOT published.
+      - "8743:8743"
       # webchat UI — on by default; gated off only by AIMEE_WEBCHAT_ENABLED=0 above.
       - "8443:8443"
     depends_on:

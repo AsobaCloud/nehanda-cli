@@ -45,8 +45,11 @@ services:
         slot: HDD
         bind: /var/lib/aimee-workspaces
     ports:
+      # Remote /v1 is served over native TLS on 8743 (https://). Plaintext 8740
+      # is loopback-only in the server (it refuses a non-loopback plaintext bind),
+      # so it is not host-exposed.
       - name: api
-        port: 8740
+        port: 8743
         protocol: tcp
         expose: false
         hostExpose: true
