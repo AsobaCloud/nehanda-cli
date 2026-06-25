@@ -150,3 +150,66 @@ int handle_get_pdf_search_route(const char *method, const char *query_string, ch
    free(regs);
    return status;
 }
+
+int handle_post_pdf_quarantine_route(const char *method, const char *body, int body_len,
+                                     char *out_buf, int out_cap)
+{
+   (void)body_len;
+   if (!method || strcmp(method, "POST") != 0)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"method not allowed\"}");
+      return 405;
+   }
+
+   cJSON *req = body ? cJSON_Parse(body) : NULL;
+   const cJSON *jproj = req ? cJSON_GetObjectItemCaseSensitive(req, "project") : NULL;
+   const cJSON *jdk = req ? cJSON_GetObjectItemCaseSensitive(req, "document_key") : NULL;
+   const cJSON *jact = req ? cJSON_GetObjectItemCaseSensitive(req, "action") : NULL;
+   if (!cJSON_IsString(jproj) || !jproj->valuestring[0] || !cJSON_IsString(jdk) ||
+       !jdk->valuestring[0] || !cJSON_IsString(jact))
+   {
+      cJSON_Delete(req);
+      snprintf(out_buf, (size_t)out_cap,
+               "{\"error\":\"bad request: project, document_key, and action are "
+               "required\",\"code\":\"bad_request\"}");
+      return 400;
+   }
+
+   const char *project = jproj->valuestring;
+   const char *dk = jdk->valuestring;
+   const char *action = jact->valuestring;
+   int rc;
+   if (strcmp(action, "confirm") == 0)
+      rc = db2_kb_pdf_quarantine_confirm(project, dk);
+   else if (strcmp(action, "reject") == 0)
+      rc = db2_kb_pdf_quarantine_reject(project, dk);
+   else
+   {
+      cJSON_Delete(req);
+      snprintf(out_buf, (size_t)out_cap,
+               "{\"error\":\"action must be 'confirm' or 'reject'\",\"code\":\"bad_request\"}");
+      return 400;
+   }
+
+   /* Snapshot before freeing req (dk points into it). */
+   char dk_copy[1024];
+   snprintf(dk_copy, sizeof(dk_copy), "%s", dk);
+   char action_copy[16];
+   snprintf(action_copy, sizeof(action_copy), "%s", action);
+   cJSON_Delete(req);
+
+   if (rc < 0)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"db error\"}");
+      return 503;
+   }
+   if (rc == 0)
+   {
+      snprintf(out_buf, (size_t)out_cap,
+               "{\"error\":\"no pending PDF for that document_key\",\"code\":\"not_found\"}");
+      return 404;
+   }
+   snprintf(out_buf, (size_t)out_cap, "{\"document_key\":\"%s\",\"action\":\"%s\",\"chunks\":%d}",
+            dk_copy, action_copy, rc);
+   return 200;
+}
