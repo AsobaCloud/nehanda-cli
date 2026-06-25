@@ -3,6 +3,47 @@
  * unit under the 2000-line hard limit. Included (with
  * test_kb_http_routes_endpoints.inc) just before main(); all helpers and
  * fixtures live in test_kb_http_routes.c above the include point. */
+/* Full memory_t layout (mirrors headers/memory.h) so the stub writes each field
+ * at the offset the handler — compiled against the real struct — reads. The main
+ * file keeps a truncated local memory_t for other stubs, so we cast a void* here
+ * rather than redeclare the type, exactly like canonical_index_code_search. Lives
+ * here (with the hybrid test it feeds) to keep test_kb_http_routes.c under the
+ * 2000-line build-integrity limit. */
+typedef struct
+{
+   int64_t id;
+   char tier[4];
+   char kind[16];
+   char key[512];
+   char headline[512];
+   char content[2048];
+   char use_cases[1024];
+   double confidence;
+   int use_count;
+   char last_used_at[32];
+   char created_at[32];
+   char updated_at[32];
+   char source_session[128];
+   double salience;
+   char provenance_category[32];
+   double retrieval_score;
+   int hybrid_rank;
+} test_full_memory_t;
+
+int db2_memory_find_facts_like(const char *query, int limit, void *out, int max)
+{
+   assert(out);
+   if (!query || strcmp(query, "needle") != 0 || limit < 1 || max < 1)
+      return 0;
+   test_full_memory_t *m = (test_full_memory_t *)out;
+   memset(&m[0], 0, sizeof(m[0]));
+   m[0].id = 7;
+   snprintf(m[0].kind, sizeof(m[0].kind), "decision");
+   snprintf(m[0].headline, sizeof(m[0].headline), "why needle exists");
+   snprintf(m[0].content, sizeof(m[0].content), "chose needle over haystack for O(1) lookup");
+   return 1;
+}
+
 static void test_code_structure_ok(void)
 {
    char buf[512];
@@ -62,6 +103,49 @@ static void test_code_callers_ok(void)
    assert(strstr(buf, "\"caller\":\"caller_fn\"") != NULL);
    assert(strstr(buf, "\"line\":44") != NULL);
    assert(strstr(buf, "\"next_cursor\":null") != NULL);
+}
+
+/* §5 hybrid retrieval: fuse lexical-code + graph-callers (RRF) + memory "why". */
+static void test_code_hybrid_ok(void)
+{
+   char buf[2048];
+   int s = kb_http_route_ex("GET", "/v1/code/hybrid",
+                            "query=needle&symbol=target_fn&project=proj-alpha&max_results=10", NULL,
+                            NULL, NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"status\":\"ok\"") != NULL);
+   assert(strstr(buf, "\"results\"") != NULL);
+   /* Both signals contribute a file, each labeled + enriched from its source. */
+   assert(strstr(buf, "\"file_path\":\"src/search.c\"") != NULL); /* lexical-code leg */
+   assert(strstr(buf, "\"signals\":[\"code\"]") != NULL);
+   assert(strstr(buf, "\"snippet\":\"int needle") != NULL);
+   assert(strstr(buf, "\"file_path\":\"src/caller.c\"") != NULL); /* graph-callers leg */
+   assert(strstr(buf, "\"signals\":[\"graph\"]") != NULL);
+   assert(strstr(buf, "\"caller\":\"caller_fn\"") != NULL);
+   /* Memory recall surfaces as typed "why" context, not a fused row. */
+   assert(strstr(buf, "\"why\"") != NULL);
+   assert(strstr(buf, "why needle exists") != NULL);
+}
+
+static void test_code_hybrid_missing_query(void)
+{
+   char buf[256];
+   int s = kb_http_route_ex("GET", "/v1/code/hybrid", "symbol=target_fn", NULL, NULL, NULL, 0, buf,
+                            sizeof(buf));
+   assert(s == 400);
+   assert(strstr(buf, "missing query") != NULL);
+}
+
+/* No symbol => graph leg empty; lexical-code + memory still fuse/return. */
+static void test_code_hybrid_no_symbol(void)
+{
+   char buf[2048];
+   int s = kb_http_route_ex("GET", "/v1/code/hybrid", "query=needle&project=proj-alpha", NULL, NULL,
+                            NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"file_path\":\"src/search.c\"") != NULL);
+   assert(strstr(buf, "\"file_path\":\"src/caller.c\"") == NULL); /* no graph leg */
+   assert(strstr(buf, "why needle exists") != NULL);
 }
 
 static void test_code_project_stats_missing_project(void)
@@ -578,4 +662,3 @@ static void test_scope_admin_token_full_access(void)
                             sizeof(buf));
    assert(s != 403 && s != 401);
 }
-

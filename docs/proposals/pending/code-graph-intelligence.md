@@ -165,10 +165,21 @@ lists + per-signal weights + the RRF constant `k`, and returns one ranking by
 (structural-trust desc, then id) and a cross-signal-consensus boost. Fully unit
 tested (`unit-test-kb-rrf`): exact rank-blend math, weighting, consensus-beats-single,
 absent-signal robustness, determinism under input-order permutation, truncation.
-The remaining wiring — embedding the query, gathering the three signal lists
-(`db2_entity_edge_*` graph neighborhood, `pgvec_code_search` vector, memory recall),
-the `/v1/code/hybrid` route + MCP tool, and the config-tunable weights — is the next
-increment (needs the live embedder, so it is integration-tier rather than shim-tested).
+
+**Status — route shipped.** `GET /v1/code/hybrid?query&symbol&project` fuses two
+signals in **file-path** space through `kb_rrf_fuse` so consensus is meaningful — a
+file that is both textually relevant to `query` AND structurally connected to
+`symbol` (calls it) ranks highest: `code` (lexical `canonical_index_code_search`) +
+`graph` (`canonical_index_find_callers`, marked structural). Memory recall
+(`db2_memory_find_facts_like`) returns as a separate typed `why` array — the recorded
+reasoning behind the code, context rather than a fused file row (matching the §5
+example "+ the decision that explains X"). Each result is labeled with its
+contributing `signals`, enriched (snippet / caller), and carries `signal_hits` +
+`structural_weight`. Shim-tested end-to-end in `unit-test-kb-http-routes`
+(`test_code_hybrid_*`: both legs fuse + label + enrich, memory why, no-symbol path,
+missing-query 400). **Remaining:** the **vector** leg (`pgvec_code_search`, needs the
+query embedder — integration-tier) as a third fused signal; the MCP tool + client
+bridge so the agent calls it before grepping; config-tunable per-signal weights.
 
 ## §6 Live + cross-session memory fusion
 

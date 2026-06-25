@@ -1936,6 +1936,9 @@ int main(void)
    test_code_search_ok();
    test_code_callers_missing_symbol();
    test_code_callers_ok();
+   test_code_hybrid_ok();
+   test_code_hybrid_missing_query();
+   test_code_hybrid_no_symbol();
    test_code_project_stats_missing_project();
    test_code_project_stats_ok();
    test_code_project_stats_error_is_json();
