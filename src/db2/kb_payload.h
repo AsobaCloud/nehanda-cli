@@ -197,6 +197,31 @@ extern "C"
    int db2_kb_pdf_quarantine_confirm(const char *project, const char *document_key);
    int db2_kb_pdf_quarantine_reject(const char *project, const char *document_key);
 
+   /* §5 evidence escalation reads. All withhold quarantine_state='pending' (restricted)
+    * documents. Return the number written (<= max). */
+
+   /* open_page: every coordinate region on (project, document_key, page_no), ordered by
+    * line_index — the full set of citations for a page. */
+   int db2_kb_pdf_open_page(const char *project, const char *document_key, int page_no,
+                            db2_kb_pdf_region_t *out, int max);
+
+   /* open_neighbors: the prev/next reading-order chunks of `chunk_id`, scoped to `project`
+    * (the project predicate prevents cross-scope chunk-id enumeration). 0-2 results. */
+   int db2_kb_pdf_open_neighbors(const char *project, int64_t chunk_id, db2_kb_pdf_chunk_t *out,
+                                 int max);
+
+   /* inspect_structure: a document's chunk outline (chunk_index + page span + heading_path),
+    * ordered by chunk_index. */
+   typedef struct
+   {
+      int chunk_index;
+      int page_start;
+      int page_end;
+      char heading_path[256];
+   } db2_kb_pdf_outline_t;
+   int db2_kb_pdf_inspect_structure(const char *project, const char *document_key,
+                                    db2_kb_pdf_outline_t *out, int max);
+
 #ifdef __cplusplus
 }
 #endif
