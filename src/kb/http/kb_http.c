@@ -1288,6 +1288,19 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
       return handle_get_code_search_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/pdf/search") == 0)
       return handle_get_pdf_search_route(method, query_string, out_buf, out_cap);
+   /* POST /v1/pdf/quarantine — §6 owner action to release/purge a pending restricted PDF.
+    * Owner-only: a scoped bearer cannot transition a document's access state (the auth is
+    * checked here where the verified scope `vr` lives; the handler does body + state work). */
+   if (strcmp(path, "/v1/pdf/quarantine") == 0)
+   {
+      if (vr.scope_kind[0])
+      {
+         snprintf(out_buf, (size_t)out_cap,
+                  "{\"error\":\"forbidden: quarantine actions require the owner credential\"}");
+         return 403;
+      }
+      return handle_post_pdf_quarantine_route(method, body, body_len, out_buf, out_cap);
+   }
    if (strcmp(path, "/v1/code/callers") == 0)
       return handle_get_code_callers_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/code/project-stats") == 0)

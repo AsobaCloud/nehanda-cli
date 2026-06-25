@@ -757,3 +757,48 @@ int db2_kb_doc_regions_for_chunk(int64_t chunk_id, db2_kb_pdf_region_t *out, int
    aimee_pg_finalize(st);
    return n;
 }
+
+/* Run a quarantine-admin statement that ends in `RETURNING id`, counting the rows it
+ * actually affected. Using RETURNING makes the transition atomic — there is no count-then-act
+ * race, and the scoped predicate (carried in `sql`) is the ONLY thing acted on, so the count
+ * reported is exactly what changed. Returns the affected-row count (>=0), or -1 on error. */
+static int kb_pdf_quarantine_apply(const char *sql, const char *project, const char *document_key)
+{
+   void *conn = db2_conn();
+   if (!conn || !project || !*project || !document_key || !*document_key)
+      return -1;
+   char err[KBP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_text(st, "?1", project);
+   aimee_pg_bind_text(st, "?2", document_key);
+   int n = 0, rc;
+   while ((rc = aimee_pg_step(st, err, sizeof(err))) == AIMEE_PG_ROW)
+      n++;
+   aimee_pg_finalize(st);
+   return rc == AIMEE_PG_DONE ? n : -1;
+}
+
+int db2_kb_pdf_quarantine_confirm(const char *project, const char *document_key)
+{
+   /* Scoped to exactly the pending PDF chunks at this (project, file_path); RETURNING gives
+    * the true affected count. A confirmed doc has quarantine_state='' and is retrievable. */
+   static const char *sql = "UPDATE kb_documents SET quarantine_state = ''"
+                            " WHERE project = ?1 AND file_path = ?2 AND doc_kind = 'pdf'"
+                            "   AND quarantine_state = 'pending'"
+                            " RETURNING id";
+   return kb_pdf_quarantine_apply(sql, project, document_key);
+}
+
+int db2_kb_pdf_quarantine_reject(const char *project, const char *document_key)
+{
+   /* Delete ONLY the pending PDF chunks at this (project, file_path) — NOT every row sharing
+    * the file_path (a non-PDF or already-confirmed doc could collide). Regions cascade via
+    * the kb_doc_regions FK. RETURNING gives the true deleted count. */
+   static const char *sql = "DELETE FROM kb_documents"
+                            " WHERE project = ?1 AND file_path = ?2 AND doc_kind = 'pdf'"
+                            "   AND quarantine_state = 'pending'"
+                            " RETURNING id";
+   return kb_pdf_quarantine_apply(sql, project, document_key);
+}
