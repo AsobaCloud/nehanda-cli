@@ -157,6 +157,83 @@ int64_t db2_code_projection_visible_id(const char *project)
    return id;
 }
 
+int db2_code_projection_project_fingerprint(const char *project, char *out, size_t out_len)
+{
+   if (!project || !*project || !out || out_len == 0)
+      return -1;
+   out[0] = '\0';
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+   /* md5 over (path, content-hash) of every file in the project, ordered — two
+    * scans with identical file contents produce the same fingerprint, so the
+    * drain can skip an unchanged project (content-addressed idempotency). An empty
+    * project hashes md5('') deterministically (built once, then skipped). */
+   static const char *sql =
+       "SELECT md5(coalesce(string_agg(f.path || ':' || f.hash, E'\\n' ORDER BY f.path), ''))"
+       " FROM files f JOIN projects p ON f.project_id = p.id WHERE p.name = ?1";
+   char err[CP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_text(st, "?1", project);
+   int rc = -1;
+   if (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+   {
+      const char *h = aimee_pg_column_text(st, 0);
+      if (h && h[0])
+      {
+         snprintf(out, out_len, "%s", h);
+         rc = 0;
+      }
+   }
+   aimee_pg_finalize(st);
+   return rc;
+}
+
+int db2_code_projection_generation_set_source_hash(int64_t gen_id, const char *source_hash)
+{
+   if (gen_id <= 0)
+      return -1;
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+   static const char *sql = "UPDATE code_projection_generations SET source_hash = ?2 WHERE id = ?1";
+   char err[CP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_int64(st, "?1", gen_id);
+   aimee_pg_bind_text(st, "?2", source_hash ? source_hash : "");
+   int rc = aimee_pg_step(st, err, sizeof(err));
+   aimee_pg_finalize(st);
+   return (rc == AIMEE_PG_DONE) ? 0 : -1;
+}
+
+int db2_code_projection_visible_source_hash(const char *project, char *out, size_t out_len)
+{
+   if (!project || !*project || !out || out_len == 0)
+      return -1;
+   out[0] = '\0';
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+   static const char *sql = "SELECT source_hash FROM code_projection_generations"
+                            " WHERE project = ?1 AND state = 'visible'";
+   char err[CP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   if ((aimee_pg_bind_text(st, "?1", project), aimee_pg_step(st, err, sizeof(err))) == AIMEE_PG_ROW)
+   {
+      const char *h = aimee_pg_column_text(st, 0);
+      if (h)
+         snprintf(out, out_len, "%s", h);
+   }
+   aimee_pg_finalize(st);
+   return 0; /* out == "" when there is no visible generation yet */
+}
+
 int db2_code_projection_generation_update_counts(int64_t gen_id, int64_t edge_count,
                                                  int64_t node_count)
 {
