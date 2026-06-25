@@ -139,14 +139,16 @@ extern "C"
                                              const char *heading_path, int line_start, int line_end,
                                              const char *content, int token_count,
                                              const char *chunk_strategy, int page_start,
-                                             int page_end);
+                                             int page_end, const char *sensitivity_class,
+                                             const char *quarantine_state);
 
    /* structured-pdf Phase 1: insert one per-line coordinate region for a chunk.
     * bbox must already be normalized to [0,1] (top-left origin, per page).
     * Returns the new region id, or -1 on error. */
    int64_t db2_kb_doc_regions_insert(int64_t chunk_id, const char *document_key, int page_no,
                                      double x0, double y0, double x1, double y1, const char *quote,
-                                     int line_index, const char *content_type);
+                                     int line_index, const char *content_type,
+                                     const char *sensitivity_class);
 
    /* Transaction wrappers (Postgres + sqlite shim). begin/commit return 0 on success,
     * <0 on error; rollback is best-effort. */

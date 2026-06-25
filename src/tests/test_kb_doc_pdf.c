@@ -177,7 +177,8 @@ static void test_ingest_shim(void)
    db2_test_shim_open();
 
    kb_pdf_ingest_stats_t stats;
-   int rc = kb_doc_pdf_ingest_xhtml("proj", "report.pdf", "hash1", FIXTURE_2PAGE, &stats);
+   int rc =
+       kb_doc_pdf_ingest_xhtml("proj", "report.pdf", "hash1", FIXTURE_2PAGE, "internal", &stats);
    assert(rc == 2); /* two chunks (one per page) */
    assert(stats.chunks == 2);
    assert(stats.regions == 3); /* 2 lines + 1 line */
@@ -191,22 +192,50 @@ static void test_ingest_shim(void)
    assert(count_rows("SELECT COUNT(*) FROM kb_doc_regions WHERE document_key='report.pdf'") == 3);
    /* per-chunk line_index starts at 0; the 2-line chunk has indices 0 and 1 */
    assert(count_rows("SELECT COUNT(*) FROM kb_doc_regions WHERE line_index=1") == 1);
-   /* embed enqueued once per chunk */
-   assert(count_rows("SELECT COUNT(*) FROM kb_async_jobs WHERE kind='embed_raw'") == 2);
+   /* §6: sensitivity stamped on chunks AND regions; non-restricted -> no quarantine */
+   assert(count_rows("SELECT COUNT(*) FROM kb_documents WHERE sensitivity_class='internal'") == 2);
+   assert(count_rows("SELECT COUNT(*) FROM kb_doc_regions WHERE sensitivity_class='internal'") ==
+          3);
+   assert(count_rows("SELECT COUNT(*) FROM kb_documents WHERE quarantine_state=''") == 2);
+   /* Phase 1b: PDFs are NOT embedded (no vectors -> invisible to vector-only search). */
+   assert(count_rows("SELECT COUNT(*) FROM kb_async_jobs WHERE kind='embed_raw'") == 0);
    /* neighbour threading: exactly one row has a prev pointer (the 2nd chunk) */
    assert(count_rows("SELECT COUNT(*) FROM kb_documents WHERE prev_chunk_id IS NOT NULL") == 1);
 
    /* Re-ingest the same file: delete-then-insert replaces, regions cascade — no growth. */
-   rc = kb_doc_pdf_ingest_xhtml("proj", "report.pdf", "hash2", FIXTURE_2PAGE, &stats);
+   rc = kb_doc_pdf_ingest_xhtml("proj", "report.pdf", "hash2", FIXTURE_2PAGE, "internal", &stats);
    assert(rc == 2);
    assert(count_rows("SELECT COUNT(*) FROM kb_documents WHERE doc_kind='pdf'") == 2);
    assert(count_rows("SELECT COUNT(*) FROM kb_doc_regions") == 3);
 
    /* Empty extraction for the same file must NOT wipe the prior rows (0-chunk guard). */
-   rc = kb_doc_pdf_ingest_xhtml("proj", "report.pdf", "hash3", "<doc></doc>", &stats);
+   rc = kb_doc_pdf_ingest_xhtml("proj", "report.pdf", "hash3", "<doc></doc>", "internal", &stats);
    assert(rc == 0);
    assert(count_rows("SELECT COUNT(*) FROM kb_documents WHERE doc_kind='pdf'") == 2);
    assert(count_rows("SELECT COUNT(*) FROM kb_doc_regions") == 3);
+
+   /* A `restricted` document is quarantined (pending) and still not embedded. */
+   rc = kb_doc_pdf_ingest_xhtml("proj", "secret.pdf", "h4", FIXTURE_2PAGE, "restricted", &stats);
+   assert(rc == 2);
+   assert(count_rows("SELECT COUNT(*) FROM kb_documents WHERE file_path='secret.pdf' AND "
+                     "quarantine_state='pending'") == 2);
+   assert(count_rows("SELECT COUNT(*) FROM kb_documents WHERE file_path='secret.pdf' AND "
+                     "sensitivity_class='restricted'") == 2);
+   assert(count_rows("SELECT COUNT(*) FROM kb_async_jobs WHERE kind='embed_raw'") == 0);
+
+   /* An invalid/empty sensitivity class is refused at ingest — no rows written. */
+   rc = kb_doc_pdf_ingest_xhtml("proj", "bad.pdf", "h5", FIXTURE_2PAGE, "secret", &stats);
+   assert(rc < 0);
+   assert(count_rows("SELECT COUNT(*) FROM kb_documents WHERE file_path='bad.pdf'") == 0);
+   rc = kb_doc_pdf_ingest_xhtml("proj", "bad2.pdf", "h6", FIXTURE_2PAGE, "", &stats);
+   assert(rc < 0);
+   assert(count_rows("SELECT COUNT(*) FROM kb_documents WHERE file_path='bad2.pdf'") == 0);
+
+   /* The validator itself. */
+   assert(kb_pdf_sensitivity_valid("public") && kb_pdf_sensitivity_valid("internal") &&
+          kb_pdf_sensitivity_valid("restricted"));
+   assert(!kb_pdf_sensitivity_valid("") && !kb_pdf_sensitivity_valid("secret") &&
+          !kb_pdf_sensitivity_valid(NULL));
 
    db2_test_shim_close();
    PASS("ingest_shim");
