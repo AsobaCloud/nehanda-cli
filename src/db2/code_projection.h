@@ -3,6 +3,7 @@
 #ifndef CODE_PROJECTION_H
 #define CODE_PROJECTION_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -42,6 +43,19 @@ extern "C"
    /* Return the currently visible generation id for project, or 0 if none.
     * Returns -1 on DB error. */
    int64_t db2_code_projection_visible_id(const char *project);
+
+   /* Content fingerprint (hex) of a project's code: md5 over (path, file-hash) of
+    * all files. Identical contents -> identical fingerprint, so the drain can skip
+    * an unchanged project. Returns 0 on success, -1 on error. */
+   int db2_code_projection_project_fingerprint(const char *project, char *out, size_t out_len);
+
+   /* Record the content fingerprint that produced this generation (stored in
+    * code_projection_generations.source_hash). Returns 0 on success, -1 on error. */
+   int db2_code_projection_generation_set_source_hash(int64_t gen_id, const char *source_hash);
+
+   /* Fingerprint stored on the project's currently-visible generation, into out
+    * (empty when there is no visible generation). Returns 0 on success, -1 on error. */
+   int db2_code_projection_visible_source_hash(const char *project, char *out, size_t out_len);
 
    /* Update edge/node counts on a generation.  Returns 0 on success. */
    int db2_code_projection_generation_update_counts(int64_t gen_id, int64_t edge_count,

@@ -19,6 +19,55 @@
 int kb_send_error(int fd, const char *msg);
 int kb_send_response(int fd, cJSON *resp);
 
+const char *kb_graph_edge_provenance(const char *edge_origin, int structural_weight)
+{
+   /* §3: derive the trust tag from the edge's source + structural-trust weight,
+    * with NO new column. `structural` = deterministic AST/index facts (the only
+    * tier a safety path may rely on, per §7); `inferred` = curator/semantic-
+    * derived; `ambiguous` = raw session co-occurrence with no structural or
+    * semantic grounding. */
+   if (structural_weight > 0 || (edge_origin && strcmp(edge_origin, "code_projection") == 0))
+      return "structural";
+   if (edge_origin && strcmp(edge_origin, "session") == 0)
+      return "ambiguous";
+   return "inferred";
+}
+
+int64_t kb_graph_build_project_if_changed(const char *project, int *rebuilt)
+{
+   if (rebuilt)
+      *rebuilt = 0;
+   if (!project || !*project || !db2_is_initialized())
+      return -1;
+   /* Content-addressed idempotency: skip a project whose code is unchanged since
+    * its last published generation, so the drain is cheap-when-nothing-changed. */
+   char fp[64] = "", visible_fp[64] = "";
+   if (db2_code_projection_project_fingerprint(project, fp, sizeof(fp)) != 0)
+      return -1;
+   db2_code_projection_visible_source_hash(project, visible_fp, sizeof(visible_fp));
+   if (fp[0] && visible_fp[0] && strcmp(fp, visible_fp) == 0)
+      return 0; /* unchanged -> no work */
+
+   int64_t gen = db2_code_projection_generation_create(project);
+   if (gen <= 0)
+      return -1;
+   db2_code_projection_generation_set_source_hash(gen, fp);
+   int64_t edges = db2_code_projection_sync_project(project, gen);
+   if (edges < 0)
+   {
+      db2_code_projection_generation_abort(gen, "sync failed");
+      return -1;
+   }
+   if (db2_code_projection_generation_publish(gen, project) != 0)
+   {
+      db2_code_projection_generation_abort(gen, "publish failed");
+      return -1;
+   }
+   if (rebuilt)
+      *rebuilt = 1;
+   return edges; /* >= 0 (a changed-but-empty project publishes 0 edges + its hash) */
+}
+
 int kb_handle_graph_sync_code(int fd, cJSON *req)
 {
    cJSON *proj_j = cJSON_GetObjectItemCaseSensitive(req, "project");
@@ -103,6 +152,9 @@ int kb_handle_graph_explain(int fd, cJSON *req)
       cJSON_AddNumberToObject(e, "structural_weight", edges[i].structural_weight);
       cJSON_AddNumberToObject(e, "utility_score", edges[i].utility_score);
       cJSON_AddStringToObject(e, "edge_origin", edges[i].edge_origin);
+      cJSON_AddStringToObject(
+          e, "provenance",
+          kb_graph_edge_provenance(edges[i].edge_origin, (int)edges[i].structural_weight));
       cJSON_AddItemToArray(arr, e);
    }
    cJSON_AddNumberToObject(resp, "edge_count", n);
