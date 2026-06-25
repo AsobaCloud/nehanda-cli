@@ -5,6 +5,7 @@
 #include "openai_runs_store.h"
 #include "platform_path.h"
 #include "platform_test_util.h"
+#include <netinet/in.h> /* INADDR_ANY / INADDR_LOOPBACK for the bind-policy test */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1077,6 +1078,18 @@ int main(void)
    /* (The /v1/rpc method-allowlist tests were removed with the bridge: each method
     * now has a first-class route whose per-route caps + remote_writes tier are
     * enforced by server_http_route_allowed, covered above.) */
+
+   /* --- /v1 listener bind policy: plaintext is loopback-only, always --- */
+   {
+      /* The plaintext listener passes allow_external=0: a non-loopback bind is
+       * refused even when AIMEE_SERVER_HTTP_BIND requests one, so the bearer can
+       * never face the network in cleartext. */
+      assert(server_http_resolve_bind_addr(0 /*want_ext*/, 0 /*plaintext*/) == INADDR_LOOPBACK);
+      assert(server_http_resolve_bind_addr(1 /*want_ext*/, 0 /*plaintext*/) == INADDR_LOOPBACK);
+      /* The TLS listener (allow_external=1) may face the network when asked. */
+      assert(server_http_resolve_bind_addr(0 /*want_ext*/, 1 /*tls*/) == INADDR_LOOPBACK);
+      assert(server_http_resolve_bind_addr(1 /*want_ext*/, 1 /*tls*/) == INADDR_ANY);
+   }
 
    platform_test_rmrf(home);
    printf("OK\n");

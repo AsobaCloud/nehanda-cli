@@ -10,10 +10,20 @@
 #include "server_http.h"
 #include "request_context.h"
 #include "config.h"
+#include <netinet/in.h> /* INADDR_ANY / INADDR_LOOPBACK */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+
+/* Pure bind-address decision for a TCP /v1 listener (see server_http.h). A
+ * plaintext listener (allow_external == 0) is pinned to loopback even when an
+ * external bind is requested, so credentials never face the network in cleartext;
+ * only the TLS listener may bind 0.0.0.0. */
+uint32_t server_http_resolve_bind_addr(int want_external, int allow_external)
+{
+   return (want_external && allow_external) ? INADDR_ANY : INADDR_LOOPBACK;
+}
 
 /* Constant-time string compare (avoid leaking the proxy secret via timing). */
 static int reqctx_ct_equal(const char *a, const char *b)
