@@ -97,8 +97,12 @@ static int ce_fetch_document(ce_job_t *job)
    if (!conn)
       return -1;
 
+   /* Defense in depth: skip structured-PDF chunks even if one ever reaches the curator
+    * queue (the enqueue in kb_curator_queue.c already excludes doc_kind='pdf'). PDF content
+    * must never become a searchable derived artifact outside the access-gated search_chunks
+    * path — `doc_kind <> 'pdf'` here guarantees the extractor never reads it. */
    static const char *sql = "SELECT file_path, heading_path, content"
-                            " FROM kb_documents WHERE id = ?1";
+                            " FROM kb_documents WHERE id = ?1 AND doc_kind <> 'pdf'";
 
    char err[CE_ERRBUF] = "";
    aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));

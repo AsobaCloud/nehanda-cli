@@ -298,6 +298,26 @@ int db2_reembed_in_progress_get(int *target_dim, long *started_epoch)
    (void)started_epoch;
    return 0; /* not in progress -> search path proceeds */
 }
+/* structured-PDF search_chunks db2 functions — stubbed (the /v1/pdf/search route is
+ * exercised end-to-end against real SQL in test_kb_doc_pdf.c; here we only need the link
+ * to resolve so the route table compiles). The struct args are taken as void* to avoid
+ * pulling in db2/kb_payload.h (which conflicts with this file's simplified db2 stubs);
+ * C links by symbol name, so the pointer type is immaterial. */
+int db2_kb_pdf_search_chunks(const char *project, const char *query, int max, void *out)
+{
+   (void)project;
+   (void)query;
+   (void)max;
+   (void)out;
+   return 0;
+}
+int db2_kb_doc_regions_for_chunk(int64_t chunk_id, void *out, int max)
+{
+   (void)chunk_id;
+   (void)out;
+   (void)max;
+   return 0;
+}
 int db2_dim_change_reset(int target_dim, int force, int dry_run, db2_reembed_plan_t *out)
 {
    (void)force;

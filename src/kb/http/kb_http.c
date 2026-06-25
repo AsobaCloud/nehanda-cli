@@ -9,6 +9,7 @@
 #include "kb_curator_queue.h"
 #include "kb_http.h"
 #include "kb_http_code.h"
+#include "kb_http_pdf.h"
 #include "kb_http_ingest.h"
 #include "kb_http_jobs.h"
 #include "kb_http_reflections.h"
@@ -1285,6 +1286,8 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
       return handle_get_code_structure_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/code/search") == 0)
       return handle_get_code_search_route(method, query_string, out_buf, out_cap);
+   if (strcmp(path, "/v1/pdf/search") == 0)
+      return handle_get_pdf_search_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/code/callers") == 0)
       return handle_get_code_callers_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/code/project-stats") == 0)
