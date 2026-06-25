@@ -1,9 +1,10 @@
 # Proposal: structured PDF ingestion + coordinate-anchored evidence layer (KB)
 
-- **State:** implementing — human sign-off given 2026-06-25; **Phase 1 first increment
-  (the extractor pipeline + geometry schema) is in PR #702.** R3 roundtable sign-off
-  (reviewer / architect / data-model Pass; security Conditional Pass — residual is the
-  explicitly-deferred automated PII detection). Remaining work below.
+- **State:** implementing — human sign-off given 2026-06-25; **Phase 1 complete (extractor
+  pipeline + geometry in #702; upload routing + §6 sensitivity in #706).** Phase 2
+  (access-controlled retrieval) and Phases 3–4 remain. R3 roundtable sign-off (reviewer /
+  architect / data-model Pass; security Conditional Pass — residual is the explicitly-deferred
+  automated PII detection).
 - **Implementation status (2026-06-25).** **Phase 1 is being delivered in two increments.**
   - **1a (PR #702): the pure extractor pipeline + geometry storage.** New module
     `src/kb/kb_doc_pdf.{c,h}` parses poppler `pdftotext -bbox-layout` XHTML →
@@ -16,11 +17,18 @@
     `kb_pdf_ingest_enabled` (default off) with **no live call site yet** — exercised by
     `src/tests/test_kb_doc_pdf.c` only. **License posture: poppler runs as a separate
     operator-installed process across a process boundary; aimee never links or bundles it.**
-  - **1b (next): wiring + PII controls.** The `pdftotext -bbox-layout` exec wrapper (with a
-    subprocess wall-clock timeout + `mkstemp`/0600/unlink-all-paths temp-file hardening),
-    the `application/pdf` upload-route branch (`kb_ingest_normalize` / `handle_post_docs`),
-    and the §6 upload-time `sensitivity_class` requirement + quarantine state machine — all
-    before Phase 2 (retrieval) exposes any of it.
+  - **1b (PR #706): wiring + §6 sensitivity.** Hardened `pdftotext -bbox-layout` exec wrapper
+    (separate operator process; wall-clock deadline + stdout byte-cap + child RLIMIT_CPU/AS/
+    FSIZE + `setsid`/group-kill + 0600 `mkstemp` unlinked on all paths). `.pdf` uploads (flag
+    on) route to the structured extractor — gated on the `.pdf` extension AND `%PDF-` magic
+    (a bad-magic `.pdf` is rejected, not silently legacy-processed) — and MUST carry a valid
+    `sensitivity_class ∈ {public,internal,restricted}` (absent/invalid = 4xx, no rows). The
+    class is stamped on every chunk + region; `restricted → quarantine_state='pending'`.
+    **Safety:** PDF chunks are NOT embedded, and the KB search is vector-only, so PDF content
+    is invisible to existing search by construction until Phase 2's access-controlled
+    retrieval lands.
+  - **Residual before/with Phase 2:** the quarantine ADMIN route (`pending → confirmed/
+    rejected`) for structured PDFs (they have no `docs` row, so it needs its own surface).
   See **Review revisions (R1)** / **(R2)** / **(R3)** for the design history.
 - **Author:** JBailes
 - **Date:** 2026-06-13
