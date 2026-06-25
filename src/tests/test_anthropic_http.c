@@ -218,6 +218,13 @@ char *ingress_preinject_build(const char *query, int request_disabled)
    (void)request_disabled;
    return g_stub_preinject_env ? strdup(g_stub_preinject_env) : NULL;
 }
+/* Link-only: the OpenAI branch of the shared gw_stage_memory references this, but
+ * these /v1/messages whitebox tests only exercise the Anthropic branch. */
+char *ingress_preinject_apply(const char *instructions, const char *envelope)
+{
+   (void)instructions;
+   return envelope ? strdup(envelope) : NULL;
+}
 
 /* HTTP-layer stub: agent_http_last_retry_after has no upstream socket here, so 0
  * (no Retry-After) suffices. */
