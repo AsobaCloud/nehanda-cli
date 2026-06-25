@@ -337,6 +337,11 @@ typedef struct config
    int ingress_preinject_enabled;
    int ingress_preinject_assembly_budget;
    int ingress_max_raw_scans;
+   /* Session-isolation guard (opt-in): when on, the PreToolUse attention-guard
+    * fails closed on a mutating tool whose target is NOT inside an aimee-managed
+    * worktree (.aimee/worktrees/...), forcing every mutating session into an
+    * isolated worktree+branch off the default branch. Default 0 (off). */
+   int require_session_worktree;
 
    /* Gateway tool-policing (P2): when on, the gateway strips subagent-spawning
     * tools (Task/Agent/spawn_agent/RemoteTrigger) from the inbound `tools` of a

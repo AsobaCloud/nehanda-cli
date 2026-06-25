@@ -91,4 +91,11 @@ const char *agent_tools_parent_write_guard_root(void);
 const char *agent_tools_parent_write_guard_write_root(void);
 int agent_tools_parent_write_guard_blocks(const char *path, const char *cwd);
 
+/* Session-isolation backstop (Layer 2, opt-in via require_session_worktree):
+ * returns 1 to BLOCK a server-side agent write whose normalized target is not
+ * inside an aimee-managed worktree, else 0. No-op (returns 0) unless the
+ * require_session_worktree config flag is enabled. Mirrors the client-side
+ * attention-guard isolation policy for aimee's own in-process agent writes. */
+int agent_tools_session_isolation_blocks(const char *path, const char *cwd);
+
 #endif /* DEC_AGENT_TOOLS_H */
