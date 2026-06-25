@@ -1,12 +1,27 @@
 # Proposal: structured PDF ingestion + coordinate-anchored evidence layer (KB)
 
-- **State:** reviewed — **roundtable sign-off (R3)**. Three review rounds
-  (R1: 10 blockers → all CLOSED in R2; R2: 2 new security blockers → both CLOSED
-  in R3). R3 verdict: reviewer / architect / data-model **Pass**, security
-  **Conditional Pass** (residual = explicitly-deferred automated PII detection, a
-  defensible v1 boundary), **no remaining blocking findings — READY FOR
-  SIGN-OFF.** Ready for implementation per the phasing below, pending human
-  sign-off. See **Review revisions (R1)** / **(R2)** / **(R3)**.
+- **State:** implementing — human sign-off given 2026-06-25; **Phase 1 first increment
+  (the extractor pipeline + geometry schema) is in PR #702.** R3 roundtable sign-off
+  (reviewer / architect / data-model Pass; security Conditional Pass — residual is the
+  explicitly-deferred automated PII detection). Remaining work below.
+- **Implementation status (2026-06-25).** **Phase 1 is being delivered in two increments.**
+  - **1a (PR #702): the pure extractor pipeline + geometry storage.** New module
+    `src/kb/kb_doc_pdf.{c,h}` parses poppler `pdftotext -bbox-layout` XHTML →
+    pages/lines → normalized `[0,1]` bbox → deterministic **page-boundary** chunking
+    (100-line cap; font/heading heuristics deferred — they are flaky across producers) →
+    transactional ingest into `kb_documents` (`doc_kind='pdf'`, `chunk_strategy='page'`,
+    new `page_start`/`page_end`) + the new **`kb_doc_regions`** per-line coordinate index,
+    with neighbour threading, delete-then-insert re-ingest (regions cascade), `embed_raw`
+    enqueue, and a 0-chunk guard that never wipes prior rows on an empty extraction. Behind
+    `kb_pdf_ingest_enabled` (default off) with **no live call site yet** — exercised by
+    `src/tests/test_kb_doc_pdf.c` only. **License posture: poppler runs as a separate
+    operator-installed process across a process boundary; aimee never links or bundles it.**
+  - **1b (next): wiring + PII controls.** The `pdftotext -bbox-layout` exec wrapper (with a
+    subprocess wall-clock timeout + `mkstemp`/0600/unlink-all-paths temp-file hardening),
+    the `application/pdf` upload-route branch (`kb_ingest_normalize` / `handle_post_docs`),
+    and the §6 upload-time `sensitivity_class` requirement + quarantine state machine — all
+    before Phase 2 (retrieval) exposes any of it.
+  See **Review revisions (R1)** / **(R2)** / **(R3)** for the design history.
 - **Author:** JBailes
 - **Date:** 2026-06-13
 - **Charter roles:** Ingest (PDF → structured pages/blocks/lines/chunks with
