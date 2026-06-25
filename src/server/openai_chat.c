@@ -1052,6 +1052,13 @@ static int responses_stream_handler(const char *body, server_http_sse_event_emit
    int erc =
        agent_execute_messages(ag, messages, tools, instructions, max_tokens, temperature, &parsed);
 
+   /* `response.created` is the per-response envelope event: emitted exactly
+    * once here for EVERY downstream path (error -> response.failed, text turn,
+    * and the tool-call branch). openai_responses_emit_policed() deliberately
+    * does NOT re-emit it, so the tool-call path never doubles it on the wire.
+    * `frame` is 2048 bytes and this event holds only the minted id (~30 chars)
+    * + model alias + a fixed JSON envelope, so it cannot truncate in practice;
+    * the `> 0` check is belt-and-suspenders, not a real partial-stream path. */
    if (openai_format_responses_created(id, model, created, frame, sizeof(frame)) > 0)
       emit(ctx, "response.created", frame);
 
@@ -1106,7 +1113,7 @@ static int responses_stream_handler(const char *body, server_http_sse_event_emit
                              for the future P2b audit pass; today the only
                              visible effect is the parsed.calls[] mutation. */
 
-      openai_responses_emit_policed(&parsed, id, model, created, emit, ctx, frame, sizeof(frame));
+      openai_responses_emit_policed(&parsed, id, model, created, emit, ctx);
    }
    else
 

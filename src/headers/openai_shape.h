@@ -222,41 +222,42 @@ extern "C"
     * resp[cap]. Returns bytes written, or -1. */
    int openai_format_error(char *resp, int cap, const char *type, const char *message);
 
-   /* P2c (response-side tool policing, OpenAI streaming): emit the
-    * `response.*` SSE event sequence for a parsed_response_t that carries
-    * `calls[]` (the post-police shape — calls[] may be empty if every
-    * entry was a denied subagent). The wire shape mirrors the existing
-    * tool-call emit loop in responses_stream_handler; this helper
-    * exists for unit-testability (test_openai_chat_policed.c).
-    * - Always emits `response.created` first.
+   /* P2c (response-side tool policing, OpenAI streaming): emit the tool-call
+    * tail of the `response.*` SSE sequence for a parsed_response_t that carries
+    * `calls[]` (the post-police shape — calls[] may be empty if every entry was
+    * a denied subagent). The wire shape mirrors the existing tool-call emit loop
+    * in responses_stream_handler; this helper exists for unit-testability
+    * (test_openai_chat_policed.c).
+    *
+    * Caller contract: the caller MUST emit the leading `response.created`
+    * envelope event exactly once before invoking this helper (every path —
+    * text, tool-call, error — shares that single emit). This helper does NOT
+    * emit `response.created`, so the tool-call path never doubles it on the wire.
     * - If parsed->call_count > 0: emits per-call frames for each surviving
     *   call (output_item.added, function_call_arguments.delta/.done,
-    *   output_item.done), then response.completed with all calls in
-    *   output[].
+    *   output_item.done), then response.completed with all calls in output[].
     * - If parsed->call_count == 0 (the P2c all-dropped case), OR parsed is
-    *   NULL: emits response.created + response.completed with empty output[]
-    *   (a NULL parsed is treated as zero calls / zero usage, never dereferenced).
+    *   NULL: emits a single response.completed with empty output[] (a NULL
+    *   parsed is treated as zero calls / zero usage, never dereferenced).
     *
     * Ownership / lifetime:
     * - The function borrows everything; it takes ownership of nothing and frees
     *   nothing of the caller's. `parsed`, `id`, `model`, and the `ctx` behind
     *   `emit` need only outlive the call (synchronous — `emit` is invoked only
     *   before this function returns; neither `emit` nor `ctx` is retained).
-    * - `frame` / `frame_cap` are caller-owned scratch used only for the
-    *   `response.created` frame; pass a buffer of at least 1024 bytes. That
-    *   frame holds only id + model + a fixed JSON envelope (no tool args), so
-    *   it is bounded by the id/model lengths; 1024 covers the current ids and
-    *   model aliases with wide margin (callers today pass 2048). If
-    *   openai_format_responses_created reports it does not fit, the created
-    *   frame is skipped. Per-call and `response.completed` frames use scratch
-    *   the function mallocs (sized to the args) and frees internally.
+    * - A NULL `emit` is tolerated (the helper returns without emitting) — a guard
+    *   for the public/test surface; the production caller (responses_stream_handler)
+    *   always passes a real emit and has already emitted `response.created`
+    *   through it before calling, so a NULL there is a non-starter. Per-call and
+    *   `response.completed` frames use scratch the function mallocs (sized to the
+    *   id/model/args) and frees internally — no caller scratch is needed.
     * - Emit failures are not the helper's concern: `emit` returns void and the
     *   helper does not roll back or resume a partially-emitted sequence. A
     *   transport that can fail mid-stream must detect it inside `emit`/`ctx`;
     *   the helper always walks the full sequence. */
    void openai_responses_emit_policed(const parsed_response_t *parsed, const char *id,
                                       const char *model, long created, openai_sse_emit_fn emit,
-                                      void *ctx, char *frame, size_t frame_cap);
+                                      void *ctx);
 
 #ifdef __cplusplus
 }
