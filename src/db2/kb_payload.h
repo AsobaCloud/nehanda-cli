@@ -33,6 +33,7 @@ extern "C"
       int line_start;
       int line_end;
       char content[8192];
+      char doc_kind[16]; /* '' for normal docs, 'pdf' for structured-PDF chunks */
    } db2_kb_document_row_t;
 
    /* Look up a kb_documents row scoped by (id, project). Returns 1 on
@@ -130,6 +131,96 @@ extern "C"
     * a freshly-inserted chunk to its predecessor. No-op when prev_id
     * is non-positive. */
    void db2_kb_documents_link_neighbours(int64_t doc_id, int64_t prev_id);
+
+   /* structured-pdf Phase 1: insert a chunk row also stamping doc_kind='pdf',
+    * the caller's chunk_strategy ('heading' or 'page'), and the page_start/
+    * page_end span. Returns the new document id, or -1 on error. */
+   int64_t db2_kb_documents_insert_chunk_pdf(const char *project, const char *file_path,
+                                             const char *file_hash, int chunk_index,
+                                             const char *heading_path, int line_start, int line_end,
+                                             const char *content, int token_count,
+                                             const char *chunk_strategy, int page_start,
+                                             int page_end, const char *sensitivity_class,
+                                             const char *quarantine_state);
+
+   /* structured-pdf Phase 1: insert one per-line coordinate region for a chunk.
+    * bbox must already be normalized to [0,1] (top-left origin, per page).
+    * Returns the new region id, or -1 on error. */
+   int64_t db2_kb_doc_regions_insert(int64_t chunk_id, const char *document_key, int page_no,
+                                     double x0, double y0, double x1, double y1, const char *quote,
+                                     int line_index, const char *content_type,
+                                     const char *sensitivity_class);
+
+   /* Transaction wrappers (Postgres + sqlite shim). begin/commit return 0 on success,
+    * <0 on error; rollback is best-effort. */
+   int db2_kb_txn_begin(void);
+   int db2_kb_txn_commit(void);
+   void db2_kb_txn_rollback(void);
+
+   /* structured-pdf Phase 2 retrieval. A PDF chunk matched by search_chunks. */
+   typedef struct
+   {
+      int64_t chunk_id;
+      char document_key[1024];
+      char content[8192];
+      int page_start;
+      int page_end;
+      char sensitivity_class[16];
+   } db2_kb_pdf_chunk_t;
+
+   /* Lexical (case-insensitive content match) search over structured-PDF chunks, scoped to
+    * (optional) project. ALWAYS excludes doc_kind != 'pdf' and quarantine_state='pending'
+    * (restricted/pending documents are withheld). `query` is matched as a literal substring
+    * (LIKE metacharacters are escaped). Returns the number of chunks written (<= max). */
+   int db2_kb_pdf_search_chunks(const char *project, const char *query, int max,
+                                db2_kb_pdf_chunk_t *out);
+
+   /* One coordinate region (a PDF line) for a citation. */
+   typedef struct
+   {
+      int page_no;
+      double x0, y0, x1, y1; /* normalized [0,1], top-left origin */
+      char quote[1024];
+      int line_index;
+      char content_type[16];
+   } db2_kb_pdf_region_t;
+
+   /* Fetch a chunk's regions ordered by line_index (the line-level citations). Returns the
+    * number written (<= max). */
+   int db2_kb_doc_regions_for_chunk(int64_t chunk_id, db2_kb_pdf_region_t *out, int max);
+
+   /* §6 quarantine admin (owner action). For a (project, document_key) structured PDF
+    * currently in quarantine_state='pending': confirm clears the state (the doc becomes
+    * retrievable via search_chunks); reject purges its chunks + regions. Both return the
+    * number of pending chunks acted on (>0), 0 if there is no pending PDF for that key, or
+    * -1 on error. */
+   int db2_kb_pdf_quarantine_confirm(const char *project, const char *document_key);
+   int db2_kb_pdf_quarantine_reject(const char *project, const char *document_key);
+
+   /* §5 evidence escalation reads. All withhold quarantine_state='pending' (restricted)
+    * documents. Return the number written (<= max). */
+
+   /* open_page: every coordinate region on (project, document_key, page_no), ordered by
+    * line_index — the full set of citations for a page. */
+   int db2_kb_pdf_open_page(const char *project, const char *document_key, int page_no,
+                            db2_kb_pdf_region_t *out, int max);
+
+   /* open_neighbors: the prev/next reading-order chunks of `chunk_id`, scoped to `project`
+    * (the project predicate prevents cross-scope chunk-id enumeration). 0-2 results. */
+   int db2_kb_pdf_open_neighbors(const char *project, int64_t chunk_id, db2_kb_pdf_chunk_t *out,
+                                 int max);
+
+   /* inspect_structure: a document's chunk outline (chunk_index + page span + heading_path),
+    * ordered by chunk_index. */
+   typedef struct
+   {
+      int chunk_index;
+      int page_start;
+      int page_end;
+      char heading_path[256];
+   } db2_kb_pdf_outline_t;
+   int db2_kb_pdf_inspect_structure(const char *project, const char *document_key,
+                                    db2_kb_pdf_outline_t *out, int max);
 
 #ifdef __cplusplus
 }

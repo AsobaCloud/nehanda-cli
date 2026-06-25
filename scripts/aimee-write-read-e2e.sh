@@ -16,12 +16,12 @@
 # use compose.remote-writes.yaml (or mount a config) to enable it. If writes are
 # refused, this script says so explicitly rather than silently passing.
 #
-# Env: SERVER_URL (default http://localhost:8740), BEARER (default aimee-local-dev).
+# Env: SERVER_URL (default https://localhost:8743), BEARER (default aimee-local-dev).
 # Exit code: 0 = the sentinel round-tripped through store→list→search.
 
 set -uo pipefail
 
-SERVER_URL="${SERVER_URL:-http://localhost:8740}"
+SERVER_URL="${SERVER_URL:-https://localhost:8743}"
 BEARER="${BEARER:-aimee-local-dev}"
 AUTH=(-H "Authorization: Bearer ${BEARER}")
 JSON=(-H 'content-type: application/json')
@@ -43,7 +43,7 @@ bad() { red   "  FAIL  $*"; FAIL=$((FAIL + 1)); }
 bold "==> Write→read round-trip at ${SERVER_URL} (sentinel ${SENT})"
 
 # 1) STORE -----------------------------------------------------------------
-store_body="$(curl -s "${AUTH[@]}" "${JSON[@]}" -X POST \
+store_body="$(curl -s -k "${AUTH[@]}" "${JSON[@]}" -X POST \
   -d "{\"key\":\"${KEY}\",\"content\":\"${CONTENT}\",\"kind\":\"fact\"}" \
   "${SERVER_URL}/v1/memory/store" 2>/dev/null)"
 if [[ "$store_body" == *'"status":"ok"'* && "$store_body" == *'"id"'* ]]; then
@@ -56,7 +56,7 @@ else
 fi
 
 # 2) LIST reads it back verbatim ------------------------------------------
-list_body="$(curl -s "${AUTH[@]}" "${JSON[@]}" -X POST -d '{"limit":50}' \
+list_body="$(curl -s -k "${AUTH[@]}" "${JSON[@]}" -X POST -d '{"limit":50}' \
   "${SERVER_URL}/v1/memory/list" 2>/dev/null)"
 if [[ "$list_body" == *"$SENT"* ]]; then
   ok "list returns the stored content (round-trip persisted)"
@@ -65,7 +65,7 @@ else
 fi
 
 # 3) SEARCH retrieves it by keyword ---------------------------------------
-search_body="$(curl -s "${AUTH[@]}" "${JSON[@]}" -X POST \
+search_body="$(curl -s -k "${AUTH[@]}" "${JSON[@]}" -X POST \
   -d "{\"keywords\":[\"${SENT}\"],\"limit\":10}" \
   "${SERVER_URL}/v1/memory/search" 2>/dev/null)"
 if [[ "$search_body" == *"$SENT"* ]]; then

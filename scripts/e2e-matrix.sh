@@ -62,6 +62,14 @@ done
 export EMBEDDER_STUB="${EMBEDDER_STUB:-1}"
 export EMBEDDER_STUB_DIM="${EMBEDDER_STUB_DIM:-2560}"
 export AIMEE_EMBEDDING_DIM="${AIMEE_EMBEDDING_DIM:-2560}"
+# Unified-llm topologies (T1 kb-only, T2 server+kb) now embed/rerank/synth against
+# the `aimee-llm` container instead of the torch `embedder`. CI builds the tiny
+# STUB image (no llama.cpp / GGUFs) and runs it in stub mode at the same dim, so
+# the kb -> gateway contract is exercised cheaply. (T4 combined still uses the
+# embedder stub above; T3 standalone has no embedder.) compose reads these via ${...}.
+export AIMEE_LLM_STUB="${AIMEE_LLM_STUB:-1}"
+export AIMEE_LLM_STUB_DIM="${AIMEE_LLM_STUB_DIM:-2560}"
+export AIMEE_LLM_DOCKERFILE="${AIMEE_LLM_DOCKERFILE:-Dockerfile.aimee-llm-stub}"
 
 # Disable the bundled curator LLM in CI: the committed .env enables the
 # `curator-llm` profile by default, but the smoke tests don't exercise the
@@ -76,10 +84,12 @@ have_docker() { command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
 is_linux() { [[ "$(uname -s)" == "Linux" ]]; }
 
 # Published host ports (shift by --port-offset to dodge ports already in use on
-# the host — e.g. an existing aimee-server on :8740). Container ports never move.
-SERVER_PORT=$((8740 + PORT_OFFSET))
+# the host). Container ports never move. The server's published /v1 is native TLS
+# on 8743 (plaintext 8740 is loopback-only inside the container); the kb stays
+# plaintext http on 8741.
+SERVER_PORT=$((8743 + PORT_OFFSET))
 KB_PORT=$((8741 + PORT_OFFSET))
-SERVER_URL="http://localhost:${SERVER_PORT}"
+SERVER_URL="https://localhost:${SERVER_PORT}"
 [[ -z "$KB_URL" ]] && KB_URL="http://localhost:${KB_PORT}"
 
 OVERRIDE_DIR=""
@@ -135,9 +145,9 @@ run_docker_topology() {
 # Trailing svc=host:ctr specs name which published ports to remap by
 # PORT_OFFSET; ignored when --port-offset is 0.
 run_docker_topology T1 "Docker kb-only"            aimee-kb-docker-smoke.sh                compose.yaml                     "aimee-kb=${KB_PORT}:8741"
-run_docker_topology T2 "Docker server+kb split"    aimee-server-docker-smoke.sh            compose.server.yaml              "aimee-server=${SERVER_PORT}:8740" "aimee-kb=${KB_PORT}:8741"
-run_docker_topology T3 "Docker server standalone"  aimee-server-standalone-docker-smoke.sh compose.server-standalone.yaml   "aimee-server=${SERVER_PORT}:8740"
-run_docker_topology T4 "Docker combined server+kb" aimee-combined-docker-smoke.sh          compose.combined.yaml            "aimee-server-kb=${SERVER_PORT}:8740,${KB_PORT}:8741"
+run_docker_topology T2 "Docker server+kb split"    aimee-server-docker-smoke.sh            compose.server.yaml              "aimee-server=${SERVER_PORT}:8743" "aimee-kb=${KB_PORT}:8741"
+run_docker_topology T3 "Docker server standalone"  aimee-server-standalone-docker-smoke.sh compose.server-standalone.yaml   "aimee-server=${SERVER_PORT}:8743"
+run_docker_topology T4 "Docker combined server+kb" aimee-combined-docker-smoke.sh          compose.combined.yaml            "aimee-server-kb=${SERVER_PORT}:8743,${KB_PORT}:8741"
 
 # --- Local topologies (Linux only) ----------------------------------------
 if selected T5; then

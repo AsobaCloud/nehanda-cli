@@ -705,12 +705,13 @@ cd aimee
 docker compose -f compose.combined.yaml up --build -d
 ```
 
-The server fronts `/v1` on `:8740` (default bearer `aimee-local-dev`) and reaches
-the in-container kb on `:8741`. Confirm it's live:
+The server fronts `/v1` over native TLS on `:8743` (default bearer `aimee-local-dev`;
+self-signed cert, plaintext `:8740` is loopback-only) and reaches the in-container kb
+on `:8741`. Confirm it's live (`-k` accepts the self-signed cert):
 
 ```bash
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/health
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/kb/status
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/health
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/kb/status
 ```
 
 **Combined vs. split.** The combined container (`compose.combined.yaml`) is the
@@ -735,15 +736,15 @@ Point the client at the server per-invocation, via the environment, or persist i
 
 ```bash
 # Per-invocation:
-aimee --server http://my-host:8740 --server-token=aimee-local-dev status
+aimee --server https://my-host:8743 --server-token=aimee-local-dev status
 
 # Or via environment (applies to every command):
-export AIMEE_SERVER_URL=http://my-host:8740
+export AIMEE_SERVER_URL=https://my-host:8743
 export AIMEE_SERVER_TOKEN=aimee-local-dev
 aimee status
 
 # Or persist it (stored in <aimee_home>/remote.conf):
-aimee remote set http://my-host:8740 aimee-local-dev
+aimee remote set https://my-host:8743 aimee-local-dev
 aimee remote status   # shows the resolved transport + a /v1/health probe
 aimee remote clear    # revert to a local Unix socket
 ```
@@ -792,7 +793,9 @@ where supported (systemd user units on Linux, launchd agents on macOS), enables
 If a dependency is missing, `install.sh` stops and points you back at
 `install-deps.sh`. On **Windows**, aimee runs as the thin client only (server + kb
 run in Docker or on Linux/macOS): run `install.ps1`, point it at your server with
-`aimee remote set http://host:8740 <token>`, and run `configure-hooks.ps1`.
+`aimee remote set https://host:8743 <token>` (the server's `/v1` is TLS-only
+off-loopback with a self-signed cert, so set `AIMEE_TLS_INSECURE=1` or trust it),
+and run `configure-hooks.ps1`.
 
 The C services (`aimee`, `aimee-server`, `aimee-kb`) need no Go. The browser UI
 (`aimee-webchat`) is the only Go artifact and is **optional**: `install.sh` builds
@@ -948,8 +951,8 @@ Trade-offs: [retrieval-stack.md](../docs/retrieval-stack.md#choosing-a-tier).
 
 | File | Brings up | Use when |
 |------|-----------|----------|
-| `compose.combined.yaml` | **`aimee-server+kb`** (one container) + Postgres + embedder | **Recommended default**: both binaries co-located; server `/v1` on `:8740`, kb `:8741` |
-| `compose.server.yaml` | `aimee-server` + `aimee-kb` + Postgres + embedder | Split stack: scale/update/place server and kb independently; server `:8740`, kb `:8741` |
+| `compose.combined.yaml` | **`aimee-server+kb`** (one container) + Postgres + embedder | **Recommended default**: both binaries co-located; server `/v1` over TLS on `:8743` (plaintext `:8740` loopback-only), kb `:8741` |
+| `compose.server.yaml` | `aimee-server` + `aimee-kb` + Postgres + embedder | Split stack: scale/update/place server and kb independently; server `/v1` over TLS on `:8743` (plaintext `:8740` loopback-only), kb `:8741` |
 | `compose.yaml` | `aimee-kb` + Postgres (pgvector) + embedder | The knowledge service (DB2 + vectors) on its own: building block for a shared/scaled kb |
 | `compose.server-standalone.yaml` | `aimee-server` only (SQLite DB1, no kb) | DB1-backed `/v1` endpoints with no shared knowledge |
 
@@ -960,13 +963,14 @@ docker compose -f compose.combined.yaml up --build -d
 ```
 
 One `aimee-server+kb` container runs **both** binaries: the kb on loopback `:8741`
-inside the container and the server fronting `:8740` with
-`AIMEE_KB_API_URL=http://127.0.0.1:8741`. Postgres + the embedder stay external.
-Both ports are also published for direct inspection:
+inside the container and the server fronting `/v1` over native TLS on `:8743`
+(plaintext `:8740` is loopback-only) with `AIMEE_KB_API_URL=http://127.0.0.1:8741`.
+Postgres + the embedder stay external. The TLS server and kb ports are published for
+direct inspection (`-k` accepts the self-signed cert):
 
 ```bash
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/health
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/kb/status
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/health
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/kb/status
 curl 'http://localhost:8741/v1/health?status=1'   # in-container kb: DB + pgvector status
 ```
 
@@ -977,12 +981,13 @@ docker compose -f compose.server.yaml up --build -d
 ```
 
 `aimee-server` and `aimee-kb` run as separate containers (many servers → one shared
-kb). The server fronts `/v1` on `:8740` and reaches the kb over HTTP
+kb). The server fronts `/v1` over native TLS on `:8743` (plaintext `:8740` is
+loopback-only) and reaches the kb over HTTP
 (`AIMEE_KB_API_URL=http://aimee-kb:8741`); the kb owns Postgres + the embedder:
 
 ```bash
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/health
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/kb/status
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/health
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/kb/status
 ```
 
 Both server stacks mount a dedicated **`aimee-server-workspaces`** volume at

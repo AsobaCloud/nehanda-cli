@@ -11,11 +11,11 @@
 #   docker compose -f compose.server-standalone.yaml up --build   # build from source
 #
 # The /v1 API requires a bearer token (baked default: "aimee-local-dev"):
-#   curl -H "Authorization: Bearer aimee-local-dev" http://localhost:8740/v1/health
+#   curl -k -H "Authorization: Bearer aimee-local-dev" https://localhost:8743/v1/health
 #
 # Plain `docker run` must pass the stack ulimit explicitly; mount a volume at
 # AIMEE_WORKSPACES_DIR to persist the mirror-tier checkouts across recreations:
-#   docker run --rm --ulimit stack=67108864 -p 8740:8740 \
+#   docker run --rm --ulimit stack=67108864 -p 8743:8743 \
 #     -v aimee-workspaces:/var/lib/aimee-workspaces aimee-server
 services:
   aimee-server:
@@ -36,7 +36,8 @@ services:
     ulimits:
       stack: 67108864
     ports:
-      - "8740:8740"
+      # /v1 over native TLS on 8743 (plaintext 8740 is loopback-only, not published).
+      - "8743:8743"
     # An unauthenticated probe gets 401, which still proves the listener is up;
     # treat 200/401 as healthy so this stays correct if the bearer is overridden.
     healthcheck:

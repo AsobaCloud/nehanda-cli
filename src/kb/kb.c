@@ -1113,6 +1113,13 @@ static int kb_fetch_doc_row(int64_t id, const char *project, kb_result_t *out)
    db2_kb_document_row_t row;
    if (!db2_kb_document_fetch(id, project, &row))
       return 0;
+   /* structured-PDF Phase 2 safety chokepoint: PDF chunks are excluded from the general
+    * search legs entirely. Once embedded they appear in the vector index, but PDF content
+    * is evidence reachable ONLY through the access-controlled search_chunks tool (which
+    * gates on quarantine_state + scope), never through plain /v1/search. This is the single
+    * point both legs materialise rows, so excluding here covers lexical + dense. */
+   if (strcmp(row.doc_kind, "pdf") == 0)
+      return 0;
    out->doc_id = row.id;
    snprintf(out->file_path, sizeof(out->file_path), "%s", row.file_path);
    snprintf(out->file_hash, sizeof(out->file_hash), "%s", row.file_hash);
@@ -1540,8 +1547,18 @@ static char *kb_search_gather(const char *project, const char *query, const char
       return safe_strdup("error: db2 not initialized");
    const char *effective_cmd = kb_effective_embedding_cmd(embedding_cmd);
 
+   /* An explicit project scopes the search; omitting it means whole-corpus (all
+    * projects), NOT the server's cwd-basename. kb_resolve_project would default
+    * an empty project to getcwd()'s basename, which inside the kb SERVER is
+    * always its WORKDIR (/var/lib/aimee -> "aimee") and matches no real corpus —
+    * so an API /v1/kb/search that omits `project` silently returned nothing. The
+    * CLI resolves its own cwd project before calling, so it always sends an
+    * explicit name and is unaffected. Empty proj flows to the legs as "all". */
    char proj[256];
-   kb_resolve_project(project, NULL, proj, sizeof(proj));
+   if (project && project[0])
+      kb_resolve_project(project, NULL, proj, sizeof(proj));
+   else
+      proj[0] = '\0';
 
    /* Determine fusion mode: explicit override > bandit sample > config > default.
     * When no override is given and live bandit decisions are enabled, sample the

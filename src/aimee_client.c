@@ -213,6 +213,27 @@ static char *read_response(int fd, aimee_tls_t *tls, size_t *out_len)
    return resp;
 }
 
+/* A non-loopback plaintext connection must never carry a credential. localhost,
+ * 127.0.0.0/8, and ::1 are the only hosts where a cleartext bearer stays on the
+ * machine; anything else would put it on the wire. */
+static int host_is_loopback(const char *host)
+{
+   if (!host || !host[0])
+      return 0;
+   if (strcmp(host, "localhost") == 0 || strcmp(host, "::1") == 0 || strcmp(host, "[::1]") == 0)
+      return 1;
+   return strncmp(host, "127.", 4) == 0; /* 127.0.0.0/8 */
+}
+
+/* Security guard (also exposed for tests): 1 when sending |token| to a server at
+ * (|is_https|, |host|) would put the credential on the wire in cleartext — a
+ * non-empty bearer over plaintext http:// to a non-loopback host. tcp_request
+ * refuses such requests rather than leak the bearer. */
+int aimee_client_would_leak_cleartext(int is_https, const char *host, const char *token)
+{
+   return (token && *token && !is_https && !host_is_loopback(host)) ? 1 : 0;
+}
+
 static char *tcp_request(const char *url, const char *token, const char *method, const char *path,
                          const char *body, int *status_out)
 {
@@ -221,6 +242,21 @@ static char *tcp_request(const char *url, const char *token, const char *method,
    if (parse_url(url, host, sizeof(host), port, sizeof(port), &is_https) != 0)
    {
       fprintf(stderr, "aimee: invalid server URL: %s\n", url);
+      return NULL;
+   }
+
+   /* Fail closed: never transmit a bearer credential in cleartext to a
+    * non-loopback host. A plaintext http:// connection to a remote server would
+    * expose the bearer (and every payload) on the wire — the client refuses
+    * rather than leak it. Loopback plaintext is fine (local tooling / a
+    * co-located TLS-terminating proxy); remote access must use https://. */
+   if (aimee_client_would_leak_cleartext(is_https, host, token))
+   {
+      fprintf(stderr,
+              "aimee: refusing to send credentials over plaintext http:// to non-loopback host "
+              "'%s'. Use https:// (the server's TLS port); set AIMEE_TLS_INSECURE=1 if the server "
+              "presents a self-signed certificate.\n",
+              host);
       return NULL;
    }
 #ifndef WITH_TLS
