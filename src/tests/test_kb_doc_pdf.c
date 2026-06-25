@@ -390,6 +390,72 @@ static void test_pdf_quarantine_admin(void)
    PASS("pdf_quarantine_admin");
 }
 
+/* §5 evidence escalation: open_page / open_neighbors / inspect_structure, with quarantine
+ * withholding on each. */
+static void test_pdf_evidence_tools(void)
+{
+   db2_test_shim_open();
+   kb_pdf_ingest_stats_t stats;
+   char buf[8192];
+   assert(kb_doc_pdf_ingest_xhtml("proj", "report.pdf", "h1", FIXTURE_2PAGE, "internal", &stats) ==
+          2);
+
+   /* open_page: page 1 has 2 line-regions, page 2 has 1. */
+   assert(handle_get_pdf_page_route("GET", "project=proj&document_key=report.pdf&page_no=1", buf,
+                                    sizeof(buf)) == 200);
+   assert(strstr(buf, "Hello world") != NULL);
+   assert(strstr(buf, "\"total\":2") != NULL);
+   assert(strstr(buf, "\"bbox\"") != NULL);
+   assert(handle_get_pdf_page_route("GET", "project=proj&document_key=report.pdf&page_no=2", buf,
+                                    sizeof(buf)) == 200);
+   assert(strstr(buf, "Second page") != NULL && strstr(buf, "\"total\":1") != NULL);
+
+   /* open_neighbors: the page-1 chunk's next is the page-2 chunk. */
+   db2_kb_pdf_chunk_t ch[4];
+   assert(db2_kb_pdf_search_chunks("proj", "Hello", 4, ch) == 1);
+   char nq[80];
+   snprintf(nq, sizeof(nq), "project=proj&chunk_id=%lld", (long long)ch[0].chunk_id);
+   assert(handle_get_pdf_neighbors_route("GET", nq, buf, sizeof(buf)) == 200);
+   assert(strstr(buf, "Second page") != NULL && strstr(buf, "\"total\":1") != NULL);
+   /* cross-scope: the same chunk_id under a DIFFERENT project returns nothing (no IDOR). */
+   snprintf(nq, sizeof(nq), "project=other&chunk_id=%lld", (long long)ch[0].chunk_id);
+   assert(handle_get_pdf_neighbors_route("GET", nq, buf, sizeof(buf)) == 200);
+   assert(strstr(buf, "\"total\":0") != NULL);
+
+   /* inspect_structure: a 2-chunk outline, one per page. */
+   assert(handle_get_pdf_structure_route("GET", "project=proj&document_key=report.pdf", buf,
+                                         sizeof(buf)) == 200);
+   assert(strstr(buf, "\"total\":2") != NULL);
+   assert(strstr(buf, "\"page_start\":1") != NULL && strstr(buf, "\"page_start\":2") != NULL);
+
+   /* Quarantine withholding on every tool. */
+   assert(kb_doc_pdf_ingest_xhtml("proj", "secret.pdf", "h2", FIXTURE_2PAGE, "restricted",
+                                  &stats) == 2);
+   assert(handle_get_pdf_page_route("GET", "project=proj&document_key=secret.pdf&page_no=1", buf,
+                                    sizeof(buf)) == 200);
+   assert(strstr(buf, "\"total\":0") != NULL);
+   assert(handle_get_pdf_structure_route("GET", "project=proj&document_key=secret.pdf", buf,
+                                         sizeof(buf)) == 200);
+   assert(strstr(buf, "\"total\":0") != NULL);
+   /* open_neighbors of a restricted chunk withholds its (also-restricted) neighbour. */
+   int64_t sid =
+       count_rows("SELECT id FROM kb_documents WHERE file_path='secret.pdf' AND chunk_index=0");
+   assert(sid > 0);
+   snprintf(nq, sizeof(nq), "project=proj&chunk_id=%lld", (long long)sid);
+   assert(handle_get_pdf_neighbors_route("GET", nq, buf, sizeof(buf)) == 200);
+   assert(strstr(buf, "\"total\":0") != NULL);
+
+   /* error paths. */
+   assert(handle_get_pdf_page_route("POST", "project=proj&document_key=x&page_no=1", buf,
+                                    sizeof(buf)) == 405);
+   assert(handle_get_pdf_page_route("GET", "project=proj", buf, sizeof(buf)) == 400);
+   assert(handle_get_pdf_neighbors_route("GET", "", buf, sizeof(buf)) == 400);
+   assert(handle_get_pdf_structure_route("GET", "document_key=x", buf, sizeof(buf)) == 400);
+
+   db2_test_shim_close();
+   PASS("pdf_evidence_tools");
+}
+
 int main(void)
 {
    printf("structured-pdf (kb_doc_pdf) tests:\n");
@@ -401,6 +467,7 @@ int main(void)
    test_ingest_shim();
    test_search_chunks_shim();
    test_pdf_quarantine_admin();
+   test_pdf_evidence_tools();
    printf("ALL PASS\n");
    return 0;
 }
