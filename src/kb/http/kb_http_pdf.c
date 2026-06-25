@@ -213,3 +213,158 @@ int handle_post_pdf_quarantine_route(const char *method, const char *body, int b
             dk_copy, action_copy, rc);
    return 200;
 }
+
+/* Emit a cJSON root to out_buf, returning 200, 500 (oom), or 413 (too large for the buffer —
+ * never truncated/invalid JSON). Frees `root`. */
+static int pdf_emit_json(cJSON *root, char *out_buf, int out_cap)
+{
+   char *s = cJSON_PrintUnformatted(root);
+   int status = 200;
+   if (!s)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      status = 500;
+   }
+   else if (strlen(s) >= (size_t)out_cap)
+   {
+      snprintf(out_buf, (size_t)out_cap,
+               "{\"error\":\"result too large\",\"code\":\"result_too_large\"}");
+      status = 413;
+   }
+   else
+   {
+      snprintf(out_buf, (size_t)out_cap, "%s", s);
+   }
+   free(s);
+   cJSON_Delete(root);
+   return status;
+}
+
+static void pdf_add_citation(cJSON *arr, const db2_kb_pdf_region_t *r)
+{
+   cJSON *cit = cJSON_CreateObject();
+   cJSON_AddNumberToObject(cit, "page_no", r->page_no);
+   cJSON *bbox = cJSON_AddArrayToObject(cit, "bbox");
+   cJSON_AddItemToArray(bbox, cJSON_CreateNumber(r->x0));
+   cJSON_AddItemToArray(bbox, cJSON_CreateNumber(r->y0));
+   cJSON_AddItemToArray(bbox, cJSON_CreateNumber(r->x1));
+   cJSON_AddItemToArray(bbox, cJSON_CreateNumber(r->y1));
+   cJSON_AddStringToObject(cit, "quote", r->quote);
+   cJSON_AddNumberToObject(cit, "line_index", r->line_index);
+   cJSON_AddStringToObject(cit, "content_type", r->content_type);
+   cJSON_AddItemToArray(arr, cit);
+}
+
+int handle_get_pdf_page_route(const char *method, const char *query_string, char *out_buf,
+                              int out_cap)
+{
+   if (!method || strcmp(method, "GET") != 0)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"method not allowed\"}");
+      return 405;
+   }
+   char project[128] = "", dk[1024] = "", pages[16] = "";
+   if (!pdf_qparam(query_string, "project", project, sizeof(project)) || !project[0] ||
+       !pdf_qparam(query_string, "document_key", dk, sizeof(dk)) || !dk[0] ||
+       !pdf_qparam(query_string, "page_no", pages, sizeof(pages)) || !pages[0])
+   {
+      snprintf(out_buf, (size_t)out_cap,
+               "{\"error\":\"project, document_key, and page_no are required\"}");
+      return 400;
+   }
+   db2_kb_pdf_region_t *regs = malloc((size_t)PDF_MAX_REGIONS * sizeof(*regs));
+   if (!regs)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+   int n = db2_kb_pdf_open_page(project, dk, atoi(pages), regs, PDF_MAX_REGIONS);
+   cJSON *root = cJSON_CreateObject();
+   cJSON_AddStringToObject(root, "document_key", dk);
+   cJSON_AddNumberToObject(root, "page_no", atoi(pages));
+   cJSON *cits = cJSON_AddArrayToObject(root, "citations");
+   for (int i = 0; i < n; i++)
+      pdf_add_citation(cits, &regs[i]);
+   cJSON_AddNumberToObject(root, "total", n);
+   free(regs);
+   return pdf_emit_json(root, out_buf, out_cap);
+}
+
+int handle_get_pdf_neighbors_route(const char *method, const char *query_string, char *out_buf,
+                                   int out_cap)
+{
+   if (!method || strcmp(method, "GET") != 0)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"method not allowed\"}");
+      return 405;
+   }
+   char project[128] = "", ids[32] = "";
+   /* project is REQUIRED: it scopes the lookup AND makes the kb_http_route_ex token-scope gate
+    * fire (that gate only acts when the request names a project/scope), closing a cross-scope
+    * chunk-id enumeration leak. */
+   if (!pdf_qparam(query_string, "project", project, sizeof(project)) || !project[0] ||
+       !pdf_qparam(query_string, "chunk_id", ids, sizeof(ids)) || !ids[0])
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"project and chunk_id are required\"}");
+      return 400;
+   }
+   db2_kb_pdf_chunk_t neigh[4];
+   int n = db2_kb_pdf_open_neighbors(project, (int64_t)atoll(ids), neigh, 4);
+   cJSON *root = cJSON_CreateObject();
+   cJSON_AddNumberToObject(root, "chunk_id", (double)atoll(ids));
+   cJSON *arr = cJSON_AddArrayToObject(root, "neighbors");
+   for (int i = 0; i < n; i++)
+   {
+      cJSON *c = cJSON_CreateObject();
+      cJSON_AddNumberToObject(c, "chunk_id", (double)neigh[i].chunk_id);
+      cJSON_AddStringToObject(c, "document_key", neigh[i].document_key);
+      cJSON_AddNumberToObject(c, "page_start", neigh[i].page_start);
+      cJSON_AddNumberToObject(c, "page_end", neigh[i].page_end);
+      cJSON_AddStringToObject(c, "content", neigh[i].content);
+      cJSON_AddStringToObject(c, "sensitivity_class", neigh[i].sensitivity_class);
+      cJSON_AddItemToArray(arr, c);
+   }
+   cJSON_AddNumberToObject(root, "total", n);
+   return pdf_emit_json(root, out_buf, out_cap);
+}
+
+#define PDF_MAX_OUTLINE 2000
+
+int handle_get_pdf_structure_route(const char *method, const char *query_string, char *out_buf,
+                                   int out_cap)
+{
+   if (!method || strcmp(method, "GET") != 0)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"method not allowed\"}");
+      return 405;
+   }
+   char project[128] = "", dk[1024] = "";
+   if (!pdf_qparam(query_string, "project", project, sizeof(project)) || !project[0] ||
+       !pdf_qparam(query_string, "document_key", dk, sizeof(dk)) || !dk[0])
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"project and document_key are required\"}");
+      return 400;
+   }
+   db2_kb_pdf_outline_t *ol = malloc((size_t)PDF_MAX_OUTLINE * sizeof(*ol));
+   if (!ol)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+   int n = db2_kb_pdf_inspect_structure(project, dk, ol, PDF_MAX_OUTLINE);
+   cJSON *root = cJSON_CreateObject();
+   cJSON_AddStringToObject(root, "document_key", dk);
+   cJSON *arr = cJSON_AddArrayToObject(root, "chunks");
+   for (int i = 0; i < n; i++)
+   {
+      cJSON *c = cJSON_CreateObject();
+      cJSON_AddNumberToObject(c, "chunk_index", ol[i].chunk_index);
+      cJSON_AddNumberToObject(c, "page_start", ol[i].page_start);
+      cJSON_AddNumberToObject(c, "page_end", ol[i].page_end);
+      cJSON_AddStringToObject(c, "heading_path", ol[i].heading_path);
+      cJSON_AddItemToArray(arr, c);
+   }
+   cJSON_AddNumberToObject(root, "total", n);
+   free(ol);
+   return pdf_emit_json(root, out_buf, out_cap);
+}

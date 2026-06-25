@@ -18,4 +18,16 @@ int handle_get_pdf_search_route(const char *method, const char *query_string, ch
 int handle_post_pdf_quarantine_route(const char *method, const char *body, int body_len,
                                      char *out_buf, int out_cap);
 
+/* §5 evidence escalation read routes (all GET, all withhold quarantined PDFs; the caller's
+ * token scope is enforced by kb_http_route_ex before dispatch):
+ *   GET /v1/pdf/page?project=&document_key=&page_no=   - a page's full citation set
+ *   GET /v1/pdf/neighbors?chunk_id=                    - the prev/next reading-order chunks
+ *   GET /v1/pdf/structure?project=&document_key=       - the document's chunk/page outline */
+int handle_get_pdf_page_route(const char *method, const char *query_string, char *out_buf,
+                              int out_cap);
+int handle_get_pdf_neighbors_route(const char *method, const char *query_string, char *out_buf,
+                                   int out_cap);
+int handle_get_pdf_structure_route(const char *method, const char *query_string, char *out_buf,
+                                   int out_cap);
+
 #endif /* DEC_KB_HTTP_PDF_H */
