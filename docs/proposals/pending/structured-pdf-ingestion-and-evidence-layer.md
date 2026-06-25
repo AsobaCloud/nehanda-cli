@@ -1,10 +1,12 @@
 # Proposal: structured PDF ingestion + coordinate-anchored evidence layer (KB)
 
-- **State:** implementing — human sign-off given 2026-06-25; **Phase 1 complete (extractor
-  pipeline + geometry in #702; upload routing + §6 sensitivity in #706).** Phase 2
-  (access-controlled retrieval) and Phases 3–4 remain. R3 roundtable sign-off (reviewer /
-  architect / data-model Pass; security Conditional Pass — residual is the explicitly-deferred
-  automated PII detection).
+- **State:** implementing — human sign-off given 2026-06-25; **Phase 1 complete (extractor +
+  geometry #702; upload routing + §6 sensitivity #706); Phase 2 complete (access-controlled
+  search_chunks citation retrieval #712).** Remaining: Phase 2 follow-ups (vector retrieval +
+  the server-ingress wiring that folds search_chunks into the agent envelope), the quarantine
+  admin route, and Phases 3–4 (tables/TSR, crops/OCR — both need local sidecar models). R3
+  roundtable sign-off (reviewer / architect / data-model Pass; security Conditional Pass —
+  residual is the explicitly-deferred automated PII detection).
 - **Implementation status (2026-06-25).** **Phase 1 is being delivered in two increments.**
   - **1a (PR #702): the pure extractor pipeline + geometry storage.** New module
     `src/kb/kb_doc_pdf.{c,h}` parses poppler `pdftotext -bbox-layout` XHTML →
@@ -27,8 +29,19 @@
     **Safety:** PDF chunks are NOT embedded, and the KB search is vector-only, so PDF content
     is invisible to existing search by construction until Phase 2's access-controlled
     retrieval lands.
-  - **Residual before/with Phase 2:** the quarantine ADMIN route (`pending → confirmed/
-    rejected`) for structured PDFs (they have no `docs` row, so it needs its own surface).
+  - **Phase 2 (PR #712): access-controlled citation retrieval.** New KB `/v1/pdf/search`
+    (`search_chunks`) — lexical (case-insensitive, bound-param) content match over PDF chunks,
+    returning line-level `{page_no, bbox, quote}` citations from `kb_doc_regions`; restricted/
+    `quarantine_state='pending'` documents are withheld; token scope inherited from
+    `kb_http_route_ex`. **Safety:** PDF content is excluded from every general/derived
+    kb_documents read path — `kb_fetch_doc_row` (both `/v1/search` legs), the curator
+    extraction queue + worker (so PDF text never becomes a searchable derived artifact — a leak
+    caught in review), and the convention-candidate sweep. PDFs stay un-embedded (retrieval is
+    lexical). Follow-ups: vector retrieval, and the server-ingress wiring (one `kb_client`
+    `search_chunks` call folded into `<aimee-context>` + the four escalation tools in
+    `explore-with`) that makes the tool agent-reachable.
+  - **Residual:** the quarantine ADMIN route (`pending → confirmed/rejected`) for structured
+    PDFs (they have no `docs` row, so it needs its own surface).
   See **Review revisions (R1)** / **(R2)** / **(R3)** for the design history.
 - **Author:** JBailes
 - **Date:** 2026-06-13
