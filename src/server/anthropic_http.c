@@ -23,6 +23,7 @@
 #include "delegate_driver.h"
 #include "gateway_policy.h"
 #include "gateway_pipeline.h"
+#include "gw_stage_memory.h"
 #include "ingress_preinject.h"
 #include "json_fluent.h"
 #include "server_http.h"
@@ -183,8 +184,6 @@ static void translate_request(const cJSON *req, const delegate_driver_t *driver,
    *out_tools = anthropic_tools_to_openai(cJSON_GetObjectItemCaseSensitive(req, "tools"));
 }
 
-static void messages_apply_preinject(cJSON *req); /* defined below; used by the memory stage */
-
 /* ---- Gateway request pipeline (universal-gateway P2a) -------------------------
  * The two inline request transforms (memory/context injection, tool policing) are
  * run as ordered stages over a `gw_request_t` rather than hand-sequenced at each
@@ -192,18 +191,10 @@ static void messages_apply_preinject(cJSON *req); /* defined below; used by the 
  * a TERMINAL render step after the pipeline (it produces the provider shape rather
  * than mutating `raw`). Behavior is identical to the previous inline prelude. */
 
-/* Memory/context pre-injection stage. The `if (!r->parity)` guard replicates the
- * original top-level `if (!parity)` gate: only memory injection is parity-gated (the
- * Anthropic-native passthrough must not perturb Claude Code's cached prefix). A
- * future parity-gated stage must carry its own guard — the pipeline runs every
- * stage; it does not gate them. */
-static int gw_stage_memory(gw_request_t *r, void *ud)
-{
-   (void)ud;
-   if (!r->parity)
-      messages_apply_preinject(r->raw);
-   return 0; /* injection is accounting-neutral here; not an intervention count */
-}
+/* Memory/context pre-injection is now the shared gw_stage_memory (gw_stage_memory.c)
+ * with mem_target = GW_MEM_ANTHROPIC_MESSAGES; the `if (!r->parity)` parity gate
+ * (only memory injection is parity-gated, so the Anthropic-native passthrough does
+ * not perturb Claude Code's cached prefix) lives in that stage's Anthropic arm. */
 
 /* Tool-policing stage: strip subagent-spawning tools etc. Returns the number of
  * tools stripped (already the contract of gateway_policy_apply_request). */
@@ -239,6 +230,7 @@ static int messages_run_request_pipeline(cJSON *req, const delegate_driver_t *dr
        /* parity == driver_is_anthropic(driver), so serving_api follows it (the
         * client is always Anthropic /v1/messages here) — no second predicate call. */
        .serving_api = parity ? GW_API_ANTHROPIC : GW_API_OPENAI,
+       .mem_target = GW_MEM_ANTHROPIC_MESSAGES,
        .parity = parity,
        .stream = stream,
    };
@@ -320,58 +312,6 @@ static char *build_anthropic_provider_body(const cJSON *in, const agent_t *ag, i
    body = cJSON_PrintUnformatted(req);
    cJSON_Delete(req);
    return body;
-}
-
-/* P1 context pre-injection for the Anthropic /v1/messages ingress. Builds the
- * <aimee-context> envelope from this turn's query and folds it into the request's
- * `system` so BOTH the Anthropic-native passthrough (which duplicates `req`) and
- * the translated-provider path (which flattens `req`'s system via
- * anthropic_system_to_text) carry it. Mutates `req` in place, so it must run
- * before translate_request / build_*_provider_body. Appended as a trailing system
- * text block (array form) so a cached system prefix — Claude Code sends
- * cache_control'd system blocks — stays stable and prompt caching still hits.
- * No-op when pre-injection is disabled (config or the x-aimee-preinject:0 header,
- * via the thread-local checked in ingress_preinject_build) or recall is empty. */
-static void messages_apply_preinject(cJSON *req)
-{
-   char *query =
-       ingress_preinject_query_from_messages(cJSON_GetObjectItemCaseSensitive(req, "messages"));
-   if (!query)
-      return;
-   char *env = ingress_preinject_build(query, 0);
-   free(query);
-   if (!env)
-      return;
-
-   cJSON *sys = cJSON_GetObjectItemCaseSensitive(req, "system");
-   if (cJSON_IsArray(sys))
-   {
-      cJSON *blk = cJSON_CreateObject();
-      if (blk)
-      {
-         cJSON_AddStringToObject(blk, "type", "text");
-         cJSON_AddStringToObject(blk, "text", env);
-         cJSON_AddItemToArray(sys, blk);
-      }
-   }
-   else if (cJSON_IsString(sys) && sys->valuestring && sys->valuestring[0])
-   {
-      size_t n = strlen(sys->valuestring) + 2 + strlen(env) + 1;
-      char *joined = malloc(n);
-      if (joined)
-      {
-         snprintf(joined, n, "%s\n\n%s", sys->valuestring, env);
-         cJSON_ReplaceItemInObjectCaseSensitive(req, "system", cJSON_CreateString(joined));
-         free(joined);
-      }
-   }
-   else
-   {
-      /* system absent or empty: the envelope becomes the system prompt. */
-      cJSON_DeleteItemFromObjectCaseSensitive(req, "system");
-      cJSON_AddStringToObject(req, "system", env);
-   }
-   free(env);
 }
 
 /* --- Buffered: POST /v1/messages (stream:false) ------------------------- */
