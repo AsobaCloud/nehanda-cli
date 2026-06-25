@@ -123,6 +123,17 @@ callers can filter by trust.
 Computed over `code_projection_edges` + embeddings, served read-only:
 - **Communities** (Louvain/Leiden over the typed graph) → module/cluster map.
 - **Hubs/centrality** → most-connected symbols (refactor-risk ranking).
+  **Status — shipped.** `GET /v1/code/graph/hubs?project&max_results` ranks a
+  project's symbols by **degree centrality** over the visible projection graph:
+  `db2_code_projection_list_edges` reads the published generation's edges, the pure
+  `kb_graph_hubs` (`src/kb/kb_graph_analytics.c`) tallies in/out/weighted degree and
+  returns the top N (deterministic: degree desc → weighted-degree desc → node asc),
+  and the route surfaces `edge_count` + a `truncated` flag (the analytics cap is
+  10k edges; beyond it the ranking is over a deterministic source/target-ordered
+  prefix). Unit tested (`unit-test-kb-graph-analytics`: aggregation, tie-break
+  determinism under input permutation, self-loops, truncation, empty endpoints) +
+  shim route test (`test_code_graph_hubs_*`). Weighted/betweenness/PageRank
+  centrality and community detection are follow-ups.
 - **Surprising links** — pairs `(a,b)` with **high embedding similarity AND high
   graph distance**, made precise + gated (R1):
   - *similarity*: cosine(emb a, emb b) at/above the **top percentile** of the
