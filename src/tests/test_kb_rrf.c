@@ -162,6 +162,14 @@ static void test_bad_args(void)
    assert(kb_rrf_fuse(sigs, 1, 60.0, NULL, 2) == -1);
    assert(kb_rrf_fuse(sigs, 1, 60.0, out, 0) == -1);
    assert(kb_rrf_fuse(sigs, 0, 60.0, out, 2) == 0); /* no signals -> 0 results */
+   /* Non-finite k is rejected (NaN/Inf slip past a bare `k <= 0` check). */
+   assert(kb_rrf_fuse(sigs, 1, NAN, out, 2) == -1);
+   assert(kb_rrf_fuse(sigs, 1, INFINITY, out, 2) == -1);
+   /* A signal with a non-finite weight is skipped, not propagated as NaN score. */
+   kb_rrf_item_t z[] = {{"z", 0}};
+   kb_rrf_signal_t nanw[] = {{z, 1, NAN, "bad"}, {g, 1, 1.0, "ok"}};
+   int nn = kb_rrf_fuse(nanw, 2, 60.0, out, 2);
+   assert(nn == 1 && strcmp(out[0].id, "a") == 0); /* only the finite-weight signal */
    (void)idx_of;
    printf("  test_bad_args: ok\n");
 }

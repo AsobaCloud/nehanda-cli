@@ -18,10 +18,12 @@
 #define KB_RRF_DEFAULT_K 60.0
 
 /* One candidate emitted by a single signal. Its position in the signal's array
- * IS its rank (index 0 = the signal's top hit). */
+ * IS its rank (index 0 = the signal's top hit). `id` MUST be NUL-terminated — the
+ * fusion compares it with strcmp and copies it with snprintf; an empty id is
+ * skipped. */
 typedef struct
 {
-   char id[256];          /* opaque candidate key: file_path, symbol, doc id, ... */
+   char id[256];          /* opaque candidate key, NUL-terminated: file_path, symbol, ... */
    int structural_weight; /* structural trust of the connecting edge (tie-break) */
 } kb_rrf_item_t;
 
