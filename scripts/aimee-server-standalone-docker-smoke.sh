@@ -17,14 +17,14 @@
 #   scripts/aimee-server-standalone-docker-smoke.sh --up        # build + up first
 #   scripts/aimee-server-standalone-docker-smoke.sh --up --down # tear down after
 #
-# Env: SERVER_URL (default http://localhost:8740), BEARER (default aimee-local-dev),
+# Env: SERVER_URL (default https://localhost:8743), BEARER (default aimee-local-dev),
 #      COMPOSE_FILE (default compose.server-standalone.yaml), WAIT_SECONDS (300).
 #
 # Exit code: 0 = all checks passed.
 
 set -euo pipefail
 
-SERVER_URL="${SERVER_URL:-http://localhost:8740}"
+SERVER_URL="${SERVER_URL:-https://localhost:8743}"
 BEARER="${BEARER:-aimee-local-dev}"
 COMPOSE_FILE="${COMPOSE_FILE:-compose.server-standalone.yaml}"
 WAIT_SECONDS="${WAIT_SECONDS:-300}"
@@ -55,7 +55,7 @@ FAIL=0
 check() {
   local name="$1" expect="$2"; shift 2
   local body
-  if body="$(curl -fsS --max-time 20 "${AUTH[@]}" "$@" 2>/dev/null)" && [[ "$body" == *"$expect"* ]]; then
+  if body="$(curl -fsS -k --max-time 20 "${AUTH[@]}" "$@" 2>/dev/null)" && [[ "$body" == *"$expect"* ]]; then
     green "  PASS  $name"; PASS=$((PASS + 1))
   else
     red   "  FAIL  $name"
@@ -67,7 +67,7 @@ check() {
 check_status() {
   local name="$1" want="$2"; shift 2
   local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$@" 2>/dev/null || true)"
+  code="$(curl -s -k -o /dev/null -w '%{http_code}' --max-time 15 "$@" 2>/dev/null || true)"
   if [[ "$code" == "$want" ]]; then
     green "  PASS  $name (HTTP $code)"; PASS=$((PASS + 1))
   else
