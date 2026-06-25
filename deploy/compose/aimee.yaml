@@ -88,7 +88,10 @@ services:
       AIMEE_WEBCHAT_USER: ${AIMEE_WEBCHAT_USER:-aimee}
       AIMEE_WEBCHAT_PASSWORD: ${AIMEE_WEBCHAT_PASSWORD:-aimee-local-dev}
     ports:
-      - "8740:8740"
+      # 8740 (plaintext /v1) is loopback-only in the server; do NOT publish it.
+      # Remote thin clients use the TLS /v1 on 8743 (https://, self-signed cert
+      # auto-provisioned). 8443 is the webchat browser UI.
+      - "8743:8743"
       - "8443:8443"
     depends_on:
       aimee-kb:
