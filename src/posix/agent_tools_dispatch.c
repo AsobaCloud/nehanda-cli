@@ -424,6 +424,11 @@ static char *td_edit_file(cJSON *args, const char *name, const char *dispatch_cw
       {
          result = safe_strdup("error: write blocked: parent worktree is read-only for delegates");
       }
+      else if (agent_tools_session_isolation_blocks(p->valuestring, dispatch_cwd))
+      {
+         result = safe_strdup("error: write blocked: require_session_worktree is enabled and this "
+                              "target is outside an aimee-managed worktree (.aimee/worktrees/...)");
+      }
       else
       {
          /* Auto-snapshot: record pre-edit state in the persistent rewind DB */
@@ -457,6 +462,11 @@ static char *td_write_file(cJSON *args, const char *name, const char *dispatch_c
       if (agent_tools_parent_write_guard_blocks(p->valuestring, dispatch_cwd))
       {
          result = safe_strdup("error: write blocked: parent worktree is read-only for delegates");
+      }
+      else if (agent_tools_session_isolation_blocks(p->valuestring, dispatch_cwd))
+      {
+         result = safe_strdup("error: write blocked: require_session_worktree is enabled and this "
+                              "target is outside an aimee-managed worktree (.aimee/worktrees/...)");
       }
       else
       {

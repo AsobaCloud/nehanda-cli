@@ -56,6 +56,14 @@ int attn_is_raw_scan(const char *tool_name, const char *bash_cmd);
 /* The attention weight to record for a tool call of the given class. Pure. */
 int attn_weight_for(attn_op_t op);
 
+/* Session-isolation decision (pure, testable). Returns 1 to BLOCK a mutating op
+ * (ATTN_OP_SOFT/HARD) whose effective target is NOT inside an aimee-managed
+ * worktree, else 0. The effective target is the absolute `file_path` when given
+ * (Edit/Write), otherwise `cwd` (a relative file_path resolves under cwd; a Bash
+ * mutation runs there). Read/raw-scan ops are never blocked. Used by
+ * handle_attention_guard only when require_session_worktree is enabled. */
+int attn_session_isolation_blocked(attn_op_t op, const char *file_path, const char *cwd);
+
 /* `aimee attention-guard` PreToolUse-hook entry. Reads the host hook JSON from
  * stdin, updates the per-session attention log, and returns the hook exit code
  * (2 = block a hard-destructive op on a high-attention file, or — only when a

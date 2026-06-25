@@ -25,7 +25,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h> /* strncasecmp */
 #include <time.h>
+#include <unistd.h> /* getcwd */
 
 double attn_score(const attn_record_t *recs, int n, const char *path, long now_ts)
 {
@@ -405,6 +407,192 @@ static int attn_config_ingress_max_raw_scans(void)
    return value;
 }
 
+/* Parse a boolean `require_session_worktree:` line from an aimee.yaml buffer.
+ * Accepts true/1/yes/on (case-insensitive) as true; anything else (incl. a
+ * missing key) is false. Mirrors attn_parse_ingress_max_raw_scans' lean,
+ * link-free YAML-line scan so the guard need not pull in the full config. */
+static int attn_parse_require_session_worktree(const char *buf, int *out)
+{
+   if (!buf || !out)
+      return 0;
+
+   const char *line = buf;
+   while (*line)
+   {
+      const char *p = line;
+      while (*p == ' ' || *p == '\t')
+         p++;
+
+      if (*p && *p != '#')
+      {
+         char quote = 0;
+         if (*p == '"' || *p == '\'')
+            quote = *p++;
+
+         size_t key_len = strlen("require_session_worktree");
+         if (strncmp(p, "require_session_worktree", key_len) == 0)
+         {
+            p += key_len;
+            if (quote)
+            {
+               if (*p != quote)
+                  goto next_line;
+               p++;
+            }
+            while (*p && isspace((unsigned char)*p))
+               p++;
+            if (*p == ':' || *p == '=')
+            {
+               p++;
+               while (*p && (isspace((unsigned char)*p) || *p == '"' || *p == '\''))
+                  p++;
+               *out = (strncasecmp(p, "true", 4) == 0 || strncasecmp(p, "yes", 3) == 0 ||
+                       strncasecmp(p, "on", 2) == 0 || *p == '1');
+               return 1;
+            }
+         }
+      }
+
+   next_line:
+      while (*line && *line != '\n')
+         line++;
+      if (*line == '\n')
+         line++;
+   }
+
+   return 0;
+}
+
+static int attn_config_require_session_worktree(void)
+{
+   const char *home = aimee_home();
+   if (!home || !home[0])
+      return 0;
+
+   char path[1024];
+   snprintf(path, sizeof(path), "%s/aimee.yaml", home);
+
+   char *buf = NULL;
+   if (!attn_read_file(path, &buf))
+      return 0;
+
+   int value = 0;
+   if (!attn_parse_require_session_worktree(buf, &value))
+      value = 0;
+   free(buf);
+   return value;
+}
+
+/* Lexically resolve '.', '..' and '//' in `path` into `out` (purely textual —
+ * the write target may not exist yet, so realpath() is unusable; symlinks are
+ * not followed). Closes the `.aimee/worktrees/../escape` traversal bypass: a
+ * component sequence like ".../worktrees/x/../../src" collapses so the marker
+ * substring no longer survives for an escaped path. A leading '/' is preserved;
+ * '..' that would rise above the root is dropped (cannot escape '/'). */
+static void attn_lexical_normalize(const char *path, char *out, size_t out_n)
+{
+   if (!out || out_n == 0)
+      return;
+   out[0] = '\0';
+   if (!path || !path[0])
+      return;
+
+   int absolute = (path[0] == '/');
+   /* Component start offsets within `out` form a simple stack. 256 components is
+    * far beyond any real path; if exceeded, recording simply stops (a later '..'
+    * may pop to a stale offset, yielding a shorter path) — this only ever drops
+    * the worktree marker, i.e. fails closed (blocks), never opens a bypass. */
+   size_t starts[256];
+   int depth = 0;
+   size_t len = 0;
+   if (absolute && len + 1 < out_n)
+      out[len++] = '/';
+
+   const char *p = path;
+   while (*p)
+   {
+      while (*p == '/')
+         p++;
+      if (!*p)
+         break;
+      const char *seg = p;
+      while (*p && *p != '/')
+         p++;
+      size_t seglen = (size_t)(p - seg);
+
+      if (seglen == 1 && seg[0] == '.')
+         continue; /* current dir: skip */
+      if (seglen == 2 && seg[0] == '.' && seg[1] == '.')
+      {
+         if (depth > 0)
+         {
+            depth--;
+            len = starts[depth]; /* pop last component (and its '/') */
+            if (len > 0 && out[len - 1] == '/' && !(absolute && len == 1))
+               len--;
+            out[len] = '\0';
+         }
+         /* else: '..' at/above root is dropped (absolute) or kept-as-root */
+         continue;
+      }
+
+      /* Push a separator before this component when one is needed. */
+      if (len > 0 && out[len - 1] != '/')
+      {
+         if (len + 1 >= out_n)
+            break;
+         out[len++] = '/';
+      }
+      if (depth < (int)(sizeof(starts) / sizeof(starts[0])))
+         starts[depth++] = len;
+      if (len + seglen >= out_n)
+         break;
+      memcpy(out + len, seg, seglen);
+      len += seglen;
+      out[len] = '\0';
+   }
+   if (len == 0 && out_n > 0)
+   {
+      out[0] = absolute ? '/' : '.';
+      out[1] = '\0';
+   }
+}
+
+/* Returns 1 iff `norm` (an already lexically-normalized path) is inside an
+ * aimee-managed worktree. Matches ONLY the canonical managed location
+ * "/.aimee/worktrees/" — deliberately NOT the looser "/.aimee-" prefix that
+ * is_aimee_worktree_path() also accepts, which would false-match unrelated
+ * dirs like "/home/u/.aimee-notes/...". */
+static int attn_path_in_managed_worktree(const char *norm)
+{
+   return norm && strstr(norm, "/.aimee/worktrees/") != NULL;
+}
+
+/* Pure decision for the session-isolation guard (testable in isolation).
+ * Returns 1 to BLOCK: a mutating op (SOFT/HARD) whose effective target is NOT
+ * inside an aimee-managed worktree. Read / raw-scan ops are never blocked here.
+ * The effective target is `file_path` when given (resolved against `cwd` when
+ * relative), else `cwd` itself (a Bash mutation runs there). The joined path is
+ * lexically normalized before the worktree check so a "../" escape out of the
+ * worktree is blocked even though the raw string still contained the marker. */
+int attn_session_isolation_blocked(attn_op_t op, const char *file_path, const char *cwd)
+{
+   if (op != ATTN_OP_SOFT && op != ATTN_OP_HARD)
+      return 0;
+
+   char joined[2048];
+   if (file_path && file_path[0] == '/')
+      snprintf(joined, sizeof(joined), "%s", file_path);
+   else if (file_path && file_path[0])
+      snprintf(joined, sizeof(joined), "%s/%s", cwd ? cwd : "", file_path);
+   else
+      snprintf(joined, sizeof(joined), "%s", cwd ? cwd : "");
+
+   char norm[2048];
+   attn_lexical_normalize(joined, norm, sizeof(norm));
+   return attn_path_in_managed_worktree(norm) ? 0 : 1;
+}
+
 int handle_attention_guard(void)
 {
    const char *bypass = getenv("AIMEE_GUARD");
@@ -427,6 +615,34 @@ int handle_attention_guard(void)
 
    long now_ts = (long)time(NULL);
    attn_op_t op = attn_classify(tool, bash_cmd);
+
+   /* Session-isolation guard (OPT-IN via require_session_worktree). Fails closed
+    * on a mutating op outside an aimee-managed worktree, so a session that never
+    * ran `session-start` (e.g. a missing SessionStart hook) cannot mutate the
+    * primary checkout / default branch. This is the aimee-level backstop for the
+    * worktree+branch isolation that the SessionStart hook would otherwise set up. */
+   if ((op == ATTN_OP_SOFT || op == ATTN_OP_HARD) && attn_config_require_session_worktree())
+   {
+      char cwd[1024];
+      if (!getcwd(cwd, sizeof(cwd)))
+         cwd[0] = '\0';
+      const char *fp =
+          ti ? cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(ti, "file_path")) : NULL;
+      if (attn_session_isolation_blocked(op, fp, cwd))
+      {
+         fprintf(stderr,
+                 "aimee attention-guard: refusing a mutating op outside an aimee session "
+                 "worktree. This session is operating in '%s', which is not an aimee-managed "
+                 "worktree (.aimee/worktrees/...). aimee requires each mutating session to run "
+                 "in an isolated worktree+branch off the default branch; provision one with "
+                 "`aimee session-start` (or restart the client so its SessionStart hook does). "
+                 "Set require_session_worktree:false in aimee.yaml or AIMEE_GUARD=0 to bypass.\n",
+                 cwd[0] ? cwd : "(unknown cwd)");
+         cJSON_Delete(hook);
+         free(stdin_data);
+         return 2;
+      }
+   }
 
    char path[1024];
    attn_log_path(sid, path, sizeof(path));

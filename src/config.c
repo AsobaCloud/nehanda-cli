@@ -508,6 +508,7 @@ static void config_set_defaults(config_t *cfg)
    cfg->integrity_dry_run = 1;
    cfg->ingress_preinject_assembly_budget = 6144;
    cfg->ingress_max_raw_scans = 0;
+   cfg->require_session_worktree = 0;
    /* Default-on as of the virtual-context rollout: the long-session benchmark
     * gate (make virtual-context-eval-check) passes on synthetic and real
     * tool-heavy session fixtures. Rollback: set session.virtual_context.enabled
@@ -864,6 +865,10 @@ int config_load(config_t *cfg)
    item = cJSON_GetObjectItemCaseSensitive(root, "ingress_max_raw_scans");
    if (cJSON_IsNumber(item) && item->valuedouble >= 0)
       cfg->ingress_max_raw_scans = (int)item->valuedouble;
+
+   item = cJSON_GetObjectItemCaseSensitive(root, "require_session_worktree");
+   if (cJSON_IsBool(item))
+      cfg->require_session_worktree = cJSON_IsTrue(item);
 
    item = cJSON_GetObjectItemCaseSensitive(root, "typed_facts_enabled");
    if (cJSON_IsBool(item))
