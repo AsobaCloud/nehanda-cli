@@ -1304,6 +1304,11 @@ typedef struct config
    /* link_artifacts bridge: 0 = off (default), 1 = link code_units to the
     * entities their domain_concepts name (doc<->code via the entity graph). */
    int kb_curator_link_artifacts_enabled;
+   /* projection_graph build: 1 = on (default) — the drain auto-publishes a fresh
+    * code_projection_edges generation per CHANGED project (content-addressed, so
+    * unchanged projects are skipped), materializing the typed code graph on
+    * `workspace add` with no manual `aimee graph sync-code`. Pure DB2, no sidecar. */
+   int kb_curator_projection_graph_enabled;
    /* synthesize_topic: 0 = off (default), 1 = pick a high-centrality entity and
     * emit a `synthesis` narrative via the synthesize sidecar. Requires a
     * configured kb_curator_synthesize_command. */
