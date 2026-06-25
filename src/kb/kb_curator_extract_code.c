@@ -357,35 +357,8 @@ static char *ccu_invoke_sidecar(const char *cmd, const char *json_input, char *e
    return out;
 }
 
-static void ccu_resolve_command(const kb_curator_extract_opts_t *opts, char *out, size_t len)
-{
-   if (opts->extract_command[0])
-   {
-      snprintf(out, len, "%s", opts->extract_command);
-      return;
-   }
-
-   char exe[512];
-   ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-   if (n > 0)
-   {
-      exe[n] = '\0';
-      char *slash = strrchr(exe, '/');
-      if (slash)
-      {
-         *slash = '\0';
-         char candidate[768];
-         snprintf(candidate, sizeof(candidate), "%s/../scripts/curator-extract.py", exe);
-         if (access(candidate, X_OK) == 0)
-         {
-            snprintf(out, len, "python3 %s", candidate);
-            return;
-         }
-      }
-   }
-
-   snprintf(out, len, "python3 scripts/curator-extract.py");
-}
+/* Sidecar command resolution is shared with the doc extract stage; see
+ * kb_curator_resolve_sidecar_command() in kb_curator_extract.c. */
 
 /* ── Structural grounding gate ─────────────────────────────────────────────
  * Reject a code_unit whose extracted payload claims the symbol has no side
@@ -604,7 +577,7 @@ int kb_curator_extract_code_unit_one(const kb_curator_extract_opts_t *opts)
    }
 
    char cmd[768];
-   ccu_resolve_command(opts, cmd, sizeof(cmd));
+   kb_curator_resolve_sidecar_command(opts, cmd, sizeof(cmd));
 
    aimee_log(LOG_INFO, "kb.curator.extract_code", "invoking sidecar for symbol '%s' (job %lld): %s",
              job.symbol, (long long)job.job_id, cmd);

@@ -9,12 +9,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <sqlite3.h>
 
 #include "db2_test_shim.h"
 #include "cJSON.h"
 #include "config.h"
+#include "kb_curator_extract.h"
 #include "kb/kb_curator_grounding.h"
 
 /* The deep-curator code-extract gate is now ON by compiled default, but the
@@ -38,17 +40,12 @@ static void test_force_curator_gate_off(void)
    config_save(&cfg);
 }
 
-/* Forward declarations (headers live in src/, not src/headers/). */
-typedef struct
-{
-   char extract_command[512];
-   int max_tokens;
-   int max_attempts;
-} kb_curator_extract_opts_t;
+/* Forward declarations (headers live in src/, not src/headers/). The opts struct
+ * and kb_curator_extract_code_unit_one come from kb_curator_extract.h (included
+ * above). */
 int kb_curator_queue_code_unit(const char *project, const char *file_path, const char *symbol,
                                int line);
 int kb_curator_queue_code_units_for_project(const char *project, const char *root_path);
-int kb_curator_extract_code_unit_one(const kb_curator_extract_opts_t *opts);
 int db2_artifact_count(const char *kind, const char *state);
 
 /* ── gate-off tests (no DB needed) ─────────────────────────────────────── */
@@ -351,6 +348,43 @@ static void test_extract_reads_body_from_db2_when_file_absent(void)
 
 /* ── main ─────────────────────────────────────────────────────────────── */
 
+/* The sidecar resolver must (a) honour an explicit command, (b) pick a READABLE
+ * candidate even when it is not executable — invoked as `python3 <path>`, the
+ * old access(X_OK) check wrongly rejected the shipped 0644 script and stalled
+ * every extract job — and (c) fall back to the cwd-relative path when none match. */
+static void test_pick_sidecar_command_resolution(void)
+{
+   char out[768];
+
+   /* (a) explicit command wins verbatim, candidates ignored. */
+   const char *none[] = {"/should/not/matter.py"};
+   kb_curator_pick_sidecar_command(
+       "env LLM_ENDPOINT=x python3 /opt/aimee/scripts/curator-extract.py", none, 1, out,
+       sizeof(out));
+   assert(strcmp(out, "env LLM_ENDPOINT=x python3 /opt/aimee/scripts/curator-extract.py") == 0);
+
+   /* (b) first READABLE candidate is chosen; a missing one ahead of it is skipped,
+    *     and a 0644 (non-executable) file still qualifies. */
+   char tmpl[] = "/tmp/aimee_sidecar_XXXXXX";
+   int fd = mkstemp(tmpl);
+   assert(fd >= 0);
+   close(fd);
+   assert(chmod(tmpl, 0644) == 0); /* readable, NOT executable */
+   const char *cands[] = {"/nonexistent/curator-extract.py", tmpl};
+   kb_curator_pick_sidecar_command("", cands, 2, out, sizeof(out));
+   char want[800];
+   snprintf(want, sizeof(want), "python3 %s", tmpl);
+   assert(strcmp(out, want) == 0);
+   unlink(tmpl);
+
+   /* (c) no readable candidate -> cwd-relative fallback. */
+   const char *missing[] = {"/nonexistent/a.py", NULL};
+   kb_curator_pick_sidecar_command("", missing, 2, out, sizeof(out));
+   assert(strcmp(out, "python3 scripts/curator-extract.py") == 0);
+
+   printf("  PASS: test_pick_sidecar_command_resolution\n");
+}
+
 int main(void)
 {
    printf("curator_code_unit:\n");
@@ -370,6 +404,7 @@ int main(void)
    test_extract_accepts_honest_claim();
    test_extract_accepts_pure_function();
    test_extract_reads_body_from_db2_when_file_absent();
+   test_pick_sidecar_command_resolution();
 
    printf("ok\n");
    return 0;
