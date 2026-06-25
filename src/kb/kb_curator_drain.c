@@ -24,6 +24,7 @@
 #include "kb_memory_facts.h"
 #include "kb_learning_synth.h"
 #include "kb_service_code_embed.h"
+#include "kb_service_graph.h" /* kb_graph_build_project_if_changed */
 #include "kb.h"
 #include "index.h"
 #include "aimee.h"
@@ -157,6 +158,35 @@ static void *drain_thread_main(void *arg)
          }
       }
 
+      /* Code projection-graph drain — publish a fresh typed-edge generation per
+       * CHANGED project (content-addressed: an unchanged project is skipped), so
+       * `workspace add` materializes the code_projection_edges layer with no manual
+       * `aimee graph sync-code`. Pure DB2 (reads files/terms/code_calls), no
+       * embedder/LLM. Gated on its own flag (default on); independent of the curator
+       * pipeline below. */
+      if (cfg.kb_curator_projection_graph_enabled)
+      {
+         project_info_t projects[128];
+         int np = index_list_projects(projects, 128);
+         int built = 0;
+         int64_t total = 0;
+         for (int i = 0; i < np; i++)
+         {
+            int rebuilt = 0;
+            int64_t edges = kb_graph_build_project_if_changed(projects[i].name, &rebuilt);
+            if (rebuilt)
+            {
+               built++;
+               if (edges > 0)
+                  total += edges;
+            }
+         }
+         if (built > 0)
+            aimee_log(LOG_INFO, "kb.graph.projection",
+                      "published %lld edge(s) across %d changed project(s)", (long long)total,
+                      built);
+      }
+
       /* Candidate-generation synthesis drain — the heavy LLM pass, on the
        * scheduler, never on the capture hot path. Off by default. */
       if (cfg.learning_synthesize_enabled && cfg.learning_synthesize_command[0])
@@ -281,8 +311,8 @@ void kb_curator_drain_init(kb_curator_drain_ctx_t *ctx)
        !cfg.kb_curator_index_claims_enabled && !cfg.kb_curator_detect_contradictions_enabled &&
        !cfg.kb_curator_index_code_unit_enabled && !cfg.kb_curator_link_artifacts_enabled &&
        !cfg.kb_curator_synthesize_enabled && !cfg.kb_curator_promote_entity_enabled &&
-       !cfg.kb_evidence_embed_enabled && !cfg.learning_synthesize_enabled &&
-       !cfg.typed_facts_enabled)
+       !cfg.kb_curator_projection_graph_enabled && !cfg.kb_evidence_embed_enabled &&
+       !cfg.learning_synthesize_enabled && !cfg.typed_facts_enabled)
    {
       aimee_log(LOG_DEBUG, "kb.curator.drain",
                 "all gates off (kb_curator_extract_docs_enabled=0,"
