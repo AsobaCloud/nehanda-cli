@@ -90,18 +90,36 @@ typedef struct
    int regions;
 } kb_pdf_ingest_stats_t;
 
+/* True iff `s` is one of the §6 sensitivity classes (public|internal|restricted). The
+ * upload surface rejects anything else (incl. empty/NULL) before ingest. */
+int kb_pdf_sensitivity_valid(const char *s);
+
+/* Run `pdftotext -bbox-layout` over `bytes` in a SEPARATE PROCESS (operator-installed;
+ * aimee never links/bundles poppler), capturing its XHTML into `out` (NUL-terminated,
+ * capped at `out_cap`). Hardened: bytes go to a 0600 mkstemp temp file (unlinked on every
+ * exit path); the child gets RLIMIT_CPU/RLIMIT_AS/RLIMIT_FSIZE caps; stdout is read with a
+ * wall-clock deadline (`timeout_ms`) and a byte cap (`out_cap` — output beyond it aborts);
+ * on deadline the child is SIGKILLed and reaped. Returns 0 on success, <0 on
+ * timeout/over-cap/exec/non-zero-exit (the caller treats any <0 as a parse failure). */
+int kb_pdf_exec_bbox_layout(const unsigned char *bytes, int n, char *out, int out_cap,
+                            int timeout_ms);
+
 /* Ingest an already-parsed-and-normalized doc into kb_documents + kb_doc_regions under
- * (project, file_path, file_hash). Replaces any existing rows for (project, file_path)
- * first (db2_kb_documents_delete_for_file; regions cascade), then writes chunks (one
- * txn-equivalent sequence), links neighbours, writes one region per line, and best-effort
- * enqueues 'embed_raw' per chunk (enqueue failure is non-fatal — a re-embed sweep
- * recovers it). Returns the chunk count (>=0) or <0 on error. */
+ * (project, file_path, file_hash), stamping `sensitivity_class` on every chunk + region.
+ * A `restricted` document is marked `quarantine_state='pending'`. Replaces any existing
+ * rows for (project, file_path) first (db2_kb_documents_delete_for_file; regions cascade),
+ * all in one transaction; the 0-chunk case writes nothing (never wipes prior rows).
+ * Phase 1b does NOT enqueue embeddings for PDF chunks — embedding + access-controlled
+ * retrieval land together in Phase 2, so PDF content is never vector-searchable before its
+ * access control exists. Returns the chunk count (>=0) or <0 on error. */
 int kb_doc_pdf_ingest(const char *project, const char *file_path, const char *file_hash,
-                      const kb_pdf_doc_t *doc, kb_pdf_ingest_stats_t *stats);
+                      const kb_pdf_doc_t *doc, const char *sensitivity_class,
+                      kb_pdf_ingest_stats_t *stats);
 
 /* Convenience: parse -> normalize -> ingest from raw bbox-layout XHTML. */
 int kb_doc_pdf_ingest_xhtml(const char *project, const char *file_path, const char *file_hash,
-                            const char *xhtml, kb_pdf_ingest_stats_t *stats);
+                            const char *xhtml, const char *sensitivity_class,
+                            kb_pdf_ingest_stats_t *stats);
 
 /* The page-boundary chunk line cap (exposed for tests). */
 #define KB_PDF_MAX_CHUNK_LINES 100
