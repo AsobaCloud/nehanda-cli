@@ -326,6 +326,70 @@ static void test_search_chunks_shim(void)
    PASS("search_chunks_shim");
 }
 
+/* §6 quarantine admin: a restricted PDF is withheld until confirmed; reject purges it. */
+static void test_pdf_quarantine_admin(void)
+{
+   db2_test_shim_open();
+   kb_pdf_ingest_stats_t stats;
+   char buf[1024];
+   db2_kb_pdf_chunk_t chunks[8];
+
+   /* Restricted -> pending -> withheld from search_chunks. */
+   assert(kb_doc_pdf_ingest_xhtml("proj", "secret.pdf", "h1", FIXTURE_2PAGE, "restricted",
+                                  &stats) == 2);
+   assert(db2_kb_pdf_search_chunks("proj", "world", 8, chunks) == 0);
+
+   /* confirm -> 200; the doc becomes retrievable. */
+   const char *cbody =
+       "{\"project\":\"proj\",\"document_key\":\"secret.pdf\",\"action\":\"confirm\"}";
+   int st = handle_post_pdf_quarantine_route("POST", cbody, (int)strlen(cbody), buf, sizeof(buf));
+   assert(st == 200);
+   assert(strstr(buf, "\"chunks\":2") != NULL);
+   assert(db2_kb_pdf_search_chunks("proj", "world", 8, chunks) == 1);
+   assert(strcmp(chunks[0].document_key, "secret.pdf") == 0);
+   /* confirm again -> 404 (no longer pending). */
+   assert(handle_post_pdf_quarantine_route("POST", cbody, (int)strlen(cbody), buf, sizeof(buf)) ==
+          404);
+
+   /* reject a fresh restricted doc -> 200; chunks + regions purged (FK cascade). */
+   assert(kb_doc_pdf_ingest_xhtml("proj", "bad.pdf", "h2", FIXTURE_2PAGE, "restricted", &stats) ==
+          2);
+   const char *rbody = "{\"project\":\"proj\",\"document_key\":\"bad.pdf\",\"action\":\"reject\"}";
+   assert(handle_post_pdf_quarantine_route("POST", rbody, (int)strlen(rbody), buf, sizeof(buf)) ==
+          200);
+   assert(count_rows("SELECT COUNT(*) FROM kb_documents WHERE file_path='bad.pdf'") == 0);
+   assert(count_rows("SELECT COUNT(*) FROM kb_doc_regions WHERE document_key='bad.pdf'") == 0);
+
+   /* errors: method, missing fields, unknown action, not-found. */
+   assert(handle_post_pdf_quarantine_route("GET", cbody, (int)strlen(cbody), buf, sizeof(buf)) ==
+          405);
+   assert(handle_post_pdf_quarantine_route("POST", "{}", 2, buf, sizeof(buf)) == 400);
+   const char *ubody = "{\"project\":\"proj\",\"document_key\":\"x.pdf\",\"action\":\"foo\"}";
+   assert(handle_post_pdf_quarantine_route("POST", ubody, (int)strlen(ubody), buf, sizeof(buf)) ==
+          400);
+   const char *nbody =
+       "{\"project\":\"proj\",\"document_key\":\"missing.pdf\",\"action\":\"confirm\"}";
+   assert(handle_post_pdf_quarantine_route("POST", nbody, (int)strlen(nbody), buf, sizeof(buf)) ==
+          404);
+
+   /* reject is SCOPED: a non-PDF row that happens to share the file_path must SURVIVE — only
+    * the pending PDF chunks are purged, not everything at that (project, file_path). */
+   assert(kb_doc_pdf_ingest_xhtml("proj", "shared", "h3", FIXTURE_2PAGE, "restricted", &stats) ==
+          2);
+   assert(db2_kb_documents_insert_chunk("proj", "shared", "h4", 0, "", 0, 0, "non-pdf body", 2) >
+          0);
+   const char *sbody = "{\"project\":\"proj\",\"document_key\":\"shared\",\"action\":\"reject\"}";
+   assert(handle_post_pdf_quarantine_route("POST", sbody, (int)strlen(sbody), buf, sizeof(buf)) ==
+          200);
+   assert(count_rows("SELECT COUNT(*) FROM kb_documents WHERE file_path='shared' AND "
+                     "doc_kind='pdf'") == 0); /* the pending PDF is gone */
+   assert(count_rows("SELECT COUNT(*) FROM kb_documents WHERE file_path='shared' AND "
+                     "doc_kind=''") == 1); /* the co-located non-PDF row survived */
+
+   db2_test_shim_close();
+   PASS("pdf_quarantine_admin");
+}
+
 int main(void)
 {
    printf("structured-pdf (kb_doc_pdf) tests:\n");
@@ -336,6 +400,7 @@ int main(void)
    test_degraded_no_line_tags();
    test_ingest_shim();
    test_search_chunks_shim();
+   test_pdf_quarantine_admin();
    printf("ALL PASS\n");
    return 0;
 }

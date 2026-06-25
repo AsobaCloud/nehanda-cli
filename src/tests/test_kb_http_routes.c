@@ -318,6 +318,18 @@ int db2_kb_doc_regions_for_chunk(int64_t chunk_id, void *out, int max)
    (void)max;
    return 0;
 }
+int db2_kb_pdf_quarantine_confirm(const char *project, const char *document_key)
+{
+   (void)project;
+   (void)document_key;
+   return 0;
+}
+int db2_kb_pdf_quarantine_reject(const char *project, const char *document_key)
+{
+   (void)project;
+   (void)document_key;
+   return 0;
+}
 int db2_dim_change_reset(int target_dim, int force, int dry_run, db2_reembed_plan_t *out)
 {
    (void)force;
