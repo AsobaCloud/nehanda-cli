@@ -1,6 +1,8 @@
 #ifndef DEC_KB_CURATOR_EXTRACT_H
 #define DEC_KB_CURATOR_EXTRACT_H 1
 
+#include <stddef.h> /* size_t */
+
 typedef struct
 {
    char extract_command[512];
@@ -18,5 +20,18 @@ int kb_curator_extract_one(const kb_curator_extract_opts_t *opts);
  * role="extract_code_unit", writes code_unit artifacts to DB2.
  * Returns 1 if a job was processed, 0 if queue is empty, -1 on hard error. */
 int kb_curator_extract_code_unit_one(const kb_curator_extract_opts_t *opts);
+
+/* Resolve the curator-extract.py sidecar command shared by the doc and code
+ * extract stages. An explicit opts->extract_command wins; otherwise the bundled
+ * script is located at its real install path and run as `python3 <path>`. */
+void kb_curator_resolve_sidecar_command(const kb_curator_extract_opts_t *opts, char *out,
+                                        size_t len);
+
+/* Core selection, exposed for testing: an explicit command wins; else the first
+ * READABLE candidate is run as `python3 <path>` (the script is invoked via
+ * python3, so readability — not the execute bit — is what matters); else a
+ * cwd-relative last resort. NULL/empty candidate entries are skipped. */
+void kb_curator_pick_sidecar_command(const char *explicit_cmd, const char *const *candidates,
+                                     int n_candidates, char *out, size_t len);
 
 #endif /* DEC_KB_CURATOR_EXTRACT_H */
