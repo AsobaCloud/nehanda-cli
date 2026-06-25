@@ -28,6 +28,15 @@ extern "C"
    int server_http_start(const char *uds_path, int tcp_port, int tls_port, const char *bearer_token,
                          int rate_limit_per_min, int remote_writes);
 
+   /* Pure bind-address decision for a TCP /v1 listener (no I/O — unit-testable).
+    * want_external is 1 when AIMEE_SERVER_HTTP_BIND requests a 0.0.0.0 bind;
+    * allow_external is 1 ONLY for the native-TLS listener. A plaintext listener
+    * (allow_external == 0) is pinned to INADDR_LOOPBACK even when an external
+    * bind is requested, so the bearer and credentials can never face the network
+    * in cleartext. Returns INADDR_ANY only when (want_external && allow_external),
+    * else INADDR_LOOPBACK (both in host byte order). */
+   uint32_t server_http_resolve_bind_addr(int want_external, int allow_external);
+
    /* Pure authorization decision for one HTTP request (no I/O — unit-testable).
     *   is_tcp          : the request arrived on the TCP listener (bearer
     *                     required) vs the UDS (filesystem-permission auth).
