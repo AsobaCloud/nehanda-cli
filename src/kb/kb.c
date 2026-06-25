@@ -1113,6 +1113,13 @@ static int kb_fetch_doc_row(int64_t id, const char *project, kb_result_t *out)
    db2_kb_document_row_t row;
    if (!db2_kb_document_fetch(id, project, &row))
       return 0;
+   /* structured-PDF Phase 2 safety chokepoint: PDF chunks are excluded from the general
+    * search legs entirely. Once embedded they appear in the vector index, but PDF content
+    * is evidence reachable ONLY through the access-controlled search_chunks tool (which
+    * gates on quarantine_state + scope), never through plain /v1/search. This is the single
+    * point both legs materialise rows, so excluding here covers lexical + dense. */
+   if (strcmp(row.doc_kind, "pdf") == 0)
+      return 0;
    out->doc_id = row.id;
    snprintf(out->file_path, sizeof(out->file_path), "%s", row.file_path);
    snprintf(out->file_hash, sizeof(out->file_hash), "%s", row.file_hash);
