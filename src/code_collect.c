@@ -149,6 +149,14 @@ static int code_collect_walk(const char *root, const char *rel, code_collect_fil
  * THIS change touch" — e.g. blast-radius — read the working tree via their own
  * reader and deliberately do NOT route through here.) */
 
+/* Prefix for every git invocation. This runs in an automated indexing path, so a
+ * git command must NEVER block on an interactive credential or SSH-passphrase
+ * prompt (GIT_TERMINAL_PROMPT=0 makes git fail fast instead), and a network-bound
+ * step like `remote set-head -a` must time out rather than hang the drain
+ * (BatchMode=yes + a short ConnectTimeout). Local repos never hit the network. */
+#define GIT_SAFE_ENV                                                                               \
+   "GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=5' "
+
 /* Quote one argument for /bin/sh: wrap in single quotes, escaping any embedded
  * single quote as '\''. Returns 0 on success, -1 if it doesn't fit. */
 static int shquote(const char *in, char *out, size_t outlen)
@@ -191,7 +199,8 @@ static int git_capture_line(const char *root, const char *args, char *out, size_
    if (shquote(root, qroot, sizeof(qroot)) != 0)
       return -1;
    char cmd[8192];
-   if ((size_t)snprintf(cmd, sizeof(cmd), "git -C %s %s 2>/dev/null", qroot, args) >= sizeof(cmd))
+   if ((size_t)snprintf(cmd, sizeof(cmd), GIT_SAFE_ENV "git -C %s %s 2>/dev/null", qroot, args) >=
+       sizeof(cmd))
       return -1;
    FILE *fp = popen(cmd, "r");
    if (!fp)
@@ -313,7 +322,8 @@ static int code_collect_from_git(const char *root, const char *ref, code_collect
 
    /* (1) Enumerate. ls-tree -z: NUL-terminated records "<mode> <type> <oid>\t<path>". */
    char lscmd[10240];
-   snprintf(lscmd, sizeof(lscmd), "git -C %s ls-tree -r -z %s 2>/dev/null", qroot, qref);
+   snprintf(lscmd, sizeof(lscmd), GIT_SAFE_ENV "git -C %s ls-tree -r -z %s 2>/dev/null", qroot,
+            qref);
    FILE *ls = popen(lscmd, "r");
    if (!ls)
       return -1;
@@ -444,8 +454,9 @@ static int code_collect_from_git(const char *root, const char *ref, code_collect
       char qtmp[4096];
       char catcmd[12288];
       if (shquote(tmpl, qtmp, sizeof(qtmp)) == 0 &&
-          (size_t)snprintf(catcmd, sizeof(catcmd), "git -C %s cat-file --batch <%s 2>/dev/null",
-                           qroot, qtmp) < sizeof(catcmd))
+          (size_t)snprintf(catcmd, sizeof(catcmd),
+                           GIT_SAFE_ENV "git -C %s cat-file --batch <%s 2>/dev/null", qroot,
+                           qtmp) < sizeof(catcmd))
       {
          FILE *cat = popen(catcmd, "r");
          if (cat)
