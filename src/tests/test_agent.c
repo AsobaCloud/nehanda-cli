@@ -1805,6 +1805,55 @@ static void test_agent_name_valid(void)
        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")); /* 63 */
 }
 
+/* Layer 2 of the session-isolation guard: the server-side write chokepoint
+ * agent_tools_session_isolation_blocks. Default-off, and when on blocks writes
+ * whose normalized target is outside an aimee-managed worktree. */
+static void test_session_isolation_guard(void)
+{
+   char home[512];
+   snprintf(home, sizeof(home), "%s/aimee_sess_iso_XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(home) != NULL);
+   char cfg[640];
+   snprintf(cfg, sizeof(cfg), "%s/aimee.yaml", home);
+   assert(platform_setenv("AIMEE_HOME", home) == 0);
+
+   const char *primary = "/some/repo/src/x.c";
+   const char *worktree = "/some/repo/.aimee/worktrees/ab12/main/src/x.c";
+
+   /* (1) Default off (no aimee.yaml): never blocks, even on the primary checkout. */
+   remove(cfg);
+   assert(agent_tools_session_isolation_blocks(primary, NULL) == 0);
+
+   /* (2) Explicit false: still no block. */
+   FILE *f = fopen(cfg, "w");
+   assert(f != NULL);
+   fputs("require_session_worktree: false\n", f);
+   fclose(f);
+   assert(agent_tools_session_isolation_blocks(primary, NULL) == 0);
+
+   /* (3) Enabled: primary-checkout target blocked, managed-worktree target allowed. */
+   f = fopen(cfg, "w");
+   assert(f != NULL);
+   fputs("require_session_worktree: true\n", f);
+   fclose(f);
+   assert(agent_tools_session_isolation_blocks(primary, NULL) == 1);
+   assert(agent_tools_session_isolation_blocks(worktree, NULL) == 0);
+   /* Traversal escape out of the worktree normalizes + blocks. */
+   assert(agent_tools_session_isolation_blocks(
+              "/some/repo/.aimee/worktrees/ab12/main/../../../src/y.c", NULL) == 1);
+   /* Relative path resolved against cwd (normalize_path): a worktree cwd allows,
+    * a primary-checkout cwd blocks. */
+   assert(agent_tools_session_isolation_blocks("src/x.c",
+                                               "/some/repo/.aimee/worktrees/ab12/main") == 0);
+   assert(agent_tools_session_isolation_blocks("src/x.c", "/some/repo") == 1);
+   /* NULL path is a no-op (returns 0). */
+   assert(agent_tools_session_isolation_blocks(NULL, NULL) == 0);
+
+   remove(cfg);
+   assert(platform_setenv("AIMEE_HOME", "") == 0); /* clear override */
+   printf("session_isolation guard (Layer 2) OK\n");
+}
+
 int main(void)
 {
    char tmp_home[512];
@@ -1844,6 +1893,7 @@ int main(void)
    test_tool_write_file();
    test_tool_edit_file();
    test_parent_write_guard_blocks_parent_writes();
+   test_session_isolation_guard();
    test_parent_write_guard_readonly_pipeline();
    test_parent_write_guard_allows_mkdir_in_delegate_worktree();
    test_parent_write_guard_allows_workspace_file_ops();
