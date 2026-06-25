@@ -291,6 +291,31 @@ static void test_tls_roundtrip(void)
 }
 #endif /* WITH_TLS */
 
+/* The credential-in-cleartext guard: a non-empty bearer over plaintext http://
+ * to a non-loopback host must be refused; loopback and https are allowed. */
+static void test_cleartext_credential_guard(void)
+{
+   /* Blocked: a real bearer over plaintext http:// to a remote address. */
+   assert(aimee_client_would_leak_cleartext(0, "192.168.1.254", "secret") == 1);
+   assert(aimee_client_would_leak_cleartext(0, "example.com", "secret") == 1);
+   assert(aimee_client_would_leak_cleartext(0, "10.0.0.5", "tok") == 1);
+
+   /* Allowed: TLS carries the bearer confidentially regardless of host. */
+   assert(aimee_client_would_leak_cleartext(1, "192.168.1.254", "secret") == 0);
+
+   /* Allowed: loopback never leaves the machine, plaintext is fine there. */
+   assert(aimee_client_would_leak_cleartext(0, "127.0.0.1", "secret") == 0);
+   assert(aimee_client_would_leak_cleartext(0, "127.5.6.7", "secret") == 0);
+   assert(aimee_client_would_leak_cleartext(0, "localhost", "secret") == 0);
+   assert(aimee_client_would_leak_cleartext(0, "::1", "secret") == 0);
+   assert(aimee_client_would_leak_cleartext(0, "[::1]", "secret") == 0);
+
+   /* Allowed: no credential to leak (empty / NULL token). */
+   assert(aimee_client_would_leak_cleartext(0, "example.com", "") == 0);
+   assert(aimee_client_would_leak_cleartext(0, "example.com", NULL) == 0);
+   PASS("cleartext-credential guard: refuses bearer over plaintext to non-loopback");
+}
+
 int main(void)
 {
    printf("test_aimee_client:\n");
@@ -298,6 +323,7 @@ int main(void)
    test_tcp_set_remote_with_token();
    test_remote_active_reporting();
    test_https_unreachable_null();
+   test_cleartext_credential_guard();
 #ifdef WITH_TLS
    test_tls_roundtrip();
 #endif

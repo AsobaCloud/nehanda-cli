@@ -45,6 +45,12 @@ extern "C"
                            long expires_at, int revoked),
                 void *ctx);
 
+   /* Provision a self-signed EC P-256 server cert at (cert_path, key_path) when
+    * neither exists yet — makes native TLS zero-config when a tls_port is set but
+    * no operator cert is present. Never overwrites an existing cert/key. The key
+    * is written 0600. Returns 0 if a usable cert is in place, -1 on failure. */
+   int pki_ensure_self_signed_server_cert(const char *cert_path, const char *key_path);
+
    /* For tests: drop cached CA + snapshot so a fresh AIMEE_HOME is picked up. */
    void pki_reset_for_test(void);
 

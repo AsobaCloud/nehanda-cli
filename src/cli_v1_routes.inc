@@ -6906,21 +6906,25 @@ int cli_v1_has_remote_endpoint(void)
 #endif
 }
 
-/* cli_v1_remote_endpoint_is_tcp: like cli_v1_has_remote_endpoint, but true only
- * for a genuinely remote "tcp:host:port" endpoint (not a local "unix:" one).
- * Interactive/co-located commands (chat, launch) use this to refuse a remote
- * server cleanly — the agent + tools + worktree run on this host. Non-static so
- * cli_main.c can call it. */
-int cli_v1_remote_endpoint_is_tcp(void)
+/* cli_v1_remote_endpoint_is_network: like cli_v1_has_remote_endpoint, but true
+ * only for a genuinely remote network endpoint — "tcp:host:port" (http) OR
+ * "tls:host:port" (https) — never a local "unix:" one. Two callers rely on it:
+ * interactive/co-located commands (chat, launch) refuse a remote server cleanly
+ * (the agent + tools + worktree run on this host); and the thin-client
+ * workspace/index push uses it to detect that the server cannot read this host's
+ * filesystem. A TLS remote is no less remote than a plaintext one — matching
+ * only "tcp:" here silently broke client-side push once remotes went TLS-only.
+ * Non-static so cli_main.c can call it. */
+int cli_v1_remote_endpoint_is_network(void)
 {
 #if !defined(_WIN32) && !defined(_WIN64)
    /* A synthesized aimee_client target (--server / AIMEE_SERVER_URL / remote.conf)
-    * is always "tcp:host:port" (a network host, never a local unix: path), so
-    * chat/launch refuse it here just like an explicit tcp: endpoint. */
+    * is "tcp:host:port" (http) or "tls:host:port" (https) — a network host, never
+    * a local unix: path. Either scheme means the server cannot see this host. */
    char *ep = cli_v1_client_endpoint();
-   int is_tcp = ep && strncmp(ep, "tcp:", 4) == 0;
+   int is_net = ep && (strncmp(ep, "tcp:", 4) == 0 || strncmp(ep, "tls:", 4) == 0);
    free(ep);
-   return is_tcp;
+   return is_net;
 #else
    /* The Windows thin client's only remote target comes from aimee_client
     * (AIMEE_SERVER_URL / --server), which is always a tcp:host:port network

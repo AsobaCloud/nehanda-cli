@@ -10,17 +10,20 @@
 #include <sqlite3.h>
 
 #include <openssl/bn.h>
+#include <openssl/crypto.h> /* OPENSSL_cleanse */
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
+#include <fcntl.h> /* open (0600 key file) */
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h> /* gethostname, close */
 
 #define PKI_CA_AGENT     "__pki_ca__" /* vault agent name under which the CA key is sealed */
 #define PKI_CA_CN        "aimee-client-CA"
@@ -227,6 +230,106 @@ static int set_random_serial(X509 *cert, char *hex_out, size_t hex_len)
    if (back)
       BN_free(back);
    return hex_out[0] ? 0 : -1;
+}
+
+/* Generate a self-signed EC P-256 server certificate at (cert_path, key_path)
+ * when neither already exists. Makes native TLS zero-config: with
+ * aimee.api.tls_port set but no operator cert present, the server provisions its
+ * own rather than fall back to a plaintext-only listener. The channel is secured
+ * regardless of trust; clients pin the cert or pass AIMEE_TLS_INSECURE=1. The key
+ * is written 0600; the cert (public) is world-readable. Returns 0 if a usable
+ * cert exists (already present or freshly written), -1 on failure (logged). */
+int pki_ensure_self_signed_server_cert(const char *cert_path, const char *key_path)
+{
+   if (!cert_path || !cert_path[0] || !key_path || !key_path[0])
+      return -1;
+   struct stat st;
+   if (stat(cert_path, &st) == 0 && stat(key_path, &st) == 0)
+      return 0; /* operator- or previously-provisioned cert: never overwrite */
+
+   EVP_PKEY *key = gen_ec_key();
+   if (!key)
+      return -1;
+   X509 *cert = X509_new();
+   if (!cert)
+   {
+      EVP_PKEY_free(key);
+      return -1;
+   }
+   int rc = -1;
+   char serial[64] = "";
+   char cn[200];
+   if (gethostname(cn, sizeof(cn)) != 0 || !cn[0])
+      snprintf(cn, sizeof(cn), "aimee-server");
+   cn[sizeof(cn) - 1] = '\0';
+   char san[300];
+   snprintf(san, sizeof(san), "DNS:%s,DNS:localhost,IP:127.0.0.1,IP:0:0:0:0:0:0:0:1", cn);
+
+   X509_set_version(cert, 2);
+   X509_NAME *name = X509_get_subject_name(cert);
+   if (set_random_serial(cert, serial, sizeof(serial)) != 0 || set_name_cn(name, cn) != 0 ||
+       X509_set_issuer_name(cert, name) != 1 || !X509_gmtime_adj(X509_getm_notBefore(cert), 0) ||
+       !X509_gmtime_adj(X509_getm_notAfter(cert), (long)3650 * 24 * 3600) ||
+       X509_set_pubkey(cert, key) != 1 ||
+       add_ext(cert, NULL, NID_basic_constraints, "critical,CA:FALSE") != 0 ||
+       add_ext(cert, NULL, NID_key_usage, "critical,digitalSignature,keyEncipherment") != 0 ||
+       add_ext(cert, NULL, NID_ext_key_usage, "serverAuth") != 0 ||
+       add_ext(cert, NULL, NID_subject_alt_name, san) != 0 ||
+       X509_sign(cert, key, EVP_sha256()) == 0)
+      goto done;
+   {
+      char *key_pem = pem_private_key(key);
+      char *cert_pem = pem_cert(cert);
+      if (!key_pem || !cert_pem)
+      {
+         free(key_pem);
+         free(cert_pem);
+         goto done;
+      }
+      char dir[MAX_PATH_LEN];
+      snprintf(dir, sizeof(dir), "%s/tls", config_default_dir());
+      mkdir(dir, 0700);
+      int ok = 0;
+      int kfd = open(key_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+      if (kfd >= 0)
+      {
+         FILE *kf = fdopen(kfd, "w");
+         if (kf)
+         {
+            fputs(key_pem, kf);
+            if (fclose(kf) == 0)
+            {
+               FILE *cf = fopen(cert_path, "w");
+               if (cf)
+               {
+                  fputs(cert_pem, cf);
+                  if (fclose(cf) == 0)
+                     ok = 1;
+               }
+            }
+         }
+         else
+            close(kfd);
+      }
+      OPENSSL_cleanse(key_pem, strlen(key_pem));
+      free(key_pem);
+      free(cert_pem);
+      if (ok)
+      {
+         rc = 0;
+         aimee_log(LOG_INFO, "pki", "generated self-signed server TLS cert (CN=%s) at %s", cn,
+                   cert_path);
+      }
+      else
+         aimee_log(LOG_ERROR, "pki", "failed to write self-signed server TLS cert to %s/%s",
+                   cert_path, key_path);
+   }
+done:
+   if (key)
+      EVP_PKEY_free(key);
+   if (cert)
+      X509_free(cert);
+   return rc;
 }
 
 /* --- CA --- */

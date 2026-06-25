@@ -14,11 +14,20 @@
 # --- server: inbound /v1 HTTP API (binds only with port + bearer set) ---
 aimee:
   api:
+    # Plaintext /v1 is LOOPBACK-ONLY by design: the server refuses to bind it on a
+    # non-loopback interface (the bearer + credentials would cross the wire in
+    # cleartext). Remote thin clients MUST use the TLS listener below.
     http_port: 8740
+    # Native-TLS /v1 for remote access (0.0.0.0 when AIMEE_SERVER_HTTP_BIND=1). The
+    # server auto-provisions a self-signed cert at $AIMEE_HOME/tls/server.{crt,key}
+    # on first start if none exists; supply your own cert there to override. Thin
+    # clients connect with `https://host:8743` (AIMEE_TLS_INSECURE=1 for the
+    # self-signed cert, or pin it).
+    tls_port: 8743
     bearer_token: "aimee-local-dev"
     rate_limit_per_min: 0
-    # This combined all-in-one binds /v1 on 0.0.0.0 so a thin client drives it
-    # remotely, including delegates/roundtables/tools — which require
+    # This combined all-in-one binds the TLS /v1 on 0.0.0.0 so a thin client drives
+    # it remotely, including delegates/roundtables/tools — which require
     # remote_writes="full". The image also forces this via AIMEE_API_REMOTE_WRITES
     # (Dockerfile.combined) so it survives a fresh redeploy that reseeds this file.
     # Trusted networks only (this ships a known dev bearer); for any exposed
@@ -31,10 +40,9 @@ aimee:
 # roster as the panel; a thin client pushes the per-agent keys per session.
 ensemble:
   enabled: true
-  reference_models:
-    - minimax
-    - mistral
-    - mimo-2.5
+  # No reference_models pinned: the panel is built DYNAMICALLY from the enabled +
+  # currently-available delegates (auto-seeded, then unkeyed/unhealthy ones are
+  # dropped). Pin a list here (or via a workflow) only to override that default.
 
 # --- kb: real semantic embeddings via the persistent embedder service ---
 # No embedding_command here on purpose: when it is unset the server embeds

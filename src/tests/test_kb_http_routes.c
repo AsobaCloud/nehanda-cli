@@ -298,6 +298,42 @@ int db2_reembed_in_progress_get(int *target_dim, long *started_epoch)
    (void)started_epoch;
    return 0; /* not in progress -> search path proceeds */
 }
+/* structured-PDF search_chunks db2 functions — stubbed (the /v1/pdf/search route is
+ * exercised end-to-end against real SQL in test_kb_doc_pdf.c; here we only need the link
+ * to resolve so the route table compiles). The struct args are taken as void* to avoid
+ * pulling in db2/kb_payload.h (which conflicts with this file's simplified db2 stubs);
+ * C links by symbol name, so the pointer type is immaterial. */
+/* structured-PDF db2 stubs — the routes are exercised against real SQL in test_kb_doc_pdf.c;
+ * these just resolve the link (build uses -Wno-unused-parameter, so no (void) casts needed). */
+int db2_kb_pdf_search_chunks(const char *project, const char *query, int max, void *out)
+{
+   return 0;
+}
+int db2_kb_doc_regions_for_chunk(int64_t chunk_id, void *out, int max)
+{
+   return 0;
+}
+int db2_kb_pdf_quarantine_confirm(const char *project, const char *document_key)
+{
+   return 0;
+}
+int db2_kb_pdf_quarantine_reject(const char *project, const char *document_key)
+{
+   return 0;
+}
+int db2_kb_pdf_open_page(const char *project, const char *document_key, int page_no, void *out,
+                         int max)
+{
+   return 0;
+}
+int db2_kb_pdf_open_neighbors(const char *project, int64_t chunk_id, void *out, int max)
+{
+   return 0;
+}
+int db2_kb_pdf_inspect_structure(const char *project, const char *document_key, void *out, int max)
+{
+   return 0;
+}
 int db2_dim_change_reset(int target_dim, int force, int dry_run, db2_reembed_plan_t *out)
 {
    (void)force;

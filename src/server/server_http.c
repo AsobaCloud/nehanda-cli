@@ -1842,17 +1842,16 @@ static void *listener_thread(void *arg)
    return NULL;
 }
 
-/* Bind the optional localhost TCP listener. Returns the fd, or -1 (logged) when
- * disabled or on error — the UDS listener carries on regardless. */
-static int tcp_listen(int tcp_port, const char *bearer_token)
+/* Bind a TCP /v1 listener (fd, or -1 logged; the UDS listener carries on). |allow_external|
+ * gates a 0.0.0.0 bind: 1 ONLY for the TLS listener. The plaintext listener passes 0 and is
+ * ALWAYS loopback-bound, so credentials never cross the wire in cleartext. */
+static int tcp_listen(int tcp_port, const char *bearer_token, int allow_external)
 {
    if (tcp_port <= 0)
       return -1;
    if (!bearer_token || !bearer_token[0])
    {
-      LOG_WARN("server.http",
-               "aimee.api.http_port=%d set but no bearer_token configured; "
-               "refusing to bind TCP listener",
+      LOG_WARN("server.http", "aimee.api port=%d set but no bearer_token; refusing to bind TCP",
                tcp_port);
       return -1;
    }
@@ -1861,14 +1860,16 @@ static int tcp_listen(int tcp_port, const char *bearer_token)
       return -1;
    int yes = 1;
    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-   /* Loopback by default. Set AIMEE_SERVER_HTTP_BIND (any non-empty value) to
-    * bind 0.0.0.0 instead — needed when the listener must be reachable from
-    * outside the host (e.g. a container's published port, where traffic
-    * arrives on a non-loopback interface). Mirrors aimee-kb's
-    * AIMEE_KB_HTTP_BIND. The bearer requirement still applies on every request,
-    * so a wider bind does not weaken auth. */
+   /* AIMEE_SERVER_HTTP_BIND requests 0.0.0.0 — honoured for TLS only (plaintext stays loopback). */
    const char *bind_all = getenv("AIMEE_SERVER_HTTP_BIND");
-   in_addr_t bind_addr = (bind_all && bind_all[0]) ? INADDR_ANY : INADDR_LOOPBACK;
+   int want_external = (bind_all && bind_all[0]) ? 1 : 0;
+   if (want_external && !allow_external)
+      LOG_ERROR("server.http",
+                "AIMEE_SERVER_HTTP_BIND ignored for plaintext /v1 on port %d: a non-loopback "
+                "plaintext bind would expose credentials in cleartext. Set aimee.api.tls_port "
+                "for remote access; binding 127.0.0.1 only.",
+                tcp_port);
+   in_addr_t bind_addr = server_http_resolve_bind_addr(want_external, allow_external);
    struct sockaddr_in addr;
    memset(&addr, 0, sizeof(addr));
    addr.sin_family = AF_INET;
@@ -1917,7 +1918,7 @@ int server_http_start(const char *uds_path, int tcp_port, int tls_port, const ch
    g_remote_writes = remote_writes;
    g_rate_state.window_start = 0;
    g_rate_state.count = 0;
-   g_tcp_fd = tcp_listen(tcp_port, bearer_token);
+   g_tcp_fd = tcp_listen(tcp_port, bearer_token, 0 /* plaintext: loopback only */);
 
    /* Optional native-TLS listener (phase 1b): terminate TLS in-process from
     * <config>/tls/server.{crt,key}. A TLS+bearer conn is the vault's attested
@@ -1925,7 +1926,7 @@ int server_http_start(const char *uds_path, int tcp_port, int tls_port, const ch
    if (tls_port > 0)
    {
       if (server_tls_init_default() == 0)
-         g_tls_fd = tcp_listen(tls_port, bearer_token);
+         g_tls_fd = tcp_listen(tls_port, bearer_token, 1 /* TLS: may bind 0.0.0.0 */);
       else
          /* This is the vault's attested write path — make a misconfigured cert/key
           * loud (the UDS listener still comes up; the operator must fix the cert). */
@@ -1964,14 +1965,12 @@ int server_http_start(const char *uds_path, int tcp_port, int tls_port, const ch
       return -1;
    }
    pthread_detach(g_thread);
+   /* The TLS listener (when up) logs its own "native TLS enabled" line from server_tls. */
    if (g_tcp_fd >= 0)
-   {
-      const char *bind_all = getenv("AIMEE_SERVER_HTTP_BIND");
-      LOG_INFO("server.http", "HTTP /v1 listening on %s and %s:%d (bearer)", uds_path,
-               (bind_all && bind_all[0]) ? "0.0.0.0" : "127.0.0.1", tcp_port);
-   }
+      LOG_INFO("server.http", "HTTP /v1 on %s and 127.0.0.1:%d (bearer, loopback only)", uds_path,
+               tcp_port);
    else
-      LOG_INFO("server.http", "HTTP /v1 listening on %s", uds_path);
+      LOG_INFO("server.http", "HTTP /v1 on %s", uds_path);
    return 0;
 }
 

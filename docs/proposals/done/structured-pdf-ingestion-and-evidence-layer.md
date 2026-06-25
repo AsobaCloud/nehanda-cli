@@ -1,12 +1,62 @@
 # Proposal: structured PDF ingestion + coordinate-anchored evidence layer (KB)
 
-- **State:** reviewed — **roundtable sign-off (R3)**. Three review rounds
-  (R1: 10 blockers → all CLOSED in R2; R2: 2 new security blockers → both CLOSED
-  in R3). R3 verdict: reviewer / architect / data-model **Pass**, security
-  **Conditional Pass** (residual = explicitly-deferred automated PII detection, a
-  defensible v1 boundary), **no remaining blocking findings — READY FOR
-  SIGN-OFF.** Ready for implementation per the phasing below, pending human
-  sign-off. See **Review revisions (R1)** / **(R2)** / **(R3)**.
+- **State:** ✅ **DONE — Phases 1–2 + the access-controlled evidence surface + agent reachability
+  shipped; proposal filed.** Phase 1 (#702/#706: extractor + geometry + §6 sensitivity/upload
+  enforcement), Phase 2 (#712 search_chunks; #715 §6 quarantine admin; #717 §5 escalation reads
+  open_page/open_neighbors/inspect_structure), and the **server-ingress wiring** (#720: four
+  agent-callable MCP tools `pdf_search_chunks` / `pdf_open_page` / `pdf_open_neighbors` /
+  `pdf_inspect_structure`, each project-scoped) are all merged to `testing`. The full
+  access-controlled KB evidence layer is live and agent-reachable. R3 roundtable sign-off
+  (reviewer / architect / data-model Pass; security Conditional Pass — residual is the
+  explicitly-deferred automated PII detection).
+  - **Carried forward to a successor proposal:** the remaining **deploy-tier** scope — Phase 3
+    (table-structure recognition → typed facts + `lookup_table`), Phase 4 (figure/table crops +
+    content-addressed blob store + `open_asset`, and OCR for scanned PDFs), plus the optional
+    **vector retrieval** path and the **§5-A answerability signal** — all of which need local
+    sidecar models (ONNX TSR/OCR + the embedder) and a deployed KB to build and validate against.
+    They remain specified below for design history; the live successor is
+    [[structured-pdf-tables-visual-and-ocr]] in `pending/`.
+- **Implementation status (2026-06-25).** **Phase 1 is being delivered in two increments.**
+  - **1a (PR #702): the pure extractor pipeline + geometry storage.** New module
+    `src/kb/kb_doc_pdf.{c,h}` parses poppler `pdftotext -bbox-layout` XHTML →
+    pages/lines → normalized `[0,1]` bbox → deterministic **page-boundary** chunking
+    (100-line cap; font/heading heuristics deferred — they are flaky across producers) →
+    transactional ingest into `kb_documents` (`doc_kind='pdf'`, `chunk_strategy='page'`,
+    new `page_start`/`page_end`) + the new **`kb_doc_regions`** per-line coordinate index,
+    with neighbour threading, delete-then-insert re-ingest (regions cascade), `embed_raw`
+    enqueue, and a 0-chunk guard that never wipes prior rows on an empty extraction. Behind
+    `kb_pdf_ingest_enabled` (default off) with **no live call site yet** — exercised by
+    `src/tests/test_kb_doc_pdf.c` only. **License posture: poppler runs as a separate
+    operator-installed process across a process boundary; aimee never links or bundles it.**
+  - **1b (PR #706): wiring + §6 sensitivity.** Hardened `pdftotext -bbox-layout` exec wrapper
+    (separate operator process; wall-clock deadline + stdout byte-cap + child RLIMIT_CPU/AS/
+    FSIZE + `setsid`/group-kill + 0600 `mkstemp` unlinked on all paths). `.pdf` uploads (flag
+    on) route to the structured extractor — gated on the `.pdf` extension AND `%PDF-` magic
+    (a bad-magic `.pdf` is rejected, not silently legacy-processed) — and MUST carry a valid
+    `sensitivity_class ∈ {public,internal,restricted}` (absent/invalid = 4xx, no rows). The
+    class is stamped on every chunk + region; `restricted → quarantine_state='pending'`.
+    **Safety:** PDF chunks are NOT embedded, and the KB search is vector-only, so PDF content
+    is invisible to existing search by construction until Phase 2's access-controlled
+    retrieval lands.
+  - **Phase 2 (PR #712): access-controlled citation retrieval.** New KB `/v1/pdf/search`
+    (`search_chunks`) — lexical (case-insensitive, bound-param) content match over PDF chunks,
+    returning line-level `{page_no, bbox, quote}` citations from `kb_doc_regions`; restricted/
+    `quarantine_state='pending'` documents are withheld; token scope inherited from
+    `kb_http_route_ex`. **Safety:** PDF content is excluded from every general/derived
+    kb_documents read path — `kb_fetch_doc_row` (both `/v1/search` legs), the curator
+    extraction queue + worker (so PDF text never becomes a searchable derived artifact — a leak
+    caught in review), and the convention-candidate sweep. PDFs stay un-embedded (retrieval is
+    lexical).
+  - **§6 quarantine admin (PR #715).** Owner-only `POST /v1/pdf/quarantine` (confirm/reject) —
+    confirm releases a pending restricted PDF (it becomes search_chunks-retrievable), reject
+    purges it; scoped `… RETURNING id` so it acts on exactly the pending PDF chunks.
+  - **§5 escalation read tools (PR #717).** `GET /v1/pdf/page` (a page's full citation set),
+    `/v1/pdf/neighbors` (prev/next reading-order chunks, project-scoped to close a cross-scope
+    IDOR caught in review), `/v1/pdf/structure` (the document outline) — all quarantine-gated.
+  - **Follow-up (makes it agent-reachable):** the server-ingress wiring — a `kb_client`
+    `search_chunks` call folded into `<aimee-context>` + naming the escalation tools in the
+    `explore-with` set; optionally, vector retrieval for search_chunks.
+  See **Review revisions (R1)** / **(R2)** / **(R3)** for the design history.
 - **Author:** JBailes
 - **Date:** 2026-06-13
 - **Charter roles:** Ingest (PDF → structured pages/blocks/lines/chunks with

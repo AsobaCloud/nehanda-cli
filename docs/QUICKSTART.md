@@ -13,7 +13,7 @@ The model is the same on every developer machine: **the services run in Docker (
 
 ## Part 1, Run the server (aimee-combined in Docker)
 
-The **combined** image co-locates both aimee binaries in one container: the knowledge base (`aimee-kb`) on loopback `:8741` inside the container, and the server (`aimee-server`) fronting `/v1` on `:8740`. Postgres (DB2 + pgvector) and a CPU embedder come up alongside it as separate services.
+The **combined** image co-locates both aimee binaries in one container: the knowledge base (`aimee-kb`) on loopback `:8741` inside the container, and the server (`aimee-server`) fronting `/v1` over native TLS on `:8743` (self-signed cert; plaintext `:8740` is loopback-only and not published). Postgres (DB2 + pgvector) and a CPU embedder come up alongside it as separate services.
 
 ### Prerequisites
 
@@ -33,7 +33,7 @@ By default this brings up **three** services. The browser webchat is a first-cla
 
 | Service | What it is | Port |
 |---------|-----------|------|
-| `aimee-server-kb` | Both aimee binaries (server + kb) **and** the browser webchat UI, in one container | `8740` (server `/v1`), `8741` (kb `/v1`), `8443` (webchat HTTPS, self-signed) |
+| `aimee-server-kb` | Both aimee binaries (server + kb) **and** the browser webchat UI, in one container | `8743` (server `/v1`, native TLS self-signed; plaintext `8740` loopback-only), `8741` (kb `/v1`), `8443` (webchat HTTPS, self-signed) |
 | `postgres` | `pgvector/pgvector:pg16`, DB2 (`aimee_shared`) for knowledge + vectors | internal |
 | `embedder` | CPU embedder sidecar (`perplexity-ai/pplx-embed-v1-0.6b`) | internal |
 | `llm` *(optional)* | Curator LLM sidecar (Gemma 3n E4B via `llama.cpp`) for doc/code extraction. Off unless you add `--profile curator-llm`; otherwise the curator stays idle or you point `LLM_ENDPOINT` at your own OpenAI-compatible endpoint. | internal |
@@ -45,9 +45,9 @@ The kb auto-applies its DB2 schema (tables + `pg_trgm`/`vector` extensions) on f
 ```bash
 docker compose -f compose.combined.yaml ps          # all services should be "healthy"
 
-# Server /v1 (default bearer is "aimee-local-dev"):
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/health
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/kb/status
+# Server /v1 over TLS (default bearer is "aimee-local-dev"; -k accepts the self-signed cert):
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/health
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/kb/status
 
 # In-container kb directly (DB + pgvector status):
 curl 'http://localhost:8741/v1/health?status=1'
@@ -122,12 +122,12 @@ aimee version
 ### 2.2 Point the client at your server
 
 ```bash
-aimee remote set http://YOUR_SERVER:8740 aimee-local-dev
+aimee remote set https://YOUR_SERVER:8743 aimee-local-dev
 aimee remote status     # resolved transport + /v1/health probe
 aimee status            # server, DB1, and kb health
 ```
 
-Use your real bearer token instead of `aimee-local-dev` if you changed it. For an HTTPS server, `https://` works with certificate verification on by default; set `AIMEE_TLS_INSECURE=1` for a self-signed dev cert. Alternatives to `aimee remote set`: set `AIMEE_SERVER_URL` / `AIMEE_SERVER_TOKEN`, or pass `--server http://YOUR_SERVER:8740 --server-token=...` per command. Precedence is `--server` flag > env > persisted `remote.conf`.
+Use your real bearer token instead of `aimee-local-dev` if you changed it. The server's `/v1` is TLS-only off-loopback; certificate verification is on by default, so set `AIMEE_TLS_INSECURE=1` for the auto-provisioned self-signed cert (or trust/pin it). Alternatives to `aimee remote set`: set `AIMEE_SERVER_URL` / `AIMEE_SERVER_TOKEN`, or pass `--server https://YOUR_SERVER:8743 --server-token=...` per command. Precedence is `--server` flag > env > persisted `remote.conf`.
 
 ### 2.3 Configure your AI coding tool
 
@@ -206,12 +206,12 @@ aimee version
 ### 3.2 Point the client at your server
 
 ```powershell
-aimee remote set http://YOUR_SERVER:8740 aimee-local-dev
+aimee remote set https://YOUR_SERVER:8743 aimee-local-dev
 aimee remote status     # shows the resolved transport + a /v1/health probe
 aimee status            # server, DB1, and kb health
 ```
 
-Use your real bearer token instead of `aimee-local-dev` if you changed it. For an HTTPS server, `https://` works with certificate verification on by default (Schannel against the Windows cert store); set `AIMEE_TLS_INSECURE=1` for a self-signed dev cert. Alternatives to `aimee remote set`: set `AIMEE_SERVER_URL` / `AIMEE_SERVER_TOKEN` environment variables, or pass `--server http://YOUR_SERVER:8740 --server-token=...` per command. Precedence is `--server` flag > env > persisted `remote.conf`.
+Use your real bearer token instead of `aimee-local-dev` if you changed it. The server's `/v1` is TLS-only off-loopback; `https://` works with certificate verification on by default (Schannel against the Windows cert store), so set `AIMEE_TLS_INSECURE=1` for the auto-provisioned self-signed cert (or trust/pin it). Alternatives to `aimee remote set`: set `AIMEE_SERVER_URL` / `AIMEE_SERVER_TOKEN` environment variables, or pass `--server https://YOUR_SERVER:8743 --server-token=...` per command. Precedence is `--server` flag > env > persisted `remote.conf`.
 
 ### 3.3 Configure your AI coding tool
 
@@ -299,7 +299,7 @@ aimee version
 ### 4.2 Point the client at your server
 
 ```bash
-aimee remote set http://YOUR_SERVER:8740 aimee-local-dev
+aimee remote set https://YOUR_SERVER:8743 aimee-local-dev
 aimee remote status     # resolved transport + /v1/health probe
 aimee status            # server, DB1, and kb health
 ```

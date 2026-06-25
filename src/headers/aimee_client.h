@@ -72,6 +72,13 @@ extern "C"
    char *aimee_client_request(const char *method, const char *path, const char *body,
                               int *status_out);
 
+   /* Security guard: returns 1 when transmitting bearer |token| to a server at
+    * (|is_https|, |host|) would expose the credential in cleartext — a non-empty
+    * token over plaintext http:// to a non-loopback host. The remote-TCP request
+    * path refuses such a request rather than leak the bearer on the wire.
+    * Exposed for unit testing of the invariant. */
+   int aimee_client_would_leak_cleartext(int is_https, const char *host, const char *token);
+
 #ifdef __cplusplus
 }
 #endif
