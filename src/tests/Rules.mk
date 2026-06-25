@@ -44,6 +44,7 @@ TEST_WORKSPACE_OBJS_EXTRA = $(OBJDIR)/workspace.o $(DB1_OBJS) \
                              $(OBJDIR)/server/minimax_profile.o \
                              $(OBJDIR)/model_registry.o $(OBJDIR)/models_dev.o $(OBJDIR)/models_dev_cache.o \
                              $(OBJDIR)/tests/support/delegate_child_env_export_stub.o \
+                             $(OBJDIR)/gateway_delegate.o $(OBJDIR)/gateway_pipeline.o $(OBJDIR)/gateway_policy.o \
                              $(PLATFORM_AGENT_OBJS)
 
 TEST_MCP_CLIENT_OBJS = $(OBJDIR)/server/mcp_client.o \
@@ -181,6 +182,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-anthropic-http-streaming-p2c \
                $(TESTPREFIX)/unit-test-gateway-policy \
                $(TESTPREFIX)/unit-test-gateway-pipeline \
+               $(TESTPREFIX)/unit-test-gateway-p4-delegate \
                $(TESTPREFIX)/unit-test-hud \
                $(TESTPREFIX)/unit-test-coord-jobs \
                $(TESTPREFIX)/unit-test-plan-waves \
@@ -1668,6 +1670,9 @@ $(TESTPREFIX)/unit-test-gateway-policy: $(OBJDIR)/tests/test_gateway_policy.o $(
 $(TESTPREFIX)/unit-test-gateway-pipeline: $(OBJDIR)/tests/test_gateway_pipeline.o $(OBJDIR)/gateway_pipeline.o
 	$(TESTLINK_MIN) -o $@ $^ $(L_MINIMAL)
 
+$(TESTPREFIX)/unit-test-gateway-p4-delegate: $(OBJDIR)/tests/test_gateway_p4_delegate.o $(OBJDIR)/gateway_delegate.o $(OBJDIR)/gateway_policy.o $(OBJDIR)/gateway_pipeline.o $(OBJDIR)/json_fluent.o $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(L_MINIMAL)
+
 $(OBJDIR)/tests/%.o: tests/%.c
 	@mkdir -p $(dir $@)
 	$(CC) -c $(TEST_C_FLAGS) -o $@ $<
@@ -2705,6 +2710,7 @@ $(TESTPREFIX)/unit-test-otel: $(OBJDIR)/tests/test_otel.o \
                      $(OBJDIR)/server/agent_bridge.o $(OBJDIR)/server/anthropic_shape.o $(OBJDIR)/server/tool_call_args.o \
                      $(OBJDIR)/server/agent_request_shaping.o \
                      $(OBJDIR)/server/http_retry.o \
+                     $(OBJDIR)/gateway_delegate.o $(OBJDIR)/gateway_pipeline.o $(OBJDIR)/gateway_policy.o \
                      $(TEST_CORE_OBJS) \
                      $(PLATFORM_AGENT_OBJS)
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
