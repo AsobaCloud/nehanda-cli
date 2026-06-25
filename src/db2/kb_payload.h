@@ -189,6 +189,14 @@ extern "C"
     * number written (<= max). */
    int db2_kb_doc_regions_for_chunk(int64_t chunk_id, db2_kb_pdf_region_t *out, int max);
 
+   /* §6 quarantine admin (owner action). For a (project, document_key) structured PDF
+    * currently in quarantine_state='pending': confirm clears the state (the doc becomes
+    * retrievable via search_chunks); reject purges its chunks + regions. Both return the
+    * number of pending chunks acted on (>0), 0 if there is no pending PDF for that key, or
+    * -1 on error. */
+   int db2_kb_pdf_quarantine_confirm(const char *project, const char *document_key);
+   int db2_kb_pdf_quarantine_reject(const char *project, const char *document_key);
+
 #ifdef __cplusplus
 }
 #endif
