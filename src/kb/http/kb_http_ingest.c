@@ -10,6 +10,8 @@
 #include "kb_doc_hash.h"
 #include "kb_ingest_normalize.h"
 #include "db2/kb_docs.h"
+#include "config.h"
+#include "kb_doc_pdf.h"
 #include "cJSON.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -149,6 +151,79 @@ int handle_post_docs(const char *body, int body_len, char *out_buf, int out_cap)
 
    char content_hash[KB_DOC_HASH_HEX_LEN + 1];
    kb_doc_content_hash(file_content, file_len, content_hash);
+
+   /* structured-PDF routing (Phase 1b): when enabled, a `.pdf` upload is owned by the
+    * structured extractor (kb_documents + kb_doc_regions), NOT the legacy flat pdftotext
+    * path. A `.pdf` whose bytes are not a real PDF (no %PDF- magic) is REJECTED rather than
+    * silently routed to the legacy path — under the flag a `.pdf` must be a PDF, so a
+    * spoofed/corrupt header cannot sneak in an untagged document. The upload MUST also carry
+    * a valid sensitivity_class. Every reject is a 4xx with NO rows written. */
+   {
+      config_t cfg;
+      config_load(&cfg);
+      size_t fn_len = strlen(filename);
+      int ext_pdf = fn_len >= 4 && filename[fn_len - 4] == '.' &&
+                    (filename[fn_len - 3] | 0x20) == 'p' && (filename[fn_len - 2] | 0x20) == 'd' &&
+                    (filename[fn_len - 1] | 0x20) == 'f';
+      if (cfg.kb_pdf_ingest_enabled && ext_pdf)
+      {
+         int magic_pdf = file_len >= 5 && memcmp(file_content, "%PDF-", 5) == 0;
+         if (!magic_pdf)
+         {
+            snprintf(out_buf, (size_t)out_cap,
+                     "{\"error\":\"file has a .pdf name but is not a PDF (missing %%PDF "
+                     "header)\",\"code\":\"not_a_pdf\"}");
+            return 400; /* no rows written; not routed to the legacy path */
+         }
+         char sclass[32] = "";
+         multipart_extract(body, body_len, "sensitivity_class", sclass, sizeof(sclass), NULL, 0,
+                           NULL, NULL);
+         if (!kb_pdf_sensitivity_valid(sclass))
+         {
+            snprintf(out_buf, (size_t)out_cap,
+                     "{\"error\":\"a PDF upload requires sensitivity_class in "
+                     "{public,internal,restricted}\",\"code\":\"sensitivity_required\"}");
+            return 400; /* no rows written */
+         }
+
+         /* poppler runs as a separate operator-installed process, with a 30s wall-clock
+          * deadline. The `-bbox-layout` XHTML is MUCH larger than the (typically
+          * Flate-compressed) PDF bytes — every word is wrapped in verbose
+          * `<word xMin=.. yMin=.. xMax=.. yMax=..>` markup — so the output buffer is a
+          * generous fixed cap, not a multiple of file_len (the upload itself is already
+          * bounded by the KB request-size limit). The cap also bounds a crafted PDF that
+          * tries to emit unbounded XHTML (the exec wrapper aborts past it). */
+         int xcap = 16 * 1024 * 1024;
+         char *xhtml = malloc((size_t)xcap);
+         if (!xhtml)
+         {
+            snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+            return 500;
+         }
+         if (kb_pdf_exec_bbox_layout((const unsigned char *)file_content, file_len, xhtml, xcap,
+                                     30000) != 0)
+         {
+            free(xhtml);
+            snprintf(out_buf, (size_t)out_cap,
+                     "{\"error\":\"pdf extraction failed\",\"code\":\"converter_error\"}");
+            return 422;
+         }
+         kb_pdf_ingest_stats_t st = {0};
+         int rc = kb_doc_pdf_ingest_xhtml(scope, filename, content_hash, xhtml, sclass, &st);
+         free(xhtml);
+         if (rc < 0)
+         {
+            snprintf(out_buf, (size_t)out_cap, "{\"error\":\"db error\"}");
+            return 503;
+         }
+         kb_ws_publish_invalidation("doc", "global", NULL);
+         snprintf(
+             out_buf, (size_t)out_cap,
+             "{\"doc_kind\":\"pdf\",\"chunks\":%d,\"regions\":%d,\"sensitivity_class\":\"%s\"}",
+             st.chunks, st.regions, sclass);
+         return 201;
+      }
+   }
 
    char *normalized = malloc((size_t)(file_len * 2 + 4096));
    if (!normalized)

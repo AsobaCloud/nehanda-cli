@@ -522,7 +522,9 @@ int64_t db2_kb_documents_insert_chunk_pdf(const char *project, const char *file_
                                           const char *file_hash, int chunk_index,
                                           const char *heading_path, int line_start, int line_end,
                                           const char *content, int token_count,
-                                          const char *chunk_strategy, int page_start, int page_end)
+                                          const char *chunk_strategy, int page_start, int page_end,
+                                          const char *sensitivity_class,
+                                          const char *quarantine_state)
 {
    void *conn = db2_conn();
    if (!conn)
@@ -531,8 +533,9 @@ int64_t db2_kb_documents_insert_chunk_pdf(const char *project, const char *file_
    static const char *sql =
        "INSERT INTO kb_documents"
        " (project, file_path, file_hash, chunk_index, heading_path, line_start, line_end,"
-       "  content, token_count, doc_kind, chunk_strategy, page_start, page_end, updated_at)"
-       " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pdf', ?10, ?11, ?12, pg_now_text())"
+       "  content, token_count, doc_kind, chunk_strategy, page_start, page_end,"
+       "  sensitivity_class, quarantine_state, updated_at)"
+       " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pdf', ?10, ?11, ?12, ?13, ?14, pg_now_text())"
        " RETURNING id";
    char err[KBP_ERRBUF] = "";
    aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
@@ -550,6 +553,8 @@ int64_t db2_kb_documents_insert_chunk_pdf(const char *project, const char *file_
    aimee_pg_bind_text(st, "?10", chunk_strategy ? chunk_strategy : "heading");
    aimee_pg_bind_int(st, "?11", page_start);
    aimee_pg_bind_int(st, "?12", page_end);
+   aimee_pg_bind_text(st, "?13", sensitivity_class ? sensitivity_class : "");
+   aimee_pg_bind_text(st, "?14", quarantine_state ? quarantine_state : "");
    int64_t new_id = -1;
    if (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
       new_id = aimee_pg_column_int64(st, 0);
@@ -591,7 +596,8 @@ void db2_kb_txn_rollback(void)
  * is already normalized to [0,1] (top-left origin, per page) by the caller. */
 int64_t db2_kb_doc_regions_insert(int64_t chunk_id, const char *document_key, int page_no,
                                   double x0, double y0, double x1, double y1, const char *quote,
-                                  int line_index, const char *content_type)
+                                  int line_index, const char *content_type,
+                                  const char *sensitivity_class)
 {
    void *conn = db2_conn();
    if (!conn || chunk_id <= 0)
@@ -599,8 +605,9 @@ int64_t db2_kb_doc_regions_insert(int64_t chunk_id, const char *document_key, in
 
    static const char *sql =
        "INSERT INTO kb_doc_regions"
-       " (chunk_id, document_key, page_no, x0, y0, x1, y1, quote, line_index, content_type)"
-       " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+       " (chunk_id, document_key, page_no, x0, y0, x1, y1, quote, line_index, content_type,"
+       "  sensitivity_class)"
+       " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
        " RETURNING id";
    char err[KBP_ERRBUF] = "";
    aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
@@ -616,6 +623,7 @@ int64_t db2_kb_doc_regions_insert(int64_t chunk_id, const char *document_key, in
    aimee_pg_bind_text(st, "?8", quote ? quote : "");
    aimee_pg_bind_int(st, "?9", line_index);
    aimee_pg_bind_text(st, "?10", content_type ? content_type : "text");
+   aimee_pg_bind_text(st, "?11", sensitivity_class ? sensitivity_class : "");
    int64_t new_id = -1;
    if (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
       new_id = aimee_pg_column_int64(st, 0);
