@@ -283,6 +283,18 @@ CREATE TABLE IF NOT EXISTS kb_doc_regions (
 CREATE INDEX IF NOT EXISTS idx_kb_doc_regions_chunk ON kb_doc_regions (chunk_id, line_index);
 CREATE INDEX IF NOT EXISTS idx_kb_doc_regions_dockey ON kb_doc_regions (document_key, page_no);
 
+-- structured-pdf Phase 1b: §6 sensitivity + quarantine. sensitivity_class is the
+-- uploader-declared class (public|internal|restricted), validated at the upload surface
+-- and stamped on the chunk AND copied to every region so retrieval filters without a join.
+-- quarantine_state holds 'pending' for a restricted document (withheld) or '' otherwise.
+-- Empty default is for the non-PDF rows that never carry these; PDF rows always get a
+-- validated class at ingest.
+ALTER TABLE kb_documents
+   ADD COLUMN IF NOT EXISTS sensitivity_class TEXT NOT NULL DEFAULT '',
+   ADD COLUMN IF NOT EXISTS quarantine_state TEXT NOT NULL DEFAULT '';
+ALTER TABLE kb_doc_regions
+   ADD COLUMN IF NOT EXISTS sensitivity_class TEXT NOT NULL DEFAULT '';
+
 ALTER TABLE memory_chunks
    ADD COLUMN IF NOT EXISTS memory_chunks_fts_tsv tsvector GENERATED ALWAYS AS (
       to_tsvector('simple', coalesce(chunk_text, ''))) STORED;

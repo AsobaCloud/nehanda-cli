@@ -8,9 +8,18 @@
 #include "log.h"
 
 #include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
 
 /* Guardrail caps so a pathological document cannot exhaust memory. Parsing stops once
  * hit (partial extraction, logged) rather than erroring. */
@@ -515,13 +524,213 @@ void kb_pdf_free_doc(kb_pdf_doc_t *doc)
    memset(doc, 0, sizeof(*doc));
 }
 
+/* Child resource caps (defense-in-depth against a crafted PDF that makes pdftotext spin or
+ * balloon). The wall-clock deadline below is the primary bound; these are belt-and-braces. */
+#define KB_PDF_CHILD_CPU_SECS    30
+#define KB_PDF_CHILD_AS_BYTES    (1024UL * 1024UL * 1024UL) /* 1 GiB address space */
+#define KB_PDF_CHILD_FSIZE_BYTES (256UL * 1024UL * 1024UL)
+
+static long ms_since(const struct timespec *start)
+{
+   struct timespec now;
+   clock_gettime(CLOCK_MONOTONIC, &now);
+   return (now.tv_sec - start->tv_sec) * 1000L + (now.tv_nsec - start->tv_nsec) / 1000000L;
+}
+
+int kb_pdf_exec_bbox_layout(const unsigned char *bytes, int n, char *out, int out_cap,
+                            int timeout_ms)
+{
+   if (!bytes || n <= 0 || !out || out_cap <= 1)
+      return -1;
+   out[0] = '\0';
+
+   char tmppath[] = "/tmp/aimee_pdf_XXXXXX";
+   int tfd = mkstemp(tmppath);
+   if (tfd < 0)
+   {
+      LOG_WARN("kb_doc_pdf", "mkstemp failed for pdftotext input");
+      return -1;
+   }
+   (void)fchmod(tfd, 0600);
+   int rc = -1;
+   {
+      int off = 0;
+      while (off < n)
+      {
+         ssize_t w = write(tfd, bytes + off, (size_t)(n - off));
+         if (w < 0)
+         {
+            if (errno == EINTR)
+               continue; /* retry — a signal must not corrupt valid input */
+            break;
+         }
+         if (w == 0)
+            break;
+         off += (int)w;
+      }
+      close(tfd);
+      if (off != n)
+      {
+         unlink(tmppath);
+         return -1;
+      }
+   }
+
+   int pfd[2];
+   if (pipe(pfd) != 0)
+   {
+      unlink(tmppath);
+      return -1;
+   }
+
+   pid_t pid = fork();
+   if (pid < 0)
+   {
+      close(pfd[0]);
+      close(pfd[1]);
+      unlink(tmppath);
+      return -1;
+   }
+   if (pid == 0)
+   {
+      /* child */
+      setsid(); /* own session/group: isolates it from the server's signals and lets the
+                 * parent kill the whole group (defense-in-depth if pdftotext ever forks) */
+      close(pfd[0]);
+      dup2(pfd[1], STDOUT_FILENO);
+      close(pfd[1]);
+      int devnull = open("/dev/null", O_WRONLY);
+      if (devnull >= 0)
+      {
+         dup2(devnull, STDERR_FILENO);
+         close(devnull);
+      }
+      struct rlimit rl;
+      rl.rlim_cur = rl.rlim_max = KB_PDF_CHILD_CPU_SECS;
+      setrlimit(RLIMIT_CPU, &rl);
+      rl.rlim_cur = rl.rlim_max = KB_PDF_CHILD_AS_BYTES;
+      setrlimit(RLIMIT_AS, &rl);
+      rl.rlim_cur = rl.rlim_max = KB_PDF_CHILD_FSIZE_BYTES;
+      setrlimit(RLIMIT_FSIZE, &rl);
+      execlp("pdftotext", "pdftotext", "-bbox-layout", tmppath, "-", (char *)NULL);
+      _exit(127);
+   }
+
+   /* parent */
+   close(pfd[1]);
+   fcntl(pfd[0], F_SETFL, O_NONBLOCK);
+
+   struct timespec start;
+   clock_gettime(CLOCK_MONOTONIC, &start);
+   int total = 0, timed_out = 0, over_cap = 0;
+   for (;;)
+   {
+      long elapsed = ms_since(&start);
+      long remaining = (long)timeout_ms - elapsed;
+      if (remaining <= 0)
+      {
+         timed_out = 1;
+         break;
+      }
+      struct pollfd p = {pfd[0], POLLIN, 0};
+      int pr = poll(&p, 1, (int)remaining);
+      if (pr == 0)
+      {
+         timed_out = 1;
+         break;
+      }
+      if (pr < 0)
+      {
+         if (errno == EINTR)
+            continue;
+         break;
+      }
+      ssize_t r = read(pfd[0], out + total, (size_t)(out_cap - 1 - total));
+      if (r == 0)
+         break; /* EOF — child closed stdout */
+      if (r < 0)
+      {
+         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+            continue;
+         break;
+      }
+      total += (int)r;
+      if (total >= out_cap - 1)
+      {
+         over_cap = 1;
+         break;
+      }
+   }
+   out[total < 0 ? 0 : total] = '\0';
+   close(pfd[0]);
+
+   if (timed_out || over_cap)
+   {
+      kill(pid, SIGKILL);  /* the child directly … */
+      kill(-pid, SIGKILL); /* … and its process group (post-setsid; ESRCH no-op otherwise) */
+   }
+
+   /* Bounded reap: poll waitpid until a short grace deadline, then SIGKILL + block. */
+   int status = 0, reaped = 0;
+   struct timespec reap_start;
+   clock_gettime(CLOCK_MONOTONIC, &reap_start);
+   for (;;)
+   {
+      pid_t w = waitpid(pid, &status, WNOHANG);
+      if (w == pid)
+      {
+         reaped = 1;
+         break;
+      }
+      if (w < 0 && errno != EINTR)
+         break;
+      if (ms_since(&reap_start) > 2000)
+      {
+         kill(pid, SIGKILL);
+         kill(-pid, SIGKILL);
+         /* blocking reap, EINTR-safe — never leave a zombie */
+         while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+            ;
+         reaped = 1;
+         break;
+      }
+      struct timespec ts = {0, 5 * 1000 * 1000}; /* 5ms */
+      nanosleep(&ts, NULL);
+   }
+
+   unlink(tmppath);
+
+   if (timed_out)
+      LOG_WARN("kb_doc_pdf", "pdftotext timed out after %dms", timeout_ms);
+   else if (over_cap)
+      LOG_WARN("kb_doc_pdf", "pdftotext output exceeded %d-byte cap", out_cap);
+   else if (reaped && WIFEXITED(status) && WEXITSTATUS(status) == 0)
+      rc = 0;
+   else
+      LOG_WARN("kb_doc_pdf", "pdftotext failed (exit status %d)", status);
+
+   return rc;
+}
+
+int kb_pdf_sensitivity_valid(const char *s)
+{
+   return s &&
+          (strcmp(s, "public") == 0 || strcmp(s, "internal") == 0 || strcmp(s, "restricted") == 0);
+}
+
 int kb_doc_pdf_ingest(const char *project, const char *file_path, const char *file_hash,
-                      const kb_pdf_doc_t *doc, kb_pdf_ingest_stats_t *stats)
+                      const kb_pdf_doc_t *doc, const char *sensitivity_class,
+                      kb_pdf_ingest_stats_t *stats)
 {
    if (stats)
       memset(stats, 0, sizeof(*stats));
    if (!project || !file_path || !file_hash || !doc)
       return -1;
+   /* The upload surface validates the class before reaching here; refuse to ingest under
+    * an invalid/empty class so a row can never be written un-tagged. */
+   if (!kb_pdf_sensitivity_valid(sensitivity_class))
+      return -1;
+   const char *quarantine = strcmp(sensitivity_class, "restricted") == 0 ? "pending" : "";
 
    kb_pdf_chunk_t *chunks = NULL;
    int n_chunks = 0;
@@ -560,7 +769,7 @@ int kb_doc_pdf_ingest(const char *project, const char *file_path, const char *fi
       int64_t id = db2_kb_documents_insert_chunk_pdf(
           project, file_path, file_hash, i, "" /* heading_path: Phase-1 page chunking */,
           c->line_start, c->line_end, c->content ? c->content : "", c->token_count,
-          "page" /* chunk_strategy */, c->page_start, c->page_end);
+          "page" /* chunk_strategy */, c->page_start, c->page_end, sensitivity_class, quarantine);
       if (id <= 0)
          goto fail;
       db2_kb_documents_link_neighbours(id, prev_id); /* void; covered by the txn */
@@ -569,17 +778,16 @@ int kb_doc_pdf_ingest(const char *project, const char *file_path, const char *fi
       {
          const kb_pdf_line_t *ln = c->lines[j];
          if (db2_kb_doc_regions_insert(id, file_path, ln->page_no, ln->x0, ln->y0, ln->x1, ln->y1,
-                                       ln->text ? ln->text : "", j, "text") <= 0)
+                                       ln->text ? ln->text : "", j, "text", sensitivity_class) <= 0)
             goto fail;
          n_regions++;
       }
 
-      /* The enqueue is an INSERT on the same db2 connection inside this same
-       * transaction, so a later failure/ROLLBACK reverts it atomically too — there is
-       * no window where an embed job outlives a rolled-back chunk. (Assumes no outer
-       * transaction is already open; Phase-1 ingest is invoked standalone.) */
-      if (db2_kb_async_enqueue("embed_raw", id, project) != 0)
-         goto fail;
+      /* Phase 1b deliberately does NOT enqueue 'embed_raw' for PDF chunks: with no vector
+       * for a PDF chunk, the existing vector search cannot surface it, so PDF content
+       * stays invisible to today's search by construction (the lexical path is filtered
+       * separately on doc_kind). Embedding + the access-controlled retrieval that makes
+       * these searchable land together in Phase 2. */
       prev_id = id;
    }
 
@@ -601,13 +809,14 @@ fail:
 }
 
 int kb_doc_pdf_ingest_xhtml(const char *project, const char *file_path, const char *file_hash,
-                            const char *xhtml, kb_pdf_ingest_stats_t *stats)
+                            const char *xhtml, const char *sensitivity_class,
+                            kb_pdf_ingest_stats_t *stats)
 {
    kb_pdf_doc_t doc;
    if (kb_pdf_parse_bbox_layout(xhtml, &doc) != 0)
       return -1;
    kb_pdf_normalize(&doc);
-   int rc = kb_doc_pdf_ingest(project, file_path, file_hash, &doc, stats);
+   int rc = kb_doc_pdf_ingest(project, file_path, file_hash, &doc, sensitivity_class, stats);
    kb_pdf_free_doc(&doc);
    return rc;
 }
