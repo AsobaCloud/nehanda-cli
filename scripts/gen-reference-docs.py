@@ -132,6 +132,9 @@ CFG_KEY_DESC = {
     "fidelity_check_enabled": "Run the answer-fidelity judge on terminal-text turns "
     "(default off; requires kb_evidence_emit_enabled + ingress_preinject_enabled).",
     "guardrail_mode": "Guardrail enforcement mode (off / warn / block).",
+    "code_hybrid_weight_code": "RRF weight for the lexical-code signal in /v1/code/hybrid (default 1.0; <=0 disables it).",
+    "code_hybrid_weight_graph": "RRF weight for the structural call-graph signal in /v1/code/hybrid (default 1.0; <=0 disables it).",
+    "code_hybrid_rrf_k": "Reciprocal Rank Fusion rank constant k for /v1/code/hybrid (default 60).",
     "guardrails_blast_radius_advisory_enabled": "Surface a structural blast-radius advisory (graph-impacted files) before an edit (advisory, fail-open).",
     "guardrails_semantic_allow_ml_only_block": "Allow blocking on the ML classifier alone.",
     "guardrails_semantic_block_threshold": "Semantic score threshold to block.",
