@@ -1053,6 +1053,240 @@ int handle_get_code_graph_route(const char *method, const char *query_string, ch
    return handle_get_code_graph(query_string, out_buf, out_cap);
 }
 
+/* GET /v1/code/graph/surprising?project&max_results&k&d_min&percentile&min_cosine
+ * §4 surprising links: file-node pairs that are semantically CLOSE (high embedding
+ * cosine) yet structurally FAR (graph hop-distance >= d_min, or disconnected) — the
+ * "this module reinvented that one" signal. Gathers candidate high-similarity pairs
+ * from code_embeddings (pgvec self-kNN; a row's node_key === the projection file-node
+ * key, so pairs join the graph directly), then filters them against the projection
+ * graph with the pure `kb_graph_surprising` (data-driven cosine percentile + hop
+ * distance). Read-only analytics, off the agent hot path. The §4 LLM-judge / precision
+ * self-suppress confirmation stage needs the LLM + a sampled corpus and is a follow-up;
+ * this route returns the structural candidates. */
+#define SURPRISING_MAX_PAIRS 1000
+/* Bound on anchor rows the self-kNN probes, so cost is O(anchors*k) HNSW probes
+ * regardless of project size; a huge project is sampled (and flagged truncated). */
+#define SURPRISING_MAX_ANCHORS 5000
+
+int handle_get_code_graph_surprising(const char *query_string, char *out_buf, int out_cap)
+{
+   char project[256] = "";
+   if (!code_qparam(query_string, "project", project, sizeof(project)) || !project[0])
+      return code_scan_write_error(out_buf, out_cap, "missing project");
+
+   char tmp[32] = "";
+   int max_r = 20;
+   if (code_qparam(query_string, "max_results", tmp, sizeof(tmp)))
+      max_r = atoi(tmp);
+   if (max_r < 1)
+      max_r = 1;
+   if (max_r > 200)
+      max_r = 200;
+
+   int k = 5; /* nearest neighbors gathered per file node */
+   if (code_qparam(query_string, "k", tmp, sizeof(tmp)))
+      k = atoi(tmp);
+   if (k < 1)
+      k = 1;
+   if (k > 50)
+      k = 50;
+
+   int d_min = 4; /* min structural hop distance to count as "far" */
+   if (code_qparam(query_string, "d_min", tmp, sizeof(tmp)))
+      d_min = atoi(tmp);
+   if (d_min < 1)
+      d_min = 1;
+
+   double percentile = 0.9; /* data-driven cosine floor: top decile of candidates */
+   if (code_qparam(query_string, "percentile", tmp, sizeof(tmp)))
+      percentile = atof(tmp);
+   if (percentile < 0.0)
+      percentile = 0.0;
+   if (percentile > 1.0)
+      percentile = 1.0;
+
+   double min_cosine = 0.5; /* prefilter floor on the SQL gather (relevance gate) */
+   if (code_qparam(query_string, "min_cosine", tmp, sizeof(tmp)))
+      min_cosine = atof(tmp);
+   if (min_cosine < 0.0)
+      min_cosine = 0.0;
+   if (min_cosine > 1.0)
+      min_cosine = 1.0;
+
+   if (!db2_is_initialized())
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"knowledge service not initialized\"}");
+      return 503;
+   }
+
+   code_projection_edge_t *edges = calloc(HUBS_MAX_EDGES, sizeof(*edges));
+   kb_graph_edge_t *gedges = calloc(HUBS_MAX_EDGES, sizeof(*gedges));
+   char *a_keys = calloc(SURPRISING_MAX_PAIRS, KB_GRAPH_NODE_MAX);
+   char *b_keys = calloc(SURPRISING_MAX_PAIRS, KB_GRAPH_NODE_MAX);
+   double *cosines = calloc(SURPRISING_MAX_PAIRS, sizeof(*cosines));
+   kb_graph_pair_t *pairs = calloc(SURPRISING_MAX_PAIRS, sizeof(*pairs));
+   /* One extra slot: ask kb_graph_surprising for max_r+1 so a return of >max_r
+    * tells us the result was page-capped (we still emit only max_r) — precise
+    * truncation, vs. over-reporting whenever exactly max_r qualify. */
+   kb_graph_surprising_t *out = calloc((size_t)max_r + 1, sizeof(*out));
+   if (!edges || !gedges || !a_keys || !b_keys || !cosines || !pairs || !out)
+   {
+      free(edges);
+      free(gedges);
+      free(a_keys);
+      free(b_keys);
+      free(cosines);
+      free(pairs);
+      free(out);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+
+   int ne = db2_code_projection_list_edges(project, edges, HUBS_MAX_EDGES);
+   if (ne < 0)
+   {
+      free(edges);
+      free(gedges);
+      free(a_keys);
+      free(b_keys);
+      free(cosines);
+      free(pairs);
+      free(out);
+      snprintf(out_buf, (size_t)out_cap,
+               "{\"error\":\"projection graph unavailable (knowledge service not initialized)\"}");
+      return 503;
+   }
+   /* Build the distance graph WITHOUT the project containment super-hub. The
+    * projection has a `project --contains--> <every file>` edge, so over the full
+    * graph any two same-project files are exactly 2 hops apart (file ← project →
+    * file) — the hop-distance signal would be meaningless. Dropping project-incident
+    * edges makes distance reflect real code coupling (file → symbol → … → file), so
+    * a semantically-close pair that is structurally far/disconnected actually shows. */
+   int ng = 0;
+   for (int i = 0; i < ne; i++)
+   {
+      if (strncmp(edges[i].source, "project:", 8) == 0 ||
+          strncmp(edges[i].target, "project:", 8) == 0)
+         continue;
+      snprintf(gedges[ng].source, sizeof(gedges[ng].source), "%s", edges[i].source);
+      snprintf(gedges[ng].target, sizeof(gedges[ng].target), "%s", edges[i].target);
+      gedges[ng].weight = edges[i].structural_weight;
+      ng++;
+   }
+   free(edges);
+   edges = NULL;
+
+   /* np == 0 is a legitimate empty (project not embedded yet, or no candidate
+    * pairs); np < 0 is a genuine vector-store failure (no connection / query error)
+    * and must NOT masquerade as "no surprising links" — surface it as a 503 so
+    * callers/alerting can tell an outage from an empty result. */
+   int np = pgvec_code_similar_pairs(project, k, min_cosine, SURPRISING_MAX_ANCHORS, a_keys, b_keys,
+                                     KB_GRAPH_NODE_MAX, cosines, SURPRISING_MAX_PAIRS);
+   if (np < 0)
+   {
+      free(gedges);
+      free(a_keys);
+      free(b_keys);
+      free(cosines);
+      free(pairs);
+      free(out);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"vector store unavailable\"}");
+      return 503;
+   }
+   for (int i = 0; i < np; i++)
+   {
+      snprintf(pairs[i].a, sizeof(pairs[i].a), "%s", a_keys + (size_t)i * KB_GRAPH_NODE_MAX);
+      snprintf(pairs[i].b, sizeof(pairs[i].b), "%s", b_keys + (size_t)i * KB_GRAPH_NODE_MAX);
+      pairs[i].cosine = cosines[i];
+   }
+   free(a_keys);
+   free(b_keys);
+   free(cosines);
+   a_keys = b_keys = NULL;
+   cosines = NULL;
+
+   int ns = kb_graph_surprising(gedges, ng, pairs, np, percentile, d_min, out, max_r + 1);
+   if (ns < 0)
+      ns = 0;
+   int links_truncated = ns > max_r; /* the +1 probe overflowed -> more qualify */
+   if (ns > max_r)
+      ns = max_r;
+   free(gedges);
+   free(pairs);
+   gedges = NULL;
+   pairs = NULL;
+
+   cJSON *resp = cJSON_CreateObject();
+   if (!resp)
+   {
+      free(out);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+   cJSON_AddStringToObject(resp, "status", "ok");
+   cJSON_AddStringToObject(resp, "project", project);
+   cJSON_AddNumberToObject(resp, "candidate_count", np);
+   /* edge_count is the COUPLING-graph size (project-hub edges excluded), i.e. the
+    * graph hop distance was actually computed over. */
+   cJSON_AddNumberToObject(resp, "edge_count", ng);
+   cJSON_AddNumberToObject(resp, "d_min", d_min);
+   cJSON_AddNumberToObject(resp, "percentile", percentile);
+   cJSON *arr = cJSON_AddArrayToObject(resp, "links");
+   for (int i = 0; arr && i < ns; i++)
+   {
+      cJSON *l = cJSON_CreateObject();
+      if (!l)
+         continue;
+      cJSON_AddStringToObject(l, "a", out[i].a);
+      cJSON_AddStringToObject(l, "b", out[i].b);
+      cJSON_AddNumberToObject(l, "cosine", out[i].cosine);
+      /* Stable schema: every link carries BOTH fields. `hops` is the undirected
+       * shortest-path distance (-1 = unreachable within the BFS bound), and
+       * `disconnected` is the convenience boolean for that case — structurally
+       * unrelated yet semantically close is the strongest surprising signal. */
+      cJSON_AddNumberToObject(l, "hops", out[i].hops);
+      cJSON_AddBoolToObject(l, "disconnected", out[i].hops < 0);
+      cJSON_AddItemToArray(arr, l);
+   }
+   cJSON_AddNumberToObject(resp, "link_count", ns);
+   /* Truncated if the page cap bound the links (precise: the +1 probe overflowed),
+    * or either input scan filled its window (edges or candidate pairs) so the
+    * candidate set was itself a prefix. */
+   cJSON_AddBoolToObject(resp, "truncated",
+                         links_truncated || ne >= HUBS_MAX_EDGES || np >= SURPRISING_MAX_PAIRS);
+   free(out);
+
+   char *s = cJSON_PrintUnformatted(resp);
+   int status = 200;
+   if (!s)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      status = 500;
+   }
+   else if (strlen(s) >= (size_t)out_cap)
+   {
+      snprintf(
+          out_buf, (size_t)out_cap,
+          "{\"error\":\"result too large; reduce max_results\",\"code\":\"result_too_large\"}");
+      status = 413;
+   }
+   else
+   {
+      snprintf(out_buf, (size_t)out_cap, "%s", s);
+   }
+   free(s);
+   cJSON_Delete(resp);
+   return status;
+}
+
+int handle_get_code_graph_surprising_route(const char *method, const char *query_string,
+                                           char *out_buf, int out_cap)
+{
+   if (strcmp(method, "GET") != 0)
+      return code_method_not_allowed(out_buf, out_cap);
+   return handle_get_code_graph_surprising(query_string, out_buf, out_cap);
+}
+
 int handle_get_code_graph_hubs_route(const char *method, const char *query_string, char *out_buf,
                                      int out_cap)
 {

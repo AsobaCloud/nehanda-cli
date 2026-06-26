@@ -1930,6 +1930,10 @@ int main(void)
    test_code_hybrid_vector_dim_mismatch_skips();
    test_code_graph_hubs_ok();
    test_code_graph_hubs_missing_project();
+   test_code_graph_surprising_ok();
+   test_code_graph_surprising_hub_excluded();
+   test_code_graph_surprising_missing_project();
+   test_code_graph_surprising_vecstore_down();
    test_code_graph_node_ok();
    test_code_graph_node_capped_truncates();
    test_code_graph_node_self_loop();
