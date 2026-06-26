@@ -544,6 +544,9 @@ static void config_set_defaults(config_t *cfg)
    cfg->kb_api_bearer_token[0] = '\0';
    cfg->kb_worker_count = CONFIG_DEFAULT_KB_WORKER_THREADS;
    cfg->kb_connection_workers = 2;
+   cfg->code_hybrid_weight_code = 1.0;
+   cfg->code_hybrid_weight_graph = 1.0;
+   cfg->code_hybrid_rrf_k = 60.0; /* KB_RRF_DEFAULT_K */
    cfg->kb_bg_ingest_enabled = 1;
    cfg->kb_bg_ingest_interval_hours = 6;
 #ifdef __linux__

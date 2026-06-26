@@ -22,7 +22,7 @@ aimee config set <key> <value>    # set one value
 
 Structured options (arrays, nested objects — e.g. `ensemble.reference_models`) are not CLI-settable; they are written into the config file under the sections listed at the end.
 
-## CLI-settable keys (112)
+## CLI-settable keys (115)
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -32,6 +32,9 @@ Structured options (arrays, nested objects — e.g. `ensemble.reference_models`)
 | `cache_shaping_enabled` | bool | Enable prompt cache-shaping. |
 | `claude_cli_delegate_enabled` | bool | Allow delegating to the local Claude CLI agent. |
 | `claude_model` | string | Default Claude model (empty = CLI default). |
+| `code_hybrid_rrf_k` | float | Reciprocal Rank Fusion rank constant k for /v1/code/hybrid (default 60). |
+| `code_hybrid_weight_code` | float | RRF weight for the lexical-code signal in /v1/code/hybrid (default 1.0; <=0 disables it). |
+| `code_hybrid_weight_graph` | float | RRF weight for the structural call-graph signal in /v1/code/hybrid (default 1.0; <=0 disables it). |
 | `cost_reward_enabled` | bool | Factor token cost into the reward signal. |
 | `cost_reward_lambda_pct` | int | Cost-penalty weight (percent) in the reward. |
 | `cost_reward_ref_usd_milli` | int | Reference cost (USD-milli) normalizing the cost reward. |
@@ -163,7 +166,7 @@ Set in the config JSON as `{"<section>": {"<key>": ...}}`. Keys are derived from
 - **`ingress`** — _Ingress (proxy frontends) behavior._ Keys: `audit_async`, `trusted_proxy_secret`, `usage_accounting_enabled`
 - **`integrity`** — _Integrity gate._ Keys: `dry_run`, `enabled`
 - **`intelligence`** — _Intelligence subsystems (bandit, planner, ranking, reasoning) + their external commands; most children are nested objects._ Keys: `bandit`, `bandit_optimize_command`, `calibrate`, `constraint_solver_command`, `demotion`, `kb`, `planner`, `planner_search_command`, `ranker_fuse_command`, `ranking`, `reasoning`, `reasoning_datalog_command`, `synthesize`
-- **`kb`** — _Knowledge-base client + curator / evidence / maintenance / mining (nested objects)._ Keys: `api`, `background_ingest`, `connection_pool_size`, `connection_workers`, `curator`, `evidence`, `maintenance`, `mining`, `reembed_on_dim_change`, `search_max_results`, `worker_count`
+- **`kb`** — _Knowledge-base client + curator / evidence / maintenance / mining (nested objects)._ Keys: `api`, `background_ingest`, `code_hybrid`, `connection_pool_size`, `connection_workers`, `curator`, `evidence`, `maintenance`, `mining`, `reembed_on_dim_change`, `search_max_results`, `worker_count`
 - **`learning`** — _Learning subsystem (router, implicit, embed, synthesize; nested objects)._ Keys: `embed`, `implicit`, `router`, `synthesize`
 - **`lsp_servers`** — _LSP server definitions (array of objects)._ Keys: `args`, `command`, `extensions`, `name`
 - **`mcp`** — _MCP integration (e.g. OSV)._ Keys: `osv`
