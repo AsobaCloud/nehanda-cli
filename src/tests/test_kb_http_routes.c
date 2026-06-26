@@ -948,8 +948,7 @@ int db2_bandit_promotion_set(const char *decision_point, const char *arm_id,
 
 int db2_bandit_decision_points_list(char *buf, size_t len)
 {
-   /* The data-driven export asks the log which points exist; return the one
-    * that is actually sampled in production (not the legacy kb_fusion_mode). */
+   /* The export asks the log which points exist; return the production-sampled one. */
    snprintf(buf, len, "[\"kb_memory_retrieval_limit\"]");
    return 0;
 }
@@ -1946,6 +1945,7 @@ int main(void)
    test_code_scan_skips_unchanged_branch();
    test_code_scan_runs_on_branch_move();
    test_code_scan_worktree_ignores_sha();
+   test_code_scan_installs_hook();
    test_code_scan_missing_root_path();
    test_code_scan_pushed_files_ok();
    test_code_scan_pushed_files_rejects_invalid_item();

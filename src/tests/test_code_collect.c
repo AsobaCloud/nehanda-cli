@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* ---- collected-file recorder ---- */
@@ -76,6 +77,30 @@ static void write_file(const char *rel, const char *content)
    assert(fp);
    fputs(content, fp);
    fclose(fp);
+}
+
+/* Read a whole file into a malloc'd NUL-terminated buffer (caller frees), or NULL. */
+static char *read_file(const char *path)
+{
+   FILE *fp = fopen(path, "rb");
+   if (!fp)
+      return NULL;
+   fseek(fp, 0, SEEK_END);
+   long n = ftell(fp);
+   fseek(fp, 0, SEEK_SET);
+   if (n < 0)
+   {
+      fclose(fp);
+      return NULL;
+   }
+   char *buf = malloc((size_t)n + 1);
+   if (buf)
+   {
+      size_t got = fread(buf, 1, (size_t)n, fp);
+      buf[got] = '\0';
+   }
+   fclose(fp);
+   return buf;
 }
 
 static void make_root(const char *name)
@@ -269,6 +294,48 @@ static void test_index_source_is_worktree(void)
    printf("  test_index_source_is_worktree: ok\n");
 }
 
+/* §6 live: the post-merge hook installs, is executable, carries the marker + the
+ * backgrounded scan command for this project, is idempotent, and won't clobber a
+ * foreign hook. */
+static void test_install_branch_hook(void)
+{
+   make_root("hook");
+   git("init -q -b main");
+   char hook[2048];
+   snprintf(hook, sizeof(hook), "%s/.git/hooks/post-merge", g_root);
+
+   int rc = code_index_install_branch_hook(g_root, "proj-alpha");
+   assert(rc == 0);
+   struct stat st;
+   assert(stat(hook, &st) == 0);
+   assert(st.st_mode & S_IXUSR); /* executable */
+
+   char *body = read_file(hook);
+   assert(body);
+   assert(strstr(body, "installed by aimee"));
+   assert(strstr(body, "aimee index scan 'proj-alpha'"));
+   assert(strstr(body, "&")); /* backgrounded */
+   free(body);
+
+   /* idempotent: re-installing our own hook succeeds. */
+   assert(code_index_install_branch_hook(g_root, "proj-alpha") == 0);
+
+   /* a foreign hook is not clobbered (-2). */
+   FILE *f = fopen(hook, "w");
+   assert(f);
+   fputs("#!/bin/sh\necho not aimee\n", f);
+   fclose(f);
+   assert(code_index_install_branch_hook(g_root, "proj-alpha") == -2);
+   char *foreign = read_file(hook);
+   assert(foreign && strstr(foreign, "not aimee") && !strstr(foreign, "installed by aimee"));
+   free(foreign);
+
+   /* a non-git dir fails cleanly. */
+   make_root("hook-nogit");
+   assert(code_index_install_branch_hook(g_root, "p") == -1);
+   printf("  test_install_branch_hook: ok\n");
+}
+
 /* A non-git dir has no default branch SHA; `out` is cleared and -1 returned. */
 static void test_default_branch_sha_non_git(void)
 {
@@ -297,6 +364,7 @@ int main(void)
    test_default_branch_sha_tracks_commits();
    test_default_branch_sha_quote_in_ref();
    test_index_source_is_worktree();
+   test_install_branch_hook();
    test_default_branch_sha_non_git();
    sh("rm -rf '%s'", g_root);
    printf("ALL PASS\n");
