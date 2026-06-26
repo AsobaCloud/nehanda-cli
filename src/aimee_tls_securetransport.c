@@ -21,7 +21,9 @@
 #define __STDC_WANT_LIB_EXT1__ 1 /* expose memset_s for a non-elidable key wipe */
 #include "aimee_tls.h"
 #include "aimee_home.h"
+#include "platform_net.h"
 
+#include <CommonCrypto/CommonDigest.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
 #include <Security/SecureTransport.h>
@@ -29,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 struct aimee_tls
@@ -213,6 +216,179 @@ static CFArrayRef securetransport_load_client_identity(SecKeychainRef *out_kc)
    return result;
 }
 
+/* Resolve <aimee_home>/remote-ca.pem — the pinned server certificate written by
+ * `aimee remote set/trust`. Returns 1 (and fills |out|) when the file exists,
+ * else 0. Mirrors pinned_ca_path() in the OpenSSL backend (aimee_tls.c). */
+static int pinned_ca_path(char *out, size_t n)
+{
+   const char *home = aimee_home();
+   if (!home || !*home || !out || n == 0)
+      return 0;
+   snprintf(out, n, "%s/remote-ca.pem", home);
+   struct stat st;
+   return (stat(out, &st) == 0 && S_ISREG(st.st_mode)) ? 1 : 0;
+}
+
+static int b64_val(int c)
+{
+   if (c >= 'A' && c <= 'Z')
+      return c - 'A';
+   if (c >= 'a' && c <= 'z')
+      return c - 'a' + 26;
+   if (c >= '0' && c <= '9')
+      return c - '0' + 52;
+   if (c == '+')
+      return 62;
+   if (c == '/')
+      return 63;
+   return -1; /* whitespace / non-alphabet (skipped by the decoder) */
+}
+
+/* Decode base64 |in| (in_len bytes), skipping whitespace and stopping at the
+ * first '=' pad, into a malloc'd buffer; sets *out_len. Caller frees. NULL on
+ * OOM. */
+static unsigned char *b64_decode(const char *in, size_t in_len, size_t *out_len)
+{
+   unsigned char *out = malloc(in_len / 4 * 3 + 3);
+   if (!out)
+      return NULL;
+   size_t o = 0;
+   int quad[4], qn = 0;
+   for (size_t i = 0; i < in_len; i++)
+   {
+      int c = (unsigned char)in[i];
+      if (c == '=')
+         break;
+      int v = b64_val(c);
+      if (v < 0)
+         continue;
+      quad[qn++] = v;
+      if (qn == 4)
+      {
+         out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
+         out[o++] = (unsigned char)((quad[1] << 4) | (quad[2] >> 2));
+         out[o++] = (unsigned char)((quad[2] << 6) | quad[3]);
+         qn = 0;
+      }
+   }
+   if (qn == 2)
+      out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
+   else if (qn == 3)
+   {
+      out[o++] = (unsigned char)((quad[0] << 2) | (quad[1] >> 4));
+      out[o++] = (unsigned char)((quad[1] << 4) | (quad[2] >> 2));
+   }
+   *out_len = o;
+   return out;
+}
+
+/* Load the first CERTIFICATE block from a PEM file at |path|, decode it to DER,
+ * and wrap it as a SecCertificateRef. Returns a retained ref (caller releases)
+ * or NULL on any failure. */
+static SecCertificateRef securetransport_load_pinned_cert(const char *path)
+{
+   FILE *f = fopen(path, "rb");
+   if (!f)
+      return NULL;
+   if (fseek(f, 0, SEEK_END) != 0)
+   {
+      fclose(f);
+      return NULL;
+   }
+   long sz = ftell(f);
+   if (sz <= 0 || sz > (1 << 20) || fseek(f, 0, SEEK_SET) != 0)
+   {
+      fclose(f);
+      return NULL;
+   }
+   char *buf = malloc((size_t)sz + 1);
+   if (!buf)
+   {
+      fclose(f);
+      return NULL;
+   }
+   size_t rd = fread(buf, 1, (size_t)sz, f);
+   fclose(f);
+   if (rd != (size_t)sz)
+   {
+      free(buf);
+      return NULL;
+   }
+   buf[sz] = '\0'; /* NUL-terminate so the PEM markers can be located with strstr */
+
+   SecCertificateRef cert = NULL;
+   static const char begin[] = "-----BEGIN CERTIFICATE-----";
+   static const char end[] = "-----END CERTIFICATE-----";
+   char *b = strstr(buf, begin);
+   if (b)
+   {
+      b += sizeof(begin) - 1; /* body starts after the BEGIN marker line */
+      char *e = strstr(b, end);
+      if (e && e > b)
+      {
+         size_t der_len = 0;
+         unsigned char *der = b64_decode(b, (size_t)(e - b), &der_len);
+         if (der)
+         {
+            CFDataRef data = CFDataCreate(NULL, der, (CFIndex)der_len);
+            if (data)
+            {
+               cert = SecCertificateCreateWithData(NULL, data); /* NULL on bad DER */
+               CFRelease(data);
+            }
+            free(der);
+         }
+      }
+   }
+   free(buf);
+   return cert;
+}
+
+/* During a BreakOnServerAuth handshake, manually evaluate the peer's trust so
+ * that BOTH the system anchors AND the pinned cert are accepted, with the
+ * SSL/hostname policy bound to |host|. Returns 1 if trusted, 0 otherwise.
+ *
+ * IP-literal hosts: SecPolicyCreateSSL is given the host string verbatim; when
+ * that string is an IP literal, the SSL trust policy matches it against the
+ * cert's iPAddress SANs (aimee is commonly reached by IP with an IP-SAN cert),
+ * and against dNSName SANs/CN for real DNS names. (Could not be exercised here
+ * without running on macOS — see the report's caveats.) */
+static int securetransport_eval_pinned_trust(SSLContextRef ctx, const char *host,
+                                             SecCertificateRef pinned)
+{
+   SecTrustRef trust = NULL;
+   if (SSLCopyPeerTrust(ctx, &trust) != noErr || !trust)
+      return 0;
+
+   int ok = 0;
+   CFStringRef cf_host = CFStringCreateWithCString(NULL, host, kCFStringEncodingUTF8);
+   SecPolicyRef policy = cf_host ? SecPolicyCreateSSL(true, cf_host) : NULL;
+   if (policy && SecTrustSetPolicies(trust, policy) == errSecSuccess)
+   {
+      const void *anchors[] = {pinned};
+      CFArrayRef anchor_arr = CFArrayCreate(NULL, anchors, 1, &kCFTypeArrayCallBacks);
+      /* SecTrustSetAnchorCertificatesOnly(false) keeps the SYSTEM anchors trusted
+       * in ADDITION to the pinned cert, so a publicly-CA'd server and a pinned
+       * self-signed one both verify. */
+      if (anchor_arr && SecTrustSetAnchorCertificates(trust, anchor_arr) == errSecSuccess &&
+          SecTrustSetAnchorCertificatesOnly(trust, false) == errSecSuccess)
+      {
+         CFErrorRef err = NULL;
+         ok = SecTrustEvaluateWithError(trust, &err) ? 1 : 0;
+         if (err)
+            CFRelease(err);
+      }
+      if (anchor_arr)
+         CFRelease(anchor_arr);
+   }
+   if (policy)
+      CFRelease(policy);
+   if (cf_host)
+      CFRelease(cf_host);
+   CFRelease(trust);
+   return ok;
+}
+
 aimee_tls_t *aimee_tls_connect(int fd, const char *host)
 {
    aimee_tls_t *t = calloc(1, sizeof(*t));
@@ -246,6 +422,18 @@ aimee_tls_t *aimee_tls_connect(int fd, const char *host)
    }
 
    int insecure = tls_insecure();
+   /* When a pinned server cert is recorded for this remote, trust the system
+    * store AND that cert. The Keychain auto-eval can't be handed an extra anchor,
+    * so switch to the BreakOnServerAuth flow and evaluate manually below.
+    * Verification stays ON (chain + hostname/SAN). */
+   SecCertificateRef pinned = NULL;
+   if (!insecure)
+   {
+      char pin[700];
+      if (pinned_ca_path(pin, sizeof(pin)))
+         pinned = securetransport_load_pinned_cert(pin); /* NULL if unparseable */
+   }
+
    if (insecure)
    {
       /* Break on server auth so we can accept the cert WITHOUT evaluating it. */
@@ -258,20 +446,51 @@ aimee_tls_t *aimee_tls_connect(int fd, const char *host)
        * cert (MITM). aimee_client.c always passes the URL host. */
       if (!host || !*host)
       {
+         if (pinned)
+            CFRelease(pinned);
          CFRelease(t->ctx);
          free(t);
          return NULL;
       }
-      /* Set the expected name: Secure Transport then verifies chain + hostname
-       * (SAN/CN, wildcards) against the Keychain trust during the handshake. */
+      /* Set the expected name (also drives SNI). For the non-pinned path Secure
+       * Transport then verifies chain + hostname (SAN/CN, wildcards) against the
+       * Keychain trust during the handshake. */
       SSLSetPeerDomainName(t->ctx, host, strlen(host));
+      if (pinned)
+      {
+         /* Defer trust to our manual, pinned-anchor evaluation below. */
+         SSLSetSessionOption(t->ctx, kSSLSessionOptionBreakOnServerAuth, true);
+      }
    }
 
    OSStatus rc;
-   do
+   for (;;)
    {
       rc = SSLHandshake(t->ctx);
-   } while (rc == errSSLWouldBlock || (insecure && rc == errSSLPeerAuthCompleted));
+      if (rc == errSSLWouldBlock)
+         continue;
+      if (rc == errSSLPeerAuthCompleted)
+      {
+         if (insecure)
+            continue; /* accept without evaluation */
+         if (pinned)
+         {
+            /* Manually evaluate against system + pinned anchors with a hostname
+             * policy. On success resume the handshake to completion; on failure
+             * force a hard error so the connect fails closed (MITM-rejecting). */
+            if (securetransport_eval_pinned_trust(t->ctx, host, pinned))
+               continue;
+            rc = errSSLXCertChainInvalid;
+            break;
+         }
+         /* Non-pinned secure path never sets BreakOnServerAuth, so this branch is
+          * unreachable there; break defensively. */
+         break;
+      }
+      break;
+   }
+   if (pinned)
+      CFRelease(pinned);
 
    if (rc != noErr)
    {
@@ -313,6 +532,155 @@ long aimee_tls_read(aimee_tls_t *t, void *buf, size_t len)
    if (rc == errSSLClosedGraceful || rc == errSSLClosedNoNotify)
       return 0; /* clean EOF */
    return -1;
+}
+
+/* Base64-encode |der| (der_len bytes) and wrap it as a PEM CERTIFICATE block
+ * (64-column lines, with header/footer and trailing newline). Returns a malloc'd
+ * NUL-terminated string (caller frees) or NULL on OOM. */
+static char *der_to_pem(const unsigned char *der, size_t der_len)
+{
+   static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+   size_t enc_len = (der_len + 2) / 3 * 4;
+   char *enc = malloc(enc_len + 1);
+   if (!enc)
+      return NULL;
+   size_t o = 0, i = 0;
+   while (i + 3 <= der_len)
+   {
+      unsigned v = ((unsigned)der[i] << 16) | ((unsigned)der[i + 1] << 8) | der[i + 2];
+      enc[o++] = b64[(v >> 18) & 63];
+      enc[o++] = b64[(v >> 12) & 63];
+      enc[o++] = b64[(v >> 6) & 63];
+      enc[o++] = b64[v & 63];
+      i += 3;
+   }
+   if (der_len - i == 1)
+   {
+      unsigned v = (unsigned)der[i] << 16;
+      enc[o++] = b64[(v >> 18) & 63];
+      enc[o++] = b64[(v >> 12) & 63];
+      enc[o++] = '=';
+      enc[o++] = '=';
+   }
+   else if (der_len - i == 2)
+   {
+      unsigned v = ((unsigned)der[i] << 16) | ((unsigned)der[i + 1] << 8);
+      enc[o++] = b64[(v >> 18) & 63];
+      enc[o++] = b64[(v >> 12) & 63];
+      enc[o++] = b64[(v >> 6) & 63];
+      enc[o++] = '=';
+   }
+   enc[o] = '\0';
+
+   static const char hdr[] = "-----BEGIN CERTIFICATE-----\n";
+   static const char ftr[] = "-----END CERTIFICATE-----\n";
+   size_t lines = (o + 63) / 64; /* one '\n' per wrapped 64-col line */
+   char *pem = malloc((sizeof(hdr) - 1) + o + lines + (sizeof(ftr) - 1) + 1);
+   if (!pem)
+   {
+      free(enc);
+      return NULL;
+   }
+   size_t p = 0;
+   memcpy(pem + p, hdr, sizeof(hdr) - 1);
+   p += sizeof(hdr) - 1;
+   for (size_t j = 0; j < o; j += 64)
+   {
+      size_t chunk = (o - j < 64) ? (o - j) : 64;
+      memcpy(pem + p, enc + j, chunk);
+      p += chunk;
+      pem[p++] = '\n';
+   }
+   memcpy(pem + p, ftr, sizeof(ftr) - 1);
+   p += sizeof(ftr) - 1;
+   pem[p] = '\0';
+   free(enc);
+   return pem;
+}
+
+/* Open a fresh, NON-verifying TLS connection to host:port (trust-on-first-use:
+ * we are fetching the cert to surface its fingerprint and pin it, not trusting
+ * it yet — mirrors the OpenSSL backend). Emits the leaf cert as PEM in *pem_out
+ * (malloc'd, caller frees) and its SHA-256 as uppercase colon-hex in fp_out.
+ * Returns 0 on success, -1 on failure (with *pem_out=NULL, fp_out[0]=0). */
+int aimee_tls_fetch_peer_cert(const char *host, const char *port, char **pem_out, char *fp_out,
+                              size_t fp_n)
+{
+   if (pem_out)
+      *pem_out = NULL;
+   if (fp_out && fp_n)
+      fp_out[0] = '\0';
+   if (!host || !*host || !port || !*port || !pem_out)
+      return -1;
+
+   int fd = platform_net_connect(host, port, 10000);
+   if (fd < 0)
+      return -1;
+
+   SSLContextRef ctx = SSLCreateContext(NULL, kSSLClientSide, kSSLStreamType);
+   if (!ctx)
+   {
+      platform_net_close(fd);
+      return -1;
+   }
+
+   int rc = -1;
+   if (SSLSetIOFuncs(ctx, st_read, st_write) == noErr && SSLSetConnection(ctx, &fd) == noErr &&
+       SSLSetProtocolVersionMin(ctx, kTLSProtocol12) == noErr &&
+       SSLSetSessionOption(ctx, kSSLSessionOptionBreakOnServerAuth, true) == noErr)
+   {
+      /* SNI: many servers select a cert by it. (For an IP literal this is not a
+       * valid SNI host, but the server we are fetching from ignores it.) */
+      SSLSetPeerDomainName(ctx, host, strlen(host));
+
+      OSStatus h;
+      do
+      {
+         h = SSLHandshake(ctx);
+      } while (h == errSSLWouldBlock || h == errSSLPeerAuthCompleted); /* accept w/o eval */
+
+      if (h == noErr)
+      {
+         SecTrustRef trust = NULL;
+         if (SSLCopyPeerTrust(ctx, &trust) == noErr && trust)
+         {
+            /* Leaf is index 0; SecTrustGetCertificateAtIndex is deprecated on
+             * macOS 12 but the TU is built -Wno-deprecated-declarations and it
+             * returns a non-owned ref (no release). */
+            SecCertificateRef leaf = SecTrustGetCertificateAtIndex(trust, 0);
+            if (leaf)
+            {
+               CFDataRef der = SecCertificateCopyData(leaf);
+               if (der)
+               {
+                  const unsigned char *bytes = CFDataGetBytePtr(der);
+                  size_t dlen = (size_t)CFDataGetLength(der);
+                  char *pem = der_to_pem(bytes, dlen);
+                  if (pem)
+                  {
+                     *pem_out = pem;
+                     rc = 0;
+                     if (fp_out && fp_n)
+                     {
+                        unsigned char md[CC_SHA256_DIGEST_LENGTH];
+                        CC_SHA256(bytes, (CC_LONG)dlen, md);
+                        size_t o = 0;
+                        for (unsigned i = 0; i < CC_SHA256_DIGEST_LENGTH && o + 4 < fp_n; i++)
+                           o += (size_t)snprintf(fp_out + o, fp_n - o, i ? ":%02X" : "%02X", md[i]);
+                     }
+                  }
+                  CFRelease(der);
+               }
+            }
+            CFRelease(trust);
+         }
+      }
+      SSLClose(ctx);
+   }
+
+   CFRelease(ctx);
+   platform_net_close(fd); /* the SSLConnectionRef does not own the fd */
+   return rc;
 }
 
 void aimee_tls_free(aimee_tls_t *t)
