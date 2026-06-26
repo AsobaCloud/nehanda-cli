@@ -13,9 +13,11 @@
 #include <stddef.h>
 
 /* Store/replace (NULL/empty removes) an agent's API key in the local keyring
- * (~/.config/aimee/agent-keys.json, mode 0600). Used by `agent key import
- * --scrub` to drop an entry after it is confirmed stored in the vault. Returns 0
- * on success. */
+ * (~/.config/aimee/agent-keys.json, mode 0600). Now used only by `agent key
+ * import` (with NULL) to SCRUB an entry after it is confirmed stored in the
+ * vault — there is no longer a command that writes a plaintext key here (the
+ * modern path, `agent add --key`, vaults server-side over an attested
+ * connection). Returns 0 on success. */
 int cli_agent_key_set(const char *agent_name, const char *api_key);
 
 /* Load the local keyring as a cJSON object {agent_name: api_key, ...} (empty
@@ -23,10 +25,12 @@ int cli_agent_key_set(const char *agent_name, const char *api_key);
  * import` to migrate client-held keys into the server vault. */
 cJSON *cli_agent_keys_load(void);
 
-/* `aimee agent key import [--scrub]`: push each local keyring entry into the
- * server vault under the server principal via vault.set_server, reporting per
- * agent. --scrub removes an entry only after a confirmed store. Returns 0 unless
- * a non-refusal error occurred. */
+/* `aimee agent key import [--keep] [--dry-run]`: push each local keyring entry
+ * into the server vault under the server principal via vault.set_server,
+ * reporting per agent. SCRUBS each plaintext entry by default once its vault
+ * store is confirmed (keys belong only in the vault); --keep retains the local
+ * copy, --scrub is an accepted no-op. Returns 0 unless a non-refusal error
+ * occurred. */
 int cli_agent_key_import(int argc, char **argv, int json_output);
 
 #endif /* CLI_AGENT_KEYS_H */
