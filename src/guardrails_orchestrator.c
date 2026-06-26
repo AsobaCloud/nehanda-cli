@@ -12,6 +12,7 @@
 #include "computer_use.h"
 #include "guardrails_internal.h"
 #include "guardrails_semantic.h"
+#include "guardrails_blast_radius.h"
 #include "workspace_provider.h" /* skip worktree enforcement for a detached (client) workspace */
 #include "headers/config.h"
 #include "headers/git_verify.h"
@@ -1944,7 +1945,6 @@ int pre_tool_check(const char *tool_name, const char *input_json, session_state_
       LOG_INFO("guardrails", "orchestrator discipline: delegation nudge after %d calls",
                state->hook_call_count);
    }
-
    /* Semantic scoring (Phase 0/1): runs after all deterministic checks.
     * Default: enabled=false, dry_run=true — no behavioral change until opted in.
     * When dry_run=true, scores are logged and stored but never affect msg_buf or rc. */
@@ -1992,7 +1992,9 @@ int pre_tool_check(const char *tool_name, const char *input_json, session_state_
          }
       }
    }
-
+   if (is_edit_tool(tool_name) && fp && cJSON_IsString(fp)) /* §7 advisory: LAST, fail-open */
+      guardrails_blast_radius_advisory(
+          normalize_path(fp->valuestring, effective_cwd, norm, sizeof(norm)), msg_buf, msg_len);
    cJSON_Delete(root);
    return 0;
 }

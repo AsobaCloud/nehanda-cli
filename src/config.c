@@ -539,6 +539,7 @@ static void config_set_defaults(config_t *cfg)
    cfg->guardrails_semantic_prompt_threshold = 0.70;
    cfg->guardrails_semantic_block_threshold = 0.90;
    cfg->guardrails_semantic_allow_ml_only_block = 0;
+   cfg->guardrails_blast_radius_advisory_enabled = 0;
    cfg->kb_api_http_port = 0;
    cfg->kb_api_bearer_token[0] = '\0';
    cfg->kb_worker_count = CONFIG_DEFAULT_KB_WORKER_THREADS;
