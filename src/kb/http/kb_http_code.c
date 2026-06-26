@@ -680,6 +680,8 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
             /* the neighbor is whichever endpoint isn't the seed symbol */
             const char *neighbor =
                 strcmp(eedges[i].source, skey) == 0 ? eedges[i].target : eedges[i].source;
+            if (strcmp(neighbor, skey) == 0)
+               continue; /* self-edge: the symbol isn't its own memory neighbor */
             db2_entity_node_t node;
             if (db2_entity_node_get(neighbor, &node) != 0 || !node.file_path[0])
                continue;
