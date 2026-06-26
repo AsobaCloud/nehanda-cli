@@ -645,6 +645,126 @@ int code_treesitter_definitions(const char *ext, const char *content, definition
    return count;
 }
 
+/* ---- call edges (caller -> callee) ------------------------------------------------- */
+
+/* Reverse pre-order DFS for the LAST identifier-like descendant — the called name in a
+ * callee expression (`obj.m` -> m, `a::b::c` -> c, `g` -> g). */
+static int last_identifier(TSNode node, TSNode *out)
+{
+   if (is_identifier_type(ts_node_type(node)))
+   {
+      *out = node;
+      return 1;
+   }
+   uint32_t n = ts_node_named_child_count(node);
+   for (uint32_t i = n; i-- > 0;)
+      if (last_identifier(ts_node_named_child(node, i), out))
+         return 1;
+   return 0;
+}
+
+/* Call/invocation node types across the grammars. */
+static int is_call_node(const char *t)
+{
+   return strcmp(t, "call_expression") == 0 || strcmp(t, "call") == 0 ||
+          strcmp(t, "method_invocation") == 0 || strcmp(t, "invocation_expression") == 0 ||
+          strcmp(t, "function_call") == 0 || strcmp(t, "function_call_expression") == 0 ||
+          strcmp(t, "member_call_expression") == 0 || strcmp(t, "scoped_call_expression") == 0 ||
+          strcmp(t, "nullsafe_member_call_expression") == 0 || strcmp(t, "macro_invocation") == 0 ||
+          strcmp(t, "object_creation_expression") == 0;
+}
+
+/* The called name: the callee expression (the `function`/`name`/`method` field, else the
+ * first child) reduced to its last identifier. Returns 0 if none. */
+static int call_callee_name(TSNode call, const char *content, char *out, int cap)
+{
+   TSNode fn = ts_node_child_by_field_name(call, "function", 8);
+   if (ts_node_is_null(fn))
+      fn = ts_node_child_by_field_name(call, "name", 4);
+   if (ts_node_is_null(fn))
+      fn = ts_node_child_by_field_name(call, "method", 6);
+   if (ts_node_is_null(fn))
+   {
+      if (ts_node_named_child_count(call) == 0)
+         return 0;
+      fn = ts_node_named_child(call, 0); /* Swift/Ruby: callee is the first child */
+   }
+   TSNode id;
+   if (is_identifier_type(ts_node_type(fn)))
+      id = fn;
+   else if (!last_identifier(fn, &id))
+      return 0;
+   node_text(id, content, out, cap);
+   return out[0] != '\0';
+}
+
+/* Walk the whole tree (function bodies included, unlike definitions) tracking the enclosing
+ * function as the caller; emit an edge at every call node. */
+static void walk_calls(ts_lang_t lang, TSNode node, const char *content, const char *caller,
+                       call_ref_t *out, int max, int *count)
+{
+   if (*count >= max)
+      return;
+   const char *kind = NULL;
+   TSNode nm;
+   const char *child_caller = caller;
+   char buf[sizeof(out->caller)];
+   if (classify(lang, node, &kind, &nm) && kind && strcmp(kind, "function") == 0 &&
+       !ts_node_is_null(nm))
+   {
+      node_text(nm, content, buf, (int)sizeof(buf));
+      if (buf[0])
+         child_caller = buf; /* calls in this subtree are attributed to this function */
+   }
+   if (is_call_node(ts_node_type(node)))
+   {
+      char callee[sizeof(out->callee)];
+      if (call_callee_name(node, content, callee, (int)sizeof(callee)) && callee[0])
+      {
+         snprintf(out[*count].caller, sizeof(out[*count].caller), "%s", caller ? caller : "");
+         snprintf(out[*count].callee, sizeof(out[*count].callee), "%s", callee);
+         out[*count].line = (int)ts_node_start_point(node).row + 1;
+         (*count)++;
+         if (*count >= max)
+            return;
+      }
+   }
+   uint32_t n = ts_node_named_child_count(node);
+   for (uint32_t i = 0; i < n && *count < max; i++)
+      walk_calls(lang, ts_node_named_child(node, i), content, child_caller, out, max, count);
+}
+
+int code_treesitter_calls(const char *ext, const char *content, call_ref_t *out, int max)
+{
+   ts_lang_t which;
+   const TSLanguage *lang = ts_language_for_ext(ext, &which);
+   if (!lang || !content || !out || max <= 0)
+      return -1;
+   if (which == TSL_BASH || which == TSL_CSS)
+      return -1; /* no useful call extraction — defer to the hand-rolled path */
+
+   TSParser *parser = ts_parser_new();
+   if (!parser)
+      return -1;
+   if (!ts_parser_set_language(parser, lang))
+   {
+      ts_parser_delete(parser);
+      return -1;
+   }
+   TSTree *tree = ts_parser_parse_string(parser, NULL, content, (uint32_t)strlen(content));
+   if (!tree)
+   {
+      ts_parser_delete(parser);
+      return -1;
+   }
+
+   int count = 0;
+   walk_calls(which, ts_tree_root_node(tree), content, "", out, max, &count);
+   ts_tree_delete(tree);
+   ts_parser_delete(parser);
+   return count;
+}
+
 #else /* !AIMEE_TREESITTER */
 
 int code_treesitter_available(const char *ext)
@@ -654,6 +774,15 @@ int code_treesitter_available(const char *ext)
 }
 
 int code_treesitter_definitions(const char *ext, const char *content, definition_t *out, int max)
+{
+   (void)ext;
+   (void)content;
+   (void)out;
+   (void)max;
+   return -1;
+}
+
+int code_treesitter_calls(const char *ext, const char *content, call_ref_t *out, int max)
 {
    (void)ext;
    (void)content;
