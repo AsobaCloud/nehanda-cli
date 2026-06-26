@@ -9,7 +9,8 @@
 #include "config.h"
 #include "cJSON.h"
 #include "kb_http.h"
-#include "db2/lifecycle.h" /* §2c: db2_reembed_* / db2_dim_change_reset stub types */
+#include "kb/kb_surprising_judge.h" /* §4 judge stub seam (kb_surprising_verdict_t) */
+#include "db2/lifecycle.h"          /* §2c: db2_reembed_* / db2_dim_change_reset stub types */
 #include "kb_service.h"
 #include "kb_bandit.h"
 #include "kb_service_backend.h"
@@ -298,13 +299,9 @@ int db2_reembed_in_progress_get(int *target_dim, long *started_epoch)
    (void)started_epoch;
    return 0; /* not in progress -> search path proceeds */
 }
-/* structured-PDF search_chunks db2 functions — stubbed (the /v1/pdf/search route is
- * exercised end-to-end against real SQL in test_kb_doc_pdf.c; here we only need the link
- * to resolve so the route table compiles). The struct args are taken as void* to avoid
- * pulling in db2/kb_payload.h (which conflicts with this file's simplified db2 stubs);
- * C links by symbol name, so the pointer type is immaterial. */
-/* structured-PDF db2 stubs — the routes are exercised against real SQL in test_kb_doc_pdf.c;
- * these just resolve the link (build uses -Wno-unused-parameter, so no (void) casts needed). */
+/* structured-PDF search_chunks db2 stubs — the routes are exercised against real SQL
+ * in test_kb_doc_pdf.c; here they only resolve the link (struct args as void* to avoid
+ * db2/kb_payload.h, which conflicts with this file's simplified db2 stubs). */
 int db2_kb_pdf_search_chunks(const char *project, const char *query, int max, void *out)
 {
    return 0;
@@ -1934,6 +1931,7 @@ int main(void)
    test_code_graph_surprising_hub_excluded();
    test_code_graph_surprising_missing_project();
    test_code_graph_surprising_vecstore_down();
+   test_code_graph_surprising_judge();
    test_code_graph_node_ok();
    test_code_graph_node_capped_truncates();
    test_code_graph_node_self_loop();

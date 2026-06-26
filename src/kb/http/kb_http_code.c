@@ -12,6 +12,7 @@
 #include "kb/kb_rrf.h"
 #include "kb/kb_graph_analytics.h"
 #include "kb/kb_service_graph.h"
+#include "kb/kb_surprising_judge.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -1060,13 +1061,17 @@ int handle_get_code_graph_route(const char *method, const char *query_string, ch
  * from code_embeddings (pgvec self-kNN; a row's node_key === the projection file-node
  * key, so pairs join the graph directly), then filters them against the projection
  * graph with the pure `kb_graph_surprising` (data-driven cosine percentile + hop
- * distance). Read-only analytics, off the agent hot path. The §4 LLM-judge / precision
- * self-suppress confirmation stage needs the LLM + a sampled corpus and is a follow-up;
- * this route returns the structural candidates. */
+ * distance). Read-only analytics, off the agent hot path. With `judge=true` the top
+ * candidates additionally go through the §4 relevance gate — a shared-symbol
+ * cross-check plus ONE batched Tier-B LLM-judge call (kb_surprising_judge) that
+ * confirms genuine parallel/duplicated logic vs coincidental similarity; without a
+ * configured LLM that degrades to unconfirmed structural candidates. */
 #define SURPRISING_MAX_PAIRS 1000
 /* Bound on anchor rows the self-kNN probes, so cost is O(anchors*k) HNSW probes
  * regardless of project size; a huge project is sampled (and flagged truncated). */
 #define SURPRISING_MAX_ANCHORS 5000
+/* Cap on links sent to the LLM judge in one batch (bounds the prompt + latency). */
+#define SURPRISING_JUDGE_MAX 12
 
 int handle_get_code_graph_surprising(const char *query_string, char *out_buf, int out_cap)
 {
@@ -1112,6 +1117,10 @@ int handle_get_code_graph_surprising(const char *query_string, char *out_buf, in
       min_cosine = 0.0;
    if (min_cosine > 1.0)
       min_cosine = 1.0;
+
+   int judge = 0; /* opt-in LLM confirmation of the top candidates */
+   if (code_qparam(query_string, "judge", tmp, sizeof(tmp)))
+      judge = (strcmp(tmp, "true") == 0 || strcmp(tmp, "1") == 0);
 
    if (!db2_is_initialized())
    {
@@ -1216,9 +1225,33 @@ int handle_get_code_graph_surprising(const char *query_string, char *out_buf, in
    gedges = NULL;
    pairs = NULL;
 
+   /* §4 relevance gate (opt-in): confirm the top links with one batched LLM judge.
+    * Bounded to SURPRISING_JUDGE_MAX (prompt/latency). Degrades to unconfirmed if no
+    * Tier-B LLM is configured (judged stays 0). */
+   kb_surprising_verdict_t *verdicts = NULL;
+   int jn = 0, judged_n = 0;
+   if (judge && ns > 0)
+   {
+      jn = ns < SURPRISING_JUDGE_MAX ? ns : SURPRISING_JUDGE_MAX;
+      verdicts = calloc((size_t)jn, sizeof(*verdicts));
+      if (verdicts)
+      {
+         config_t jcfg;
+         char jerr[256] = "";
+         if (config_load(&jcfg) == 0)
+         {
+            int r = kb_surprising_judge(&jcfg, jcfg.kb_curator_judge_command, project, out, jn,
+                                        verdicts, jerr, sizeof(jerr));
+            if (r > 0)
+               judged_n = r;
+         }
+      }
+   }
+
    cJSON *resp = cJSON_CreateObject();
    if (!resp)
    {
+      free(verdicts);
       free(out);
       snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
       return 500;
@@ -1246,9 +1279,27 @@ int handle_get_code_graph_surprising(const char *query_string, char *out_buf, in
        * unrelated yet semantically close is the strongest surprising signal. */
       cJSON_AddNumberToObject(l, "hops", out[i].hops);
       cJSON_AddBoolToObject(l, "disconnected", out[i].hops < 0);
+      /* §4 confirmation: shared_symbols only when the pair was actually sent (else 0
+       * would conflate "computed none" with "not computed"); confirmed + reason only
+       * when the LLM returned a verdict. */
+      if (verdicts && i < jn && verdicts[i].sent)
+      {
+         cJSON_AddNumberToObject(l, "shared_symbols", verdicts[i].shared_symbols);
+         if (verdicts[i].judged)
+         {
+            cJSON_AddBoolToObject(l, "confirmed", verdicts[i].confirmed);
+            if (verdicts[i].reason[0])
+               cJSON_AddStringToObject(l, "reason", verdicts[i].reason);
+         }
+      }
       cJSON_AddItemToArray(arr, l);
    }
+   free(verdicts);
    cJSON_AddNumberToObject(resp, "link_count", ns);
+   /* How many links the LLM judge actually confirmed/rejected (0 = judging off or no
+    * Tier-B LLM configured -> links are unconfirmed structural candidates). */
+   if (judge)
+      cJSON_AddNumberToObject(resp, "judged", judged_n);
    /* Truncated if the page cap bound the links (precise: the +1 probe overflowed),
     * or either input scan filled its window (edges or candidate pairs) so the
     * candidate set was itself a prefix. */

@@ -1680,6 +1680,37 @@ int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, int 
    return (rc == AIMEE_PG_ERR) ? -1 : n;
 }
 
+int pgvec_code_node_path(const char *project, const char *node_key, char *out, int out_cap)
+{
+   if (!project || !*project || !node_key || !*node_key || !out || out_cap <= 0)
+      return -1;
+   out[0] = '\0';
+   void *pg = db2_conn();
+   if (!pg)
+      return -1;
+   const char *sql = "SELECT file_path FROM code_embeddings"
+                     " WHERE project = :project AND node_key = :node_key AND file_path <> ''"
+                     " LIMIT 1";
+   char errbuf[256];
+   aimee_pg_stmt_t *stmt = aimee_pg_prepare(pg, sql, errbuf, sizeof(errbuf));
+   if (!stmt)
+      return -1;
+   aimee_pg_bind_text(stmt, "project", project);
+   aimee_pg_bind_text(stmt, "node_key", node_key);
+   int found = 0;
+   if (aimee_pg_step(stmt, errbuf, sizeof(errbuf)) == AIMEE_PG_ROW)
+   {
+      const char *fp = aimee_pg_column_text(stmt, 0);
+      if (fp && fp[0])
+      {
+         snprintf(out, (size_t)out_cap, "%s", fp);
+         found = 1;
+      }
+   }
+   aimee_pg_finalize(stmt);
+   return found ? 0 : -1;
+}
+
 int pgvec_code_exists_by_hash(const char *project, const char *node_key, const char *content_hash,
                               const char *body_hash)
 {
