@@ -79,6 +79,18 @@ extern "C"
     * Exposed for unit testing of the invariant. */
    int aimee_client_would_leak_cleartext(int is_https, const char *host, const char *token);
 
+   /* Fetch the leaf certificate of the https:// server named in |url| WITHOUT
+    * verifying it (trust-on-first-use), returning it as PEM (caller free()s
+    * *pem_out) plus its SHA-256 fingerprint in |fp_out|. Backs `aimee remote
+    * set/trust` cert pinning. Returns 0 on success; -1 if |url| is not https, the
+    * host is unreachable, or pinning is unsupported in this build/platform. */
+   int aimee_client_fetch_cert(const char *url, char **pem_out, char *fp_out, unsigned long fp_n);
+
+   /* Suppress (on != 0) or restore the transport's connection-failure messages on
+    * stderr. `aimee remote set` brackets its pre-pin probe with this so an
+    * expected, about-to-be-pinned handshake failure does not print. */
+   void aimee_client_suppress_conn_errors(int on);
+
 #ifdef __cplusplus
 }
 #endif
