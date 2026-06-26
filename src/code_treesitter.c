@@ -134,7 +134,8 @@ static int is_identifier_type(const char *t)
 {
    return strcmp(t, "identifier") == 0 || strcmp(t, "type_identifier") == 0 ||
           strcmp(t, "field_identifier") == 0 || strcmp(t, "simple_identifier") == 0 ||
-          strcmp(t, "constant") == 0 || strcmp(t, "name") == 0;
+          strcmp(t, "constant") == 0 || strcmp(t, "name") == 0 ||
+          strcmp(t, "property_identifier") == 0;
 }
 
 /* Pre-order DFS for the first descendant whose type is one of the identifier kinds — used
@@ -332,16 +333,37 @@ static int classify_go(TSNode node, const char **kind, TSNode *name_root)
    return 0;
 }
 
-/* JavaScript / TypeScript: function (incl. generator), class methods, and
- * class/interface/type/enum declarations. `export`/`export default` and class bodies are
- * descended through (see is_descendable), so this fires on the declaration itself. */
+/* JavaScript / TypeScript: function (incl. generator), class methods, arrow/function
+ * expressions bound to a const/let/var or a class field, and class/interface/type/enum
+ * declarations. `export`/`export default`, class bodies, and the const/let/var
+ * declarations are descended through (see is_descendable), so this fires on the
+ * declarator/declaration itself. */
 static int classify_jsts(TSNode node, const char **kind, TSNode *name_root)
 {
+   const char *t = ts_node_type(node);
+   /* `const f = () => {}`, `const g = function(){}`, or a class field `f = () => {}`:
+    * a named binding whose value is a function expression — treat it as a function. */
+   if (strcmp(t, "variable_declarator") == 0 || strcmp(t, "field_definition") == 0 ||
+       strcmp(t, "public_field_definition") == 0)
+   {
+      TSNode val = ts_node_child_by_field_name(node, "value", 5);
+      if (ts_node_is_null(val))
+         return 0;
+      const char *vt = ts_node_type(val);
+      if (strcmp(vt, "arrow_function") != 0 && strcmp(vt, "function_expression") != 0 &&
+          strcmp(vt, "function") != 0 && strcmp(vt, "generator_function") != 0)
+         return 0;
+      *kind = "function";
+      /* variable_declarator exposes a `name` field (an identifier; a destructuring pattern
+       * has none, so it is skipped); a class field's name is a property_identifier child. */
+      *name_root = name_node(node);
+      return 1;
+   }
    static const char *const F[] = {"function_declaration", "generator_function_declaration",
                                    "method_definition", NULL};
    static const char *const T[] = {"class_declaration", "interface_declaration",
                                    "type_alias_declaration", "enum_declaration", NULL};
-   if (!kind_lookup(ts_node_type(node), F, T, kind))
+   if (!kind_lookup(t, F, T, kind))
       return 0;
    *name_root = name_node(node);
    return 1;
@@ -541,7 +563,7 @@ static int is_descendable(const char *t)
        /* organizational wrappers */
        "namespace_declaration", "file_scoped_namespace_declaration", "namespace_definition",
        "declaration_list", "template_declaration", "linkage_specification", "decorated_definition",
-       "export_statement",
+       "export_statement", "lexical_declaration", "variable_declaration",
        /* member bodies */
        "class_body", "field_declaration_list", "body_statement", "enum_body",
        "enum_body_declarations", "interface_body", "block", "method_signature",
