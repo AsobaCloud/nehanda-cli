@@ -91,7 +91,8 @@ char *kb_client_code_graph_hubs(const char *project, int max_results, int *statu
    return json;
 }
 
-char *kb_client_code_graph_surprising(const char *project, int max_results, int *status_out)
+char *kb_client_code_graph_surprising(const char *project, int max_results, int judge,
+                                      int *status_out)
 {
    if (status_out)
       *status_out = -1;
@@ -104,15 +105,16 @@ char *kb_client_code_graph_surprising(const char *project, int max_results, int 
    if (max_results < 1)
       max_results = 1;
 
-   size_t cap = strlen("/v1/code/graph/surprising?project=&max_results=") + strlen(project_q) + 32;
+   size_t cap =
+       strlen("/v1/code/graph/surprising?project=&max_results=&judge=true") + strlen(project_q) + 32;
    char *path = malloc(cap);
    if (!path)
    {
       free(project_q);
       return NULL;
    }
-   snprintf(path, cap, "/v1/code/graph/surprising?project=%s&max_results=%d", project_q,
-            max_results);
+   snprintf(path, cap, "/v1/code/graph/surprising?project=%s&max_results=%d%s", project_q,
+            max_results, judge ? "&judge=true" : "");
    free(project_q);
 
    char *json = kb_client_v1_get_json(path, KB_CLIENT_CODE_GRAPH_READ_TIMEOUT_MS, status_out);

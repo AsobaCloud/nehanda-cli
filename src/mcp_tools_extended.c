@@ -127,6 +127,9 @@ void mcp_add_extended_tools(cJSON *tools)
        "with cosine + hop distance.");
    ext_prop(t, "project", "string", "Project to analyze.");
    ext_prop(t, "max_results", "integer", "Max surprising pairs to return (default 20, max 200).");
+   ext_prop(t, "judge", "boolean",
+            "Confirm the top candidates with an LLM (shared-symbol cross-check + a batched "
+            "judge): each gets confirmed + reason. Default false (structural candidates only).");
    ext_require(t, "project");
 
    /* ── Memory grounding: explain a retrieval + provenance/history ───────────── */
