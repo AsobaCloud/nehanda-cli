@@ -46,6 +46,12 @@ int code_default_branch_changed(const char *stored_sha, const char *current_sha)
  * SHA gate must NOT be applied). */
 int code_index_source_is_worktree(void);
 
+/* §6 live: install a post-merge git hook in `project_root` that backgrounds
+ * `aimee index scan <project_name> <project_root>` so the code graph re-indexes after a
+ * merge/pull advances the default branch. 0 on success, -1 on error, -2 if a non-aimee
+ * post-merge hook already exists (left untouched). */
+int code_index_install_branch_hook(const char *project_root, const char *project_name);
+
 /* Discover git repositories under `root` for one-project-per-repo ingest: invoke
  * `cb` once per real checkout (a directory whose `.git` is itself a directory),
  * with the repo's absolute path. Linked worktrees (`.git` is a regular file) are

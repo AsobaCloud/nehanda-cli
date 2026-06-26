@@ -4,9 +4,9 @@
   `testing` branch), including the §5 code+graph+vector hybrid, §7 graph-informed
   delegation, the §4 surprising-links route + its LLM-judge relevance gate, and the §8
   read-only `/v1/code/graph` backend route + the §8 webchat Graph view, and the §6
-  cross-session memory-fusion leg in `/v1/code/hybrid`; remainder (§2 tree-sitter, §6
-  *live* reindex hook, and the §4 precision self-suppress monitoring) still open, as
-  build-/integration-tier work. See the
+  live updates (memory-fusion leg + default-branch change-detection gate + post-merge
+  reindex hook); remainder (§2 tree-sitter, the §4 precision self-suppress monitor, and
+  an optional §6 fanotify watch) still open, as build-/telemetry-tier work. See the
   "Implementation status" section below.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
   built without a manual step, (b) parsed broadly, (c) ranked by **graph structure
@@ -247,9 +247,18 @@ embedder — integration/deploy-tier) as a third fused signal.
   (the default ref's tree SHA, §0.5 chain) is compared via the pure
   `code_default_branch_changed` against the last-indexed SHA stored in
   `kb_runtime_state`; unchanged + non-`force` → `{"skipped":true}` (`unit-test-code-collect`
-  exercises the SHA-tracks-commits + gate logic against real git repos). This is the
-  cheap gate a post-merge/fetch **hook** reuses; installing that hook (mirroring
-  `verify_install_git_hook`) + the watch loop remain the integration follow-up.
+  exercises the SHA-tracks-commits + gate logic against real git repos).
+
+  **Status — post-merge hook shipped.** `code_index_install_branch_hook` writes a
+  marker-guarded `post-merge` git hook (mirroring `verify_install_git_hook`; won't
+  clobber a foreign hook) that backgrounds `aimee index scan <project> <root>`, so a
+  pull/merge advancing the default branch re-indexes the graph — and the SHA gate above
+  makes that a cheap no-op when nothing moved. Opt-in via `/v1/code/scan
+  {install_hook:true}` (so `workspace add` can enable live reindex); best-effort, never
+  failing the scan. Tested against real git repos (`test_install_branch_hook`) + the
+  route (`test_code_scan_installs_hook`). §6 live is now end-to-end: **detect** (SHA
+  gate) → **fire** (hook) → **rebuild** (§1 drain). A fanotify/inotify watch for
+  non-git or always-on freshness remains an optional follow-up.
 - **Fuse the graph with conversation memory + the decision log** so the "why" behind
   a symbol is the *actual recorded reasoning*, not just parsed comments — queryable
   via §5. This is the thing a regenerated artifact can never hold.
@@ -358,6 +367,11 @@ all three are reachable from the frontend over the trusted UDS hop).
   `why`, **agent-callable** via `index({command:"hybrid"})`, with **config-tunable
   per-signal weights** (`kb.code_hybrid.*`). The vector SQL was validated against real
   pgvector/halfvec.
+- **§6 live** — `/v1/code/scan` skips the git re-walk when the default-branch tree SHA
+  is unchanged (`git_resolve_default_sha` + `code_default_branch_changed`, stored in
+  `kb_runtime_state`; worktree-opt-in aware), and an opt-in `install_hook:true`
+  installs a `post-merge` reindex hook (`code_index_install_branch_hook`) so pulls keep
+  the graph fresh (`unit-test-code-collect`, `test_code_scan_*`).
 - **§7** structural blast-radius **advisory** on the guardrail edit path + **graph-informed
   delegation** (a delegate's prompt is prefixed with the callers/dependencies of the
   files its task references) — both advisory, fail-open, structural-only, opt-in
@@ -378,10 +392,9 @@ all three are reachable from the frontend over the trusted UDS hop).
 - **§4 precision self-suppress** — the LLM-judge relevance gate is shipped (opt-in
   `judge=true`); the precision-sampling monitor that auto-disables the feature below a
   quality floor needs a deployed corpus + judged-precision telemetry over time.
-- **§6 live half** — the change-detection gate (default-branch SHA + `/v1/code/scan`
-  skip-when-unchanged) and the memory-fusion leg are shipped; the post-merge/fetch
-  **hook install** + watch loop that *fire* the gate on a git event remain, needing a
-  running KB + git events to validate.
+- **§6 watch (optional)** — the change-detection gate, the post-merge reindex hook, and
+  the memory-fusion leg are all shipped; only an always-on fanotify/inotify watch (for
+  non-git trees or freshness without a git event) remains, as an optional follow-up.
 
 ## Non-goals
 
