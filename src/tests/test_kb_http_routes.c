@@ -367,9 +367,10 @@ int db2_reembed_clear_maintenance(int force, int *was_in_progress, int *recorded
    g_test_reembed_in_progress = 0;
    return 0;
 }
+int g_test_embedding_dim = 1024; /* §5 vector-leg tests flip this; default 1024 */
 int db2_embedding_dim(void)
 {
-   return 1024;
+   return g_test_embedding_dim;
 }
 int db2_probe_embedder_dim(int budget_ms, int *out)
 {
@@ -851,6 +852,7 @@ int config_load(config_t *cfg)
     * both signals at equal weight (a 0 weight would disable a signal). */
    cfg->code_hybrid_weight_code = 1.0;
    cfg->code_hybrid_weight_graph = 1.0;
+   cfg->code_hybrid_weight_vector = 1.0;
    cfg->code_hybrid_rrf_k = 60.0;
    return 0;
 }
@@ -1924,6 +1926,8 @@ int main(void)
    test_code_hybrid_ok();
    test_code_hybrid_missing_query();
    test_code_hybrid_no_symbol();
+   test_code_hybrid_vector_ok();
+   test_code_hybrid_vector_dim_mismatch_skips();
    test_code_graph_hubs_ok();
    test_code_graph_hubs_missing_project();
    test_code_project_stats_missing_project();
