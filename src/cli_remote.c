@@ -77,6 +77,57 @@ void cli_remote_load_persisted(void)
       aimee_client_set_remote(url, token[0] ? token : NULL);
 }
 
+static void remote_ca_path(char *out, size_t out_sz)
+{
+   snprintf(out, out_sz, "%s/remote-ca.pem", aimee_home());
+}
+
+/* Probe GET /v1/health over the currently-active remote (verifying TLS). Returns
+ * 1 when the server answers (a real HTTP status — so the chain + hostname/SAN
+ * verified), else 0. Used to detect whether trust is already established. */
+static int remote_health_ok(void)
+{
+   int st = 0;
+   char *body = aimee_client_request("GET", "/v1/health", NULL, &st);
+   int ok = (body != NULL && st >= 200 && st < 500);
+   free(body);
+   return ok;
+}
+
+/* Trust-on-first-use pin: fetch |url|'s leaf cert (no verification), write it to
+ * <aimee_home>/remote-ca.pem, and report its SHA-256 fingerprint so the operator
+ * can confirm it out-of-band. aimee_tls_connect then verifies against it (chain +
+ * hostname/SAN still enforced). Returns 0 on success, -1 on failure (unreachable,
+ * not https, or pinning unsupported on this platform). */
+static int remote_pin_cert(const char *url, int json_output)
+{
+   char *pem = NULL;
+   char fp[200] = "";
+   if (aimee_client_fetch_cert(url, &pem, fp, sizeof(fp)) != 0 || !pem)
+   {
+      free(pem);
+      return -1;
+   }
+   ensure_dir_p(aimee_home());
+   char ca[512];
+   remote_ca_path(ca, sizeof(ca));
+   FILE *f = fopen(ca, "w");
+   if (!f)
+   {
+      free(pem);
+      return -1;
+   }
+   fputs(pem, f);
+   fclose(f);
+   free(pem);
+#ifndef _WIN32
+   chmod(ca, 0600);
+#endif
+   if (!json_output)
+      printf("  TLS: pinned server certificate (SHA-256 %s)\n       -> %s\n", fp, ca);
+   return 0;
+}
+
 static int remote_set(const char *url, const char *token, int json_output)
 {
    if (!url || !*url)
@@ -95,12 +146,79 @@ static int remote_set(const char *url, const char *token, int json_output)
    }
    fprintf(f, "%s\n%s\n", url, token ? token : "");
    fclose(f);
+
+   /* For an https remote, establish trust now so later commands need no
+    * AIMEE_TLS_INSECURE flag. If it already verifies (publicly-trusted CA, or a
+    * previously pinned cert) we leave it alone; otherwise pin its cert (TOFU). */
+   int is_https = (strncmp(url, "https://", 8) == 0);
+   int pinned = 0, verified = 0;
+   if (is_https)
+   {
+      aimee_client_set_remote(url, token && *token ? token : NULL);
+      /* This first probe is expected to fail for a self-signed server (not pinned
+       * yet); silence its diagnostic so a clean set doesn't look like an error. */
+      aimee_client_suppress_conn_errors(1);
+      int already = remote_health_ok();
+      aimee_client_suppress_conn_errors(0);
+      if (already)
+         verified = 1; /* already trusted — nothing to pin */
+      else if (remote_pin_cert(url, json_output) == 0)
+      {
+         pinned = 1;
+         verified = remote_health_ok(); /* re-probe against the pinned cert */
+      }
+   }
+
    if (json_output)
-      printf("{\"ok\":true,\"url\":\"%s\",\"token\":%s}\n", url,
-             token && *token ? "true" : "false");
+      printf("{\"ok\":true,\"url\":\"%s\",\"token\":%s,\"pinned\":%s,\"verified\":%s}\n", url,
+             token && *token ? "true" : "false", pinned ? "true" : "false",
+             verified ? "true" : "false");
    else
+   {
       printf("Remote server set to %s%s\n", url, token && *token ? " (with token)" : "");
+      if (is_https && verified)
+         printf(pinned ? "  TLS: verified against the pinned certificate.\n"
+                       : "  TLS: verified against the system trust store.\n");
+      else if (is_https)
+         printf("  TLS: could not establish trust (server unreachable, or cert pinning is not "
+                "available on this platform).\n"
+                "       Start the server and re-run, use `aimee remote trust`, or set "
+                "AIMEE_TLS_INSECURE=1 to override.\n");
+   }
    return 0;
+}
+
+/* Re-pin the cert of the already-configured remote (e.g. after the server's
+ * self-signed cert was rotated). */
+static int remote_trust(int json_output)
+{
+   char url[512], token[256];
+   if (!read_remote_conf(url, sizeof(url), token, sizeof(token)) || !url[0])
+   {
+      fprintf(stderr, "aimee: no remote configured; run `aimee remote set <url> [token]` first\n");
+      return 2;
+   }
+   if (strncmp(url, "https://", 8) != 0)
+   {
+      fprintf(stderr, "aimee: remote %s is not https:// — no certificate to pin\n", url);
+      return 1;
+   }
+   if (remote_pin_cert(url, json_output) != 0)
+   {
+      fprintf(stderr,
+              "aimee: could not fetch the server certificate (is %s reachable? is pinning "
+              "supported on this platform?)\n",
+              url);
+      return 1;
+   }
+   aimee_client_set_remote(url, token[0] ? token : NULL);
+   int verified = remote_health_ok();
+   if (json_output)
+      printf("{\"ok\":true,\"pinned\":true,\"verified\":%s}\n", verified ? "true" : "false");
+   else
+      printf(verified ? "  TLS: verified against the pinned certificate.\n"
+                      : "  TLS: pinned, but the server still does not verify — check it.\n");
+   return verified ? 0 : 1;
 }
 
 static int remote_clear(int json_output)
@@ -108,6 +226,10 @@ static int remote_clear(int json_output)
    char path[512];
    remote_conf_path(path, sizeof(path));
    int removed = (remove(path) == 0);
+   /* Also drop the pinned cert so a later remote can't accidentally inherit it. */
+   char ca[512];
+   remote_ca_path(ca, sizeof(ca));
+   remove(ca);
    if (json_output)
       printf("{\"ok\":true,\"cleared\":%s}\n", removed ? "true" : "false");
    else
@@ -152,8 +274,10 @@ int cli_remote_cmd(int argc, char **argv, int json_output)
       return remote_set(argc > 1 ? argv[1] : NULL, argc > 2 ? argv[2] : NULL, json_output);
    if (strcmp(sub, "clear") == 0)
       return remote_clear(json_output);
+   if (strcmp(sub, "trust") == 0)
+      return remote_trust(json_output);
    if (strcmp(sub, "status") == 0)
       return remote_status(json_output);
-   fprintf(stderr, "usage: aimee remote <set <url> [token] | status | clear>\n");
+   fprintf(stderr, "usage: aimee remote <set <url> [token] | trust | status | clear>\n");
    return 2;
 }
