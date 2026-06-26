@@ -1,13 +1,14 @@
 # Proposal: Code-graph intelligence — a living, embedded, reasoning graph over code
 
-- **State:** IN PROGRESS — §0.5/§1/§3/§4/§5/§7/§8-backend implemented (on the
-  `testing` branch), including the §5 code+graph+vector hybrid, §7 graph-informed
-  delegation, the §4 surprising-links route + its LLM-judge relevance gate, and the §8
-  read-only `/v1/code/graph` backend route + the §8 webchat Graph view, and the §6
-  live updates (memory-fusion leg + default-branch change-detection gate + post-merge
-  reindex hook) + the §4 precision self-suppress; remainder is **§2 tree-sitter** (the
-  one build-tier item) and an optional §6 fanotify watch. See the
-  "Implementation status" section below.
+- **State:** IN PROGRESS — **every section §0.5–§8 now has an implementation on
+  the `testing` branch**: the §5 code+graph+vector+memory hybrid, §7 graph-informed
+  delegation + blast-radius advisory, the §4 surprising-links route with its LLM-judge
+  relevance gate + precision self-suppress, the §8 `/v1/code/graph` backend route + the
+  webchat Graph view, the §6 live updates (memory-fusion leg + default-branch
+  change-detection gate + post-merge reindex hook), and the **§2 tree-sitter front-end +
+  C grammar** (opt-in `AIMEE_TREESITTER` build, fall-through to the hand-rolled
+  extractors). Only **optional follow-ups** remain — more §2 grammars + parse-tree call
+  edges, and an always-on §6 fanotify watch. See the "Implementation status" section.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
   built without a manual step, (b) parsed broadly, (c) ranked by **graph structure
   AND vector similarity AND memory** in one query, and (d) able to *change what the
@@ -117,6 +118,19 @@ Replace/augment the hand-rolled extractors with a **tree-sitter** front-end feed
 the *same* `code_calls` / `code_projection_edges` / symbol tables. Target ≥30
 languages. Keep the existing extractor path as fallback for unsupported grammars.
 This is the one true coverage gap and the largest engineering item.
+
+**Status — front-end + first grammar shipped (opt-in).** `code_treesitter.c` parses a
+file with the tree-sitter grammar for its extension and emits the same `definition_t`
+symbols (functions / typedefs / struct·union·enum types) the hand-rolled extractor
+does; `extract_definitions` prefers it where a grammar is compiled in and **falls back**
+otherwise — so the **default build is unchanged**. The runtime + grammars are large
+generated parsers, so they are **fetched at build time** (`scripts/fetch-treesitter.sh`,
+pinned commits, gitignored) and compiled only in the opt-in `AIMEE_TREESITTER` build;
+`code_treesitter.c` is a stub without it. Ships the **C grammar** (aimee dogfoods its
+own source) + the build machinery (`unit-test-code-treesitter` parses real C and asserts
+the extracted defs); adding the remaining ~29 languages is now mechanical — vendor each
+grammar's `parser.c` and register its `TSLanguage` + extensions in `ts_language_for_ext`.
+Call-edge extraction (`code_calls`) over the parse tree is the next increment.
 
 ## §3 Edge provenance + confidence
 
@@ -348,6 +362,11 @@ all three are reachable from the frontend over the trusted UDS hop).
 - **§0.5** default-branch sourcing (`code_collect.c`, `unit-test-code-collect`).
 - **§1** auto-build of the projection graph on the curator drain, content-addressed +
   idempotent (`kb_graph_build_project_if_changed`, `unit-test-kb-graph`).
+- **§2** tree-sitter extraction front-end (`code_treesitter.c`) + the **C grammar**,
+  feeding the same `definition_t` symbols as the hand-rolled extractors with fall-through;
+  opt-in `AIMEE_TREESITTER` build (runtime + grammars fetched, not committed —
+  `scripts/fetch-treesitter.sh`), so the default build is unchanged
+  (`unit-test-code-treesitter`, opt-in).
 - **§3** edge provenance (`structural`/`inferred`/`ambiguous`) surfaced in `graph.explain`.
 - **§4** hub/degree-centrality analytics — `GET /v1/code/graph/hubs`
   (`kb_graph_analytics.c`, `unit-test-kb-graph-analytics`), **agent-callable** via
@@ -390,9 +409,10 @@ all three are reachable from the frontend over the trusted UDS hop).
   surprising links, via webchat Go proxies `/api/graph/*` (`webchat/graph.go`,
   `webchat/graph_test.go`) over the `index_graph_*` MCP tools.
 
-**Deferred — needs the embedder / a build-tier dependency / a deployed corpus / a frontend
-(not completable in the agent host):**
-- **§2 tree-sitter** front-end — large build-tier work (vendor ~30 grammars + ABI).
+**Deferred — optional follow-ups (the front-ends are all shipped):**
+- **§2 more grammars + call edges** — the tree-sitter front-end + C grammar + opt-in
+  build ship; vendoring the remaining ~29 grammars and adding `code_calls` extraction
+  over the parse tree is mechanical (and a build-tier / binary-size decision per deploy).
 - **§6 watch (optional)** — the change-detection gate, the post-merge reindex hook, and
   the memory-fusion leg are all shipped; only an always-on fanotify/inotify watch (for
   non-git trees or freshness without a git event) remains, as an optional follow-up.

@@ -316,7 +316,7 @@ DB2_OBJS = $(DB2_SRCS:%.c=$(OBJDIR)/%.o)
 
 # --- Layer 1: Data & policy (memory, index, rules, guardrails, workspace) ---
 DATA_SRCS = code_match.c rel_types.c memory_fact_gate.c memory_extract_patterns.c memory_pii_gate.c memory_core.c memory_logic.c memory_effective.c memory_health.c memory_conflict.c memory_context.c memory_assemble.c memory_advanced.c memory_prospective.c memory_lifecycle.c memory_directives.c memory_maintenance.c memory_graph.c memory_graph_fusion.c memory_scan.c memory_improve.c memory_episodes.c \
-            index.c extractors.c extractors_extra.c extractors_new_langs.c css_analyze.c css_oracle.c css_render_oracle.c css_render_cmd.c \
+            index.c extractors.c extractors_extra.c extractors_new_langs.c code_treesitter.c css_analyze.c css_oracle.c css_render_oracle.c css_render_cmd.c \
             context_discover.c tasks.c learning_router.c learning_implicit.c dogfood.c working_profile.c guardrails.c guardrails_orchestrator.c guardrails_tdd.c workflow_learn.c session_state.c session_briefing.c file_safety.c branch_ownership.c integrity_gate.c conversation_context.c payload_rewrite.c guardrails_semantic.c guardrails_blast_radius.c gateway_policy.c gateway_pipeline.c gateway_delegate.c \
             workspace.c worktree_gc.c workspace_manifest.c workspace_handle.c server/agent_config.c cmd_describe.c \
             history.c role_templates.c skill.c skill_rollback.c skill_review.c skill_curator.c conversation.c \
@@ -411,10 +411,29 @@ KB_CORE_OBJS = $(KB_CORE_SRCS:%.c=$(OBJDIR)/kb/%.o) $(OBJDIR)/cJSON.o
 KB_DB2_PG_OBJS = $(DB2_PG_SRCS:%.c=$(OBJDIR)/kb/%.o)
 KB_DB2_OBJS = $(DB2_SRCS:%.c=$(OBJDIR)/kb/%.o)
 KB_DATA_SRCS = code_match.c rel_types.c memory_fact_gate.c memory_extract_patterns.c memory_pii_gate.c memory_core.c memory_logic.c memory_effective.c memory_health.c memory_conflict.c memory_context.c memory_assemble.c memory_advanced.c memory_prospective.c memory_lifecycle.c memory_directives.c memory_maintenance.c memory_graph.c memory_graph_fusion.c memory_scan.c memory_improve.c memory_episodes.c \
-               index.c extractors.c extractors_extra.c extractors_new_langs.c css_analyze.c css_oracle.c css_render_oracle.c css_render_cmd.c \
+               index.c extractors.c extractors_extra.c extractors_new_langs.c code_treesitter.c css_analyze.c css_oracle.c css_render_oracle.c css_render_cmd.c \
                dogfood.c learning_router.c learning_implicit.c integrity_gate.c session_briefing.c workspace.c workspace_manifest.c workspace_handle.c memory_profile_pack.c wiki_render.c kb/kb.c kb/kb_fusion.c kb/kb_neardup.c kb/kb_conventions.c sketch.c learning_evidence.c learning_bundle.c kb/kb_calibrate.c kb/kb_demote.c kb/kb_features.c kb/kb_ranker.c kb/kb_detect.c kb/kb_reasoning.c kb/kb_bandit.c kb/kb_planner.c kb/roadmap.c kb/kb_mdl.c
 KB_DATA_OBJS = $(KB_DATA_SRCS:%.c=$(OBJDIR)/kb/%.o)
 KB_PLATFORM_OBJS = $(PLATFORM_BASIC_OBJS) $(filter %/agent_bridge.o %/cli_client.o %/memory.o,$(PLATFORM_EXTRA_OBJS) $(PLATFORM_AGENT_OBJS))
+
+# --- §2 tree-sitter extraction front-end (opt-in: `make AIMEE_TREESITTER=1`) ---
+# Default build: code_treesitter.c compiles to a stub (no tree-sitter), so nothing is
+# fetched/linked and the binary is unchanged (TS_VENDOR_OBJS is undefined -> empty in the
+# KB link). Opt-in: the runtime + grammars are fetched (scripts/fetch-treesitter.sh) and
+# compiled (with -w, since vendored generated code does not pass -Werror), and the KB's
+# code_treesitter.o is built with -DAIMEE_TREESITTER.
+ifdef AIMEE_TREESITTER
+TS_VENDOR_OBJS = $(OBJDIR)/vendor/ts_runtime.o $(OBJDIR)/vendor/ts_c.o
+$(OBJDIR)/kb/code_treesitter.o: C_FLAGS += -DAIMEE_TREESITTER -Ivendor/tree-sitter/lib/include
+vendor/tree-sitter/lib/src/lib.c vendor/tree-sitter-c/src/parser.c:
+	./scripts/fetch-treesitter.sh
+$(OBJDIR)/vendor/ts_runtime.o: vendor/tree-sitter/lib/src/lib.c
+	@mkdir -p $(OBJDIR)/vendor
+	$(CC) -c -Os -w -Ivendor/tree-sitter/lib/src -Ivendor/tree-sitter/lib/include -o $@ $<
+$(OBJDIR)/vendor/ts_c.o: vendor/tree-sitter-c/src/parser.c
+	@mkdir -p $(OBJDIR)/vendor
+	$(CC) -c -Os -w -Ivendor/tree-sitter-c/src -o $@ $<
+endif
 
 # --- Gateway ---
 
@@ -788,7 +807,7 @@ $(SERVER): $(SERVER_OBJS) $(SERVER_KB_CLIENT_OBJS) $(AGENT_OBJS) $(SERVER_DATA_O
 # oauth_pkce.o provides the base64url encoder kb/enroll.c uses to mint
 # enrollment tokens (now reachable from `aimee-kb enroll`). It is a leaf crypto
 # util (openssl + platform_random only), so the kb sidecar links it directly.
-$(KB): $(KB_OBJS) $(OBJDIR)/dashboard_kb.o $(OBJDIR)/server/oauth_pkce.o $(OBJDIR)/server/embedder_probe.o $(KB_DATA_OBJS) $(KB_CORE_OBJS) $(KB_DB2_PG_OBJS) $(KB_DB2_OBJS) $(KB_PLATFORM_OBJS)
+$(KB): $(KB_OBJS) $(OBJDIR)/dashboard_kb.o $(OBJDIR)/server/oauth_pkce.o $(OBJDIR)/server/embedder_probe.o $(KB_DATA_OBJS) $(KB_CORE_OBJS) $(KB_DB2_PG_OBJS) $(KB_DB2_OBJS) $(KB_PLATFORM_OBJS) $(TS_VENDOR_OBJS)
 	$(AIMEE_RUNTIME_MUTATION_GUARD)
 	$(CC) -o $@ $^ $(L_KB)
 
