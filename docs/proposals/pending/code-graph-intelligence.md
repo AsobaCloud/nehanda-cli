@@ -5,10 +5,11 @@
   delegation + blast-radius advisory, the §4 surprising-links route with its LLM-judge
   relevance gate + precision self-suppress, the §8 `/v1/code/graph` backend route + the
   webchat Graph view, the §6 live updates (memory-fusion leg + default-branch
-  change-detection gate + post-merge reindex hook), and the **§2 tree-sitter front-end +
-  C grammar** (opt-in `AIMEE_TREESITTER` build, fall-through to the hand-rolled
-  extractors). Only **optional follow-ups** remain — more §2 grammars + parse-tree call
-  edges, and an always-on §6 fanotify watch. See the "Implementation status" section.
+  change-detection gate + post-merge reindex hook), and the **§2 tree-sitter front-end**
+  with **C, Python, Go, JavaScript and Rust** grammars (opt-in `AIMEE_TREESITTER`
+  build, fall-through to the hand-rolled extractors). Only **optional follow-ups**
+  remain — more §2 grammars + nested-member/parse-tree call edges, and an always-on §6
+  fanotify watch. See the "Implementation status" section.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
   built without a manual step, (b) parsed broadly, (c) ranked by **graph structure
   AND vector similarity AND memory** in one query, and (d) able to *change what the
@@ -119,18 +120,21 @@ the *same* `code_calls` / `code_projection_edges` / symbol tables. Target ≥30
 languages. Keep the existing extractor path as fallback for unsupported grammars.
 This is the one true coverage gap and the largest engineering item.
 
-**Status — front-end + first grammar shipped (opt-in).** `code_treesitter.c` parses a
+**Status — front-end + 5 grammars shipped (opt-in).** `code_treesitter.c` parses a
 file with the tree-sitter grammar for its extension and emits the same `definition_t`
-symbols (functions / typedefs / struct·union·enum types) the hand-rolled extractor
-does; `extract_definitions` prefers it where a grammar is compiled in and **falls back**
-otherwise — so the **default build is unchanged**. The runtime + grammars are large
-generated parsers, so they are **fetched at build time** (`scripts/fetch-treesitter.sh`,
-pinned commits, gitignored) and compiled only in the opt-in `AIMEE_TREESITTER` build;
-`code_treesitter.c` is a stub without it. Ships the **C grammar** (aimee dogfoods its
-own source) + the build machinery (`unit-test-code-treesitter` parses real C and asserts
-the extracted defs); adding the remaining ~29 languages is now mechanical — vendor each
-grammar's `parser.c` and register its `TSLanguage` + extensions in `ts_language_for_ext`.
-Call-edge extraction (`code_calls`) over the parse tree is the next increment.
+symbols (functions and types) the hand-rolled extractor does; `extract_definitions`
+prefers it where a grammar is compiled in and **falls back** otherwise — so the
+**default build is unchanged**. The runtime + grammars are large generated parsers, so
+they are **fetched at build time** (`scripts/fetch-treesitter.sh`, pinned commits,
+gitignored) and compiled only in the opt-in `AIMEE_TREESITTER` build (external scanners
+linked where a grammar needs one); `code_treesitter.c` is a stub without it. Ships
+**C, Python, Go, JavaScript and Rust** grammars, each with a per-language `classify_*`
+mapping its definition node types to `function`/`type` (`unit-test-code-treesitter`
+parses real source in all five and asserts the extracted defs). Adding a grammar is
+mechanical — vendor its `parser.c`(+`scanner.c`), register its `TSLanguage` + extensions
+in `ts_language_for_ext`, and add a `classify_*`. Remaining increments: recursive
+descent for nested members (class/impl methods), more languages, and call-edge
+extraction (`code_calls`) over the parse tree.
 
 ## §3 Edge provenance + confidence
 
