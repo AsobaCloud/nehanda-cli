@@ -1227,6 +1227,13 @@ typedef struct config
    int kb_bg_ingest_interval_hours;
    int kb_bg_watch_enabled;
    int kb_bg_watch_debounce_secs;
+   /* §5 hybrid code retrieval (/v1/code/hybrid): per-signal RRF weights + the RRF
+    * rank constant k. Tunable so an operator can favor lexical-code vs structural-
+    * graph relevance without a rebuild. Defaults: weights 1.0 (equal), k = 60.
+    * A weight <= 0 disables that signal's contribution. See kb_rrf.c / §5. */
+   double code_hybrid_weight_code;
+   double code_hybrid_weight_graph;
+   double code_hybrid_rrf_k;
    /* embedder-runtime-fetch-autodim §2c: when 0 (default) a recorded-vs-configured
     * embedding-dim mismatch is REFUSED at startup (refuse-and-instruct). When 1, the
     * attended `aimee kb reembed --confirm` reset path is AVAILABLE (it still never

@@ -845,6 +845,11 @@ int config_load(config_t *cfg)
    cfg->demotion_half_life_days = 30.0;
    cfg->workspace_count = 1;
    snprintf(cfg->workspaces[0], sizeof(cfg->workspaces[0]), "/workspace");
+   /* §5 hybrid RRF weights: mirror config_set_defaults so /v1/code/hybrid fuses
+    * both signals at equal weight (a 0 weight would disable a signal). */
+   cfg->code_hybrid_weight_code = 1.0;
+   cfg->code_hybrid_weight_graph = 1.0;
+   cfg->code_hybrid_rrf_k = 60.0;
    return 0;
 }
 
