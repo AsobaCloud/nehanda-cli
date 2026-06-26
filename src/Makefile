@@ -449,6 +449,10 @@ TS_VENDOR_OBJS = $(OBJDIR)/vendor/ts_runtime.o \
                  $(OBJDIR)/vendor/ts_dart.o $(OBJDIR)/vendor/ts_dart_scan.o \
                  $(OBJDIR)/vendor/ts_css.o $(OBJDIR)/vendor/ts_css_scan.o
 $(OBJDIR)/kb/code_treesitter.o: C_FLAGS += -DAIMEE_TREESITTER -Ivendor/tree-sitter/lib/include
+# code_treesitter.c includes tree_sitter/api.h, which the fetch produces — so on a cold
+# checkout the fetch must run before this object compiles. Order-only: trigger the fetch
+# if the headers are missing, but don't recompile just because lib.c is newer.
+$(OBJDIR)/kb/code_treesitter.o: | vendor/tree-sitter/lib/src/lib.c
 # Any missing vendored source triggers a single fetch of the whole set.
 vendor/tree-sitter/lib/src/lib.c \
 vendor/tree-sitter-c/src/parser.c \
