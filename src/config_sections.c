@@ -1357,6 +1357,9 @@ void config_parse_kb_section2(config_t *cfg, cJSON *root)
          item = cJSON_GetObjectItemCaseSensitive(ch, "weight_vector");
          if (cJSON_IsNumber(item))
             cfg->code_hybrid_weight_vector = item->valuedouble;
+         item = cJSON_GetObjectItemCaseSensitive(ch, "weight_memory");
+         if (cJSON_IsNumber(item))
+            cfg->code_hybrid_weight_memory = item->valuedouble;
          item = cJSON_GetObjectItemCaseSensitive(ch, "rrf_k");
          if (cJSON_IsNumber(item) && item->valuedouble > 0)
             cfg->code_hybrid_rrf_k = item->valuedouble;
