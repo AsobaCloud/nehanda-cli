@@ -1930,6 +1930,8 @@ int main(void)
    test_code_hybrid_vector_dim_mismatch_skips();
    test_code_graph_hubs_ok();
    test_code_graph_hubs_missing_project();
+   test_code_graph_node_ok();
+   test_code_graph_node_missing_params();
    test_code_project_stats_missing_project();
    test_code_project_stats_ok();
    test_code_project_stats_error_is_json();
