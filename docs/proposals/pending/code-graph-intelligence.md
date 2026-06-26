@@ -1,10 +1,11 @@
 # Proposal: Code-graph intelligence — a living, embedded, reasoning graph over code
 
-- **State:** IN PROGRESS — §0.5/§1/§3/§4/§5/§7 implemented (on the `testing` branch),
-  including the §5 code+graph+vector hybrid, §7 graph-informed delegation, the §4
-  surprising-links distance+selection core, and the §8 read-only `/v1/code/graph`
-  backend route; remainder (§2 tree-sitter, §4 surprising-links route, §6 live fusion,
-  §8 webchat frontend) still open, as build-/integration-/frontend-tier work. See the
+- **State:** IN PROGRESS — §0.5/§1/§3/§4/§5/§7/§8-backend implemented (on the
+  `testing` branch), including the §5 code+graph+vector hybrid, §7 graph-informed
+  delegation, the §4 surprising-links route (`/v1/code/graph/surprising`), and the §8
+  read-only `/v1/code/graph` backend route; remainder (§2 tree-sitter, §4
+  surprising-links LLM-judge confirmation, §6 live fusion, §8 webchat frontend) still
+  open, as build-/integration-/LLM-/frontend-tier work. See the
   "Implementation status" section below.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
   built without a manual step, (b) parsed broadly, (c) ranked by **graph structure
@@ -161,9 +162,20 @@ Computed over `code_projection_edges` + embeddings, served read-only:
   at the requested similarity percentile of the supplied pair set, then keeps pairs
   whose hop distance ≥ `d_min` **or** which are disconnected, in deterministic order)
   in `src/kb/kb_graph_analytics.c`, unit-tested in `unit-test-kb-graph-analytics`.
-  Still open (needs the embedder + a deployed corpus): the route that gathers
-  candidate pairs from `code_embeddings` via pgvector, maps vector rows back to graph
-  node identity, and runs the LLM-judge/precision-sampling confirmation stage.
+
+  **Status — route shipped.** `GET /v1/code/graph/surprising?project&max_results&k&
+  d_min&percentile&min_cosine` gathers candidate pairs from `code_embeddings` via a
+  project-scoped, anchor-bounded **lateral self-kNN** (`pgvec_code_similar_pairs`,
+  riding the HNSW cosine index), whose `node_key` is byte-identical to the projection
+  file-node key (`db2_entity_node_key_file`) so pairs map to graph nodes with no
+  remapping, then runs the pure core above. The hop distance is computed over the
+  graph **with the project containment super-hub excluded** — otherwise every
+  same-project file pair is 2 hops (file←project→file) and the signal is meaningless.
+  A genuine vector-store outage is a 503 (distinct from an empty 200); every link
+  carries `hops` (-1 = disconnected) + a `disconnected` bool. The SQL was validated
+  against real pgvector/halfvec. Still open (needs the LLM + a sampled corpus): the
+  §4 **LLM-judge / precision self-suppress** confirmation stage — this route returns
+  the structural candidates.
 
 ## §5 Hybrid graph+vector+memory retrieval (the headline)
 
@@ -293,9 +305,12 @@ webchat **frontend** consumer remains open.
 - **§3** edge provenance (`structural`/`inferred`/`ambiguous`) surfaced in `graph.explain`.
 - **§4** hub/degree-centrality analytics — `GET /v1/code/graph/hubs`
   (`kb_graph_analytics.c`, `unit-test-kb-graph-analytics`), **agent-callable** via
-  `index({command:"hubs"})`; plus the **surprising-links distance + selection core**
-  (`kb_graph_shortest_hops` BFS + data-driven-percentile `kb_graph_surprising`, same
-  unit test).
+  `index({command:"hubs"})`; plus the **surprising-links route** `GET
+  /v1/code/graph/surprising` — an anchor-bounded pgvector self-kNN
+  (`pgvec_code_similar_pairs`) feeding the pure `kb_graph_surprising`
+  (BFS distance + data-driven percentile), over the coupling graph **with the project
+  containment hub excluded** (`handle_get_code_graph_surprising`,
+  `test_code_graph_surprising_*`).
 - **§5** RRF fusion core (`kb_rrf.c`, `unit-test-kb-rrf`) + the `GET /v1/code/hybrid`
   route fusing `code` + `graph` + **`vector`** (embedding similarity over
   `code_embeddings` via `pgvec_code_search_paths`, gated on a dim-matched embedder,
@@ -316,9 +331,10 @@ webchat **frontend** consumer remains open.
 **Deferred — needs the embedder / a build-tier dependency / a deployed corpus / a frontend
 (not completable in the agent host):**
 - **§2 tree-sitter** front-end — large build-tier work (vendor ~30 grammars + ABI).
-- **§4 surprising-links route** — core (BFS distance + percentile selection) shipped;
-  the pgvector pair-gather + node-identity mapping + LLM-judge confirmation stage needs
-  embeddings and a deployed corpus.
+- **§4 surprising-links LLM-judge** — the route (pgvector pair-gather + node-identity
+  mapping + structural percentile/distance filter) is shipped; the **LLM-judge /
+  precision self-suppress** confirmation stage on the top candidates needs the LLM and
+  a sampled corpus.
 - **§6 live/memory fusion** — post-merge/fetch incremental hook + watch.
 - **§8 webchat visualization** — the **frontend** consumer; the read-only `/v1/code/graph`
   backend route is shipped (above).
