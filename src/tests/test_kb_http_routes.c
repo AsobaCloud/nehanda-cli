@@ -281,8 +281,7 @@ int kb_curator_contradictions_json(int limit, char *out, size_t out_cap)
    return 1;
 }
 
-/* §2c: stubs for the /v1/reembed + /v1/search-guard db2 refs in kb_http.o.
- * g_test_reembed_in_progress drives the maintenance marker (the /v1/search 503 guard). */
+/* §2c: /v1/reembed + search-guard db2 stubs (g_test_reembed_in_progress -> 503 guard). */
 static int g_test_reembed_in_progress = 0;
 int db2_reembed_in_progress_get(int *target_dim, long *started_epoch)
 {
@@ -298,9 +297,8 @@ int db2_reembed_in_progress_get(int *target_dim, long *started_epoch)
    (void)started_epoch;
    return 0; /* not in progress -> search path proceeds */
 }
-/* structured-PDF search_chunks db2 stubs — the routes are exercised against real SQL
- * in test_kb_doc_pdf.c; here they only resolve the link (struct args as void* to avoid
- * db2/kb_payload.h, which conflicts with this file's simplified db2 stubs). */
+/* structured-PDF search_chunks db2 stubs — exercised against real SQL in
+ * test_kb_doc_pdf.c; here they only resolve the link (void* args avoid kb_payload.h). */
 int db2_kb_pdf_search_chunks(const char *project, const char *query, int max, void *out)
 {
    return 0;
@@ -828,9 +826,9 @@ void kb_curator_queue_code_units_for_project(const char *project, const char *ro
    g_curator_code_queued++;
 }
 
-/* §2c: lets a test flip kb.reembed_on_dim_change so the /v1/reembed gate
- * (403 when off, proceeds when on) can be exercised both ways. */
+/* §2c: flips kb.reembed_on_dim_change for the /v1/reembed 403/proceed gate test. */
 static int g_test_reembed_enabled = 0;
+static double g_precision_floor = 0.0; /* §4 surprising self-suppress floor (0 = off) */
 int config_load(config_t *cfg)
 {
    memset(cfg, 0, sizeof(*cfg));
@@ -850,6 +848,7 @@ int config_load(config_t *cfg)
    cfg->code_hybrid_weight_vector = 1.0;
    cfg->code_hybrid_weight_memory = 1.0;
    cfg->code_hybrid_rrf_k = 60.0;
+   cfg->code_surprising_precision_floor = g_precision_floor;
    return 0;
 }
 
@@ -1931,6 +1930,7 @@ int main(void)
    test_code_graph_surprising_missing_project();
    test_code_graph_surprising_vecstore_down();
    test_code_graph_surprising_judge();
+   test_code_graph_surprising_self_suppress();
    test_code_graph_node_ok();
    test_code_graph_node_capped_truncates();
    test_code_graph_node_self_loop();
