@@ -54,6 +54,24 @@ int kb_client_index_code_search(const char *query, const char *project, code_sea
    return 0;
 }
 
+/* §7 graph-informed delegation pulls the structural blast radius of referenced
+ * files into the delegate prompt; with no indexed project these no-op (the
+ * injector then fails open and adds no block). */
+int kb_client_index_list(project_info_t *out, int max)
+{
+   (void)out;
+   (void)max;
+   return 0;
+}
+
+int kb_client_index_blast_radius(const char *project, const char *file_path, blast_radius_t *out)
+{
+   (void)project;
+   (void)file_path;
+   (void)out;
+   return -1;
+}
+
 int kb_client_index_find(const char *identifier, term_hit_t *out, int max)
 {
    (void)identifier;
