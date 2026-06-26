@@ -233,3 +233,15 @@ int kb_graph_surprising(const kb_graph_edge_t *edges, int n_edges, const kb_grap
    free(cand);
    return n;
 }
+
+int kb_surprising_precision_suppress(int judged, int confirmed, int min_samples, double floor)
+{
+   if (floor <= 0.0 || min_samples <= 0 || judged < min_samples)
+      return 0;
+   if (confirmed < 0)
+      confirmed = 0;
+   if (confirmed > judged)
+      confirmed = judged;
+   double precision = (double)confirmed / (double)judged;
+   return precision < floor ? 1 : 0;
+}
