@@ -367,11 +367,13 @@ static int securetransport_eval_pinned_trust(SSLContextRef ctx, const char *host
    {
       const void *anchors[] = {pinned};
       CFArrayRef anchor_arr = CFArrayCreate(NULL, anchors, 1, &kCFTypeArrayCallBacks);
-      /* SecTrustSetAnchorCertificatesOnly(false) keeps the SYSTEM anchors trusted
-       * in ADDITION to the pinned cert, so a publicly-CA'd server and a pinned
-       * self-signed one both verify. */
+      /* Strict pin: SecTrustSetAnchorCertificatesOnly(true) trusts ONLY the pinned
+       * cert (not the system anchors) for this evaluation — matching the OpenSSL
+       * (load-pin-only) and Windows (leaf-DER) backends. A recorded pin means a
+       * self-signed/private server, so a mis-issued public-CA cert for the same
+       * host is still rejected. The hostname/SAN policy above remains enforced. */
       if (anchor_arr && SecTrustSetAnchorCertificates(trust, anchor_arr) == errSecSuccess &&
-          SecTrustSetAnchorCertificatesOnly(trust, false) == errSecSuccess)
+          SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess)
       {
          CFErrorRef err = NULL;
          ok = SecTrustEvaluateWithError(trust, &err) ? 1 : 0;
