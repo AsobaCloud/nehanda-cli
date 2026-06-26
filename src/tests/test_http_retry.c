@@ -1,8 +1,12 @@
 /* test_http_retry.c: unit tests for HTTP retry with exponential backoff */
+#include <arpa/inet.h>
 #include <assert.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include "aimee.h"
 #include "failover.h"
 #include "http_retry.h"
@@ -46,6 +50,45 @@ static void test_progress_cb_fires_per_attempt(void)
    free(resp);
    assert(g_progress_calls == 0);
    printf("  PASS: test_progress_cb_fires_per_attempt\n");
+}
+
+/* A budget-consuming STALL (an attempt that runs >= half its timeout waiting on a
+ * stalled peer) caps retries to one extra attempt, so one flaky provider can't
+ * spend Nx its timeout and drag a deadline-bounded roundtable panel. A listening
+ * socket that never accepts/responds simulates the stall: connect + send succeed
+ * (the kernel completes the handshake into the backlog) but the response read
+ * blocks to the deadline. With max_attempts=3 the cap must reduce it to 2 actual
+ * attempts. A FAST connection-refused is NOT capped (the progress test above uses
+ * a refused port and still gets its full 2 attempts). */
+static void test_stall_caps_retries(void)
+{
+   int srv = socket(AF_INET, SOCK_STREAM, 0);
+   assert(srv >= 0);
+   struct sockaddr_in addr;
+   memset(&addr, 0, sizeof(addr));
+   addr.sin_family = AF_INET;
+   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+   addr.sin_port = 0; /* ephemeral */
+   assert(bind(srv, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+   assert(listen(srv, 8) == 0);
+   socklen_t alen = sizeof(addr);
+   assert(getsockname(srv, (struct sockaddr *)&addr, &alen) == 0);
+   int port = ntohs(addr.sin_port);
+
+   char url[64];
+   snprintf(url, sizeof(url), "http://127.0.0.1:%d/x", port);
+
+   g_progress_calls = 0;
+   http_set_progress_cb(count_progress);
+   char *resp = NULL;
+   /* 200ms timeout, 3 attempts requested -> stall cap reduces to 2. */
+   (void)http_retry_post_context(url, NULL, "{}", &resp, 200, NULL, 3, 1, 1, "test", "test-model",
+                                 NULL);
+   free(resp);
+   http_set_progress_cb(NULL);
+   close(srv);
+   assert(g_progress_calls == 2); /* 3 requested, capped to 2 after the first stall */
+   printf("  PASS: test_stall_caps_retries\n");
 }
 
 /* --- http_should_retry tests --- */
@@ -250,6 +293,7 @@ int main(void)
    test_failover_priority_and_actions();
    test_provider_specific_failover_classification();
    test_progress_cb_fires_per_attempt();
+   test_stall_caps_retries();
 
    printf("all http_retry tests passed.\n");
    return 0;
