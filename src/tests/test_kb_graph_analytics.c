@@ -115,6 +115,59 @@ static void test_bad_args(void)
    printf("  test_bad_args: ok\n");
 }
 
+/* ── §4 surprising-links ─────────────────────────────────────────────────── */
+
+static void test_shortest_hops_chain(void)
+{
+   /* a — b — c — d — e (directed edges; hop distance is UNDIRECTED). */
+   kb_graph_edge_t edges[] = {{"a", "b", 1}, {"b", "c", 1}, {"c", "d", 1}, {"d", "e", 1}};
+   assert(kb_graph_shortest_hops(edges, 4, "a", "a") == 0);
+   assert(kb_graph_shortest_hops(edges, 4, "a", "b") == 1);
+   assert(kb_graph_shortest_hops(edges, 4, "a", "e") == 4);
+   assert(kb_graph_shortest_hops(edges, 4, "e", "a") == 4); /* undirected */
+   assert(kb_graph_shortest_hops(edges, 4, "a", "absent") == -1);
+   printf("  test_shortest_hops_chain: ok\n");
+}
+
+static void test_shortest_hops_disconnected(void)
+{
+   kb_graph_edge_t edges[] = {{"a", "b", 1}, {"x", "y", 1}}; /* two components */
+   assert(kb_graph_shortest_hops(edges, 2, "a", "y") == -1);
+   assert(kb_graph_shortest_hops(edges, 2, "a", "b") == 1);
+   printf("  test_shortest_hops_disconnected: ok\n");
+}
+
+static void test_surprising_picks_far_high_sim(void)
+{
+   kb_graph_edge_t edges[] = {{"a", "b", 1}, {"b", "c", 1}, {"c", "d", 1}, {"d", "e", 1}};
+   /* sorted cosines [0.50,0.90,0.92,0.95]; p=0.5 -> idx 1 -> threshold 0.90. */
+   kb_graph_pair_t pairs[] = {
+       {"a", "e", 0.95}, /* hops 4 (far)        -> surprising      */
+       {"a", "b", 0.92}, /* hops 1 (adjacent)   -> NOT surprising  */
+       {"a", "z", 0.90}, /* disconnected        -> surprising      */
+       {"a", "c", 0.50}, /* below sim percentile -> excluded       */
+   };
+   kb_graph_surprising_t out[8];
+   int n = kb_graph_surprising(edges, 4, pairs, 4, 0.5, 4, out, 8);
+   assert(n == 2);
+   assert(strcmp(out[0].a, "a") == 0 && strcmp(out[0].b, "e") == 0 && out[0].hops == 4);
+   assert(strcmp(out[1].b, "z") == 0 && out[1].hops == -1); /* disconnected */
+   /* cosine-desc ordering: 0.95 before 0.90 */
+   assert(out[0].cosine > out[1].cosine);
+   printf("  test_surprising_picks_far_high_sim: ok\n");
+}
+
+static void test_surprising_bad_args(void)
+{
+   kb_graph_edge_t edges[] = {{"a", "b", 1}};
+   kb_graph_pair_t pairs[] = {{"a", "b", 0.9}};
+   kb_graph_surprising_t out[4];
+   assert(kb_graph_surprising(edges, 1, NULL, 1, 0.5, 4, out, 4) == -1);
+   assert(kb_graph_surprising(edges, 1, pairs, 1, 0.5, 4, NULL, 4) == -1);
+   assert(kb_graph_surprising(edges, 1, pairs, 1, 1.5, 4, out, 4) == -1); /* percentile OOR */
+   printf("  test_surprising_bad_args: ok\n");
+}
+
 int main(void)
 {
    printf("test_kb_graph_analytics:\n");
@@ -124,6 +177,10 @@ int main(void)
    test_truncation();
    test_empty_endpoints();
    test_bad_args();
+   test_shortest_hops_chain();
+   test_shortest_hops_disconnected();
+   test_surprising_picks_far_high_sim();
+   test_surprising_bad_args();
    printf("ALL PASS\n");
    return 0;
 }
