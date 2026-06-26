@@ -104,14 +104,24 @@ aimee_tls_t *aimee_tls_connect(int fd, const char *host)
    int insecure = tls_insecure();
    if (!insecure)
    {
-      SSL_CTX_set_default_verify_paths(ctx);
-      /* Also trust the pinned server cert, if one was recorded for this remote.
-       * Verification stays ON: the pinned self-signed cert is its own anchor, so
-       * the server validates against it AND the hostname/SAN check below still
-       * runs — a MITM presenting a different cert is still rejected. */
       char pin[600];
       if (pinned_ca_path(pin, sizeof(pin)))
-         SSL_CTX_load_verify_locations(ctx, pin, NULL); /* best-effort */
+      {
+         /* Strict pin: a recorded cert means a self-signed/private server, so
+          * trust ONLY that cert and NOT the system store — a mis-issued or
+          * compromised public-CA cert for the same host is then still rejected.
+          * A pin that won't load fails the connection CLOSED rather than silently
+          * widening trust back to the system store. */
+         if (SSL_CTX_load_verify_locations(ctx, pin, NULL) != 1)
+         {
+            SSL_CTX_free(ctx);
+            return NULL;
+         }
+      }
+      else
+      {
+         SSL_CTX_set_default_verify_paths(ctx); /* publicly-trusted servers */
+      }
       SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
    }
 
@@ -135,9 +145,16 @@ aimee_tls_t *aimee_tls_connect(int fd, const char *host)
           * matched against the cert's IP-address SANs: set1_host only matches DNS
           * names/CN, so an IP would otherwise fail the name check even with a
           * valid/pinned cert. set1_ip_asc returns 1 only for a real IP literal;
-          * fall back to DNS-name matching for actual hostnames. */
-         if (X509_VERIFY_PARAM_set1_ip_asc(param, host) != 1)
-            X509_VERIFY_PARAM_set1_host(param, host, 0);
+          * fall back to DNS-name matching for actual hostnames. If neither arms
+          * the name check, fail CLOSED — verifying the chain but not the identity
+          * would accept any otherwise-valid cert. */
+         if (X509_VERIFY_PARAM_set1_ip_asc(param, host) != 1 &&
+             X509_VERIFY_PARAM_set1_host(param, host, 0) != 1)
+         {
+            SSL_free(ssl);
+            SSL_CTX_free(ctx);
+            return NULL;
+         }
       }
    }
 
