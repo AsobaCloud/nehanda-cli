@@ -3,8 +3,9 @@
 - **State:** IN PROGRESS — §0.5/§1/§3/§4/§5/§7/§8-backend implemented (on the
   `testing` branch), including the §5 code+graph+vector hybrid, §7 graph-informed
   delegation, the §4 surprising-links route + its LLM-judge relevance gate, and the §8
-  read-only `/v1/code/graph` backend route; remainder (§2 tree-sitter, §6 live fusion,
-  §8 webchat frontend, and the §4 precision self-suppress monitoring) still open, as
+  read-only `/v1/code/graph` backend route, and the §6 cross-session memory-fusion
+  leg in `/v1/code/hybrid`; remainder (§2 tree-sitter, §6 *live* reindex hook, §8
+  webchat frontend, and the §4 precision self-suppress monitoring) still open, as
   build-/integration-/frontend-tier work. See the
   "Implementation status" section below.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
@@ -240,9 +241,27 @@ embedder — integration/deploy-tier) as a third fused signal.
 - **Incremental updates** on default-branch movement (post-merge / fetch hook +
   watch) so the graph tracks new commits on the canonical branch (§0.5), not a
   stale snapshot — and not the working tree.
+
+  **Status — change-detection gate shipped.** The `/v1/code/scan` route now no-ops
+  the expensive git re-walk when the default branch hasn't moved: `git_resolve_default_sha`
+  (the default ref's tree SHA, §0.5 chain) is compared via the pure
+  `code_default_branch_changed` against the last-indexed SHA stored in
+  `kb_runtime_state`; unchanged + non-`force` → `{"skipped":true}` (`unit-test-code-collect`
+  exercises the SHA-tracks-commits + gate logic against real git repos). This is the
+  cheap gate a post-merge/fetch **hook** reuses; installing that hook (mirroring
+  `verify_install_git_hook`) + the watch loop remain the integration follow-up.
 - **Fuse the graph with conversation memory + the decision log** so the "why" behind
   a symbol is the *actual recorded reasoning*, not just parsed comments — queryable
   via §5. This is the thing a regenerated artifact can never hold.
+
+  **Status — fusion half shipped.** `/v1/code/hybrid` now fuses a 4th ranked
+  **`memory`** signal: symbol-anchored, it walks the symbol's incident curator-built
+  knowledge-graph edges and resolves each neighbor entity to a `file_path`, so files
+  the recorded reasoning associates with the symbol rank alongside the code/graph/
+  vector legs (not just the post-fusion `why`). Config-tunable `code_hybrid_weight_memory`;
+  empty (no-op) until the curator has synthesized an entity graph
+  (`handle_get_code_hybrid` memory leg, `test_code_hybrid_memory_leg`). The **live
+  half** (incremental reindex on default-branch movement) remains open.
 
 ## §7 Agent actuation (the graph changes behavior)
 
@@ -322,12 +341,14 @@ webchat **frontend** consumer remains open.
   `test_code_graph_surprising_*`), with an opt-in **LLM-judge relevance gate**
   (`judge=true` → shared-symbol cross-check + one batched Tier-B judge,
   `kb_surprising_judge`, `unit-test-kb-surprising-judge`).
-- **§5** RRF fusion core (`kb_rrf.c`, `unit-test-kb-rrf`) + the `GET /v1/code/hybrid`
+- **§5+§6** RRF fusion core (`kb_rrf.c`, `unit-test-kb-rrf`) + the `GET /v1/code/hybrid`
   route fusing `code` + `graph` + **`vector`** (embedding similarity over
   `code_embeddings` via `pgvec_code_search_paths`, gated on a dim-matched embedder,
-  graceful-degrading) in file-path space with a typed memory `why`, **agent-callable**
-  via `index({command:"hybrid"})`, with **config-tunable per-signal weights**
-  (`kb.code_hybrid.*`). The vector SQL was validated against real pgvector/halfvec.
+  graceful-degrading) + **`memory`** (the §6 cross-session knowledge-graph leg,
+  symbol-anchored over curator entity edges) in file-path space with a typed memory
+  `why`, **agent-callable** via `index({command:"hybrid"})`, with **config-tunable
+  per-signal weights** (`kb.code_hybrid.*`). The vector SQL was validated against real
+  pgvector/halfvec.
 - **§7** structural blast-radius **advisory** on the guardrail edit path + **graph-informed
   delegation** (a delegate's prompt is prefixed with the callers/dependencies of the
   files its task references) — both advisory, fail-open, structural-only, opt-in
@@ -345,7 +366,10 @@ webchat **frontend** consumer remains open.
 - **§4 precision self-suppress** — the LLM-judge relevance gate is shipped (opt-in
   `judge=true`); the precision-sampling monitor that auto-disables the feature below a
   quality floor needs a deployed corpus + judged-precision telemetry over time.
-- **§6 live/memory fusion** — post-merge/fetch incremental hook + watch.
+- **§6 live half** — the change-detection gate (default-branch SHA + `/v1/code/scan`
+  skip-when-unchanged) and the memory-fusion leg are shipped; the post-merge/fetch
+  **hook install** + watch loop that *fire* the gate on a git event remain, needing a
+  running KB + git events to validate.
 - **§8 webchat visualization** — the **frontend** consumer; the read-only `/v1/code/graph`
   backend route is shipped (above).
 
