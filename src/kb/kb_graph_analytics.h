@@ -41,4 +41,46 @@ typedef struct
  * allocates caller-visible memory; out[] is caller-owned. */
 int kb_graph_hubs(const kb_graph_edge_t *edges, int n_edges, kb_graph_hub_t *out, int max);
 
+/* ── §4 surprising links (high embedding similarity AND high graph distance) ──── */
+
+/* A candidate node pair + its embedding cosine similarity. `a`/`b` are node ids
+ * in the SAME space as the edges' source/target (so hop distance is meaningful). */
+typedef struct
+{
+   char a[KB_GRAPH_NODE_MAX];
+   char b[KB_GRAPH_NODE_MAX];
+   double cosine;
+} kb_graph_pair_t;
+
+/* A surprising link: semantically close yet structurally far (or disconnected). */
+typedef struct
+{
+   char a[KB_GRAPH_NODE_MAX];
+   char b[KB_GRAPH_NODE_MAX];
+   double cosine;
+   int hops; /* undirected shortest-path hops over the edges; -1 = disconnected */
+} kb_graph_surprising_t;
+
+/* Bound on BFS exploration so a huge graph can't blow time/space (the result is a
+ * conservative "far enough" past this — counted as disconnected). */
+#define KB_GRAPH_BFS_MAX_NODES 4096
+
+/* Undirected shortest-path hop count between `src` and `dst` over `edges` (BFS,
+ * treating each edge as bidirectional). Returns 0 if src==dst, the hop count if
+ * reachable within KB_GRAPH_BFS_MAX_NODES explored nodes, or -1 if disconnected /
+ * either endpoint is absent / a bad argument. Pure (internal scratch only). */
+int kb_graph_shortest_hops(const kb_graph_edge_t *edges, int n_edges, const char *src,
+                           const char *dst);
+
+/* Surprising-links filter (§4, R1-precise). From candidate `pairs`, keep those
+ * whose cosine is at/above the `sim_percentile` (0..1) of the candidates' OWN
+ * cosine distribution (data-driven, not a hardcoded constant) AND whose
+ * structural hop-distance is >= `d_min` OR disconnected. Writes up to `max`,
+ * ordered by cosine desc, tie-broken by larger hops (disconnected ranks highest)
+ * then a asc then b asc (deterministic). Returns the count written, 0 if none
+ * qualify, -1 on a bad argument. Pure; out[] is caller-owned. */
+int kb_graph_surprising(const kb_graph_edge_t *edges, int n_edges, const kb_graph_pair_t *pairs,
+                        int n_pairs, double sim_percentile, int d_min, kb_graph_surprising_t *out,
+                        int max);
+
 #endif /* KB_GRAPH_ANALYTICS_H */
