@@ -265,8 +265,15 @@ int git_resolve_default_sha(const char *root, char *out, size_t outlen)
    char ref[256];
    if (git_resolve_default_ref(root, ref, sizeof(ref)) != 0)
       return -1;
-   char args[320];
-   snprintf(args, sizeof(args), "rev-parse '%s^{tree}'", ref);
+   /* The ref is the live default-branch name (origin/HEAD target) — attacker-
+    * controllable for an untrusted repo, and git ref names may contain a single
+    * quote — so shquote the whole revision rather than hand-wrapping it in quotes. */
+   char rev[320], qrev[1024];
+   snprintf(rev, sizeof(rev), "%s^{tree}", ref);
+   if (shquote(rev, qrev, sizeof(qrev)) != 0)
+      return -1;
+   char args[1100];
+   snprintf(args, sizeof(args), "rev-parse %s", qrev);
    if (git_capture_line(root, args, out, outlen) != 0 || !out[0])
    {
       out[0] = '\0';
