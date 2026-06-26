@@ -1473,11 +1473,11 @@ int handle_post_code_scan(const char *body, char *out_buf, int out_cap)
          snprintf(out_buf, (size_t)out_cap, "{\"error\":\"missing root_path\"}");
          return 400;
       }
-      /* §6 live idempotency: skip the expensive git re-walk when the default branch
-       * hasn't moved since the last scan (force overrides). The SHA is cheap; the
-       * scan is not. A future post-merge/fetch hook reuses exactly this gate so it
-       * no-ops unless the canonical code actually changed. */
-      if (!force && git_resolve_default_sha(root_path, sha_now, sizeof(sha_now)) == 0)
+      /* §6 live idempotency: resolve the default-branch SHA (cheap) so a !force scan
+       * can skip the expensive git re-walk when the branch hasn't moved since the last
+       * index, and so any successful scan (force or not) refreshes the stored SHA. A
+       * future post-merge/fetch hook reuses exactly this gate. */
+      if (git_resolve_default_sha(root_path, sha_now, sizeof(sha_now)) == 0 && !force)
       {
          char stored[128] = "";
          snprintf(sha_key, sizeof(sha_key), "code_scan_sha:%s", project);
