@@ -739,6 +739,14 @@ int code_index_source_is_worktree(void)
 {
    return g_worktree_mode;
 }
+static int g_hook_install_rc = 0; /* return for the §6 post-merge hook installer stub */
+static char g_hook_project[128] = "";
+int code_index_install_branch_hook(const char *project_root, const char *project_name)
+{
+   (void)project_root;
+   snprintf(g_hook_project, sizeof(g_hook_project), "%s", project_name ? project_name : "");
+   return g_hook_install_rc;
+}
 
 /* Unchanged default branch (stored SHA == current) + !force -> skip the re-walk. */
 static void test_code_scan_skips_unchanged_branch(void)
@@ -793,6 +801,38 @@ static void test_code_scan_worktree_ignores_sha(void)
    g_branch_sha[0] = '\0';
    assert(s == 200);
    assert(strstr(buf, "\"skipped\":false") != NULL); /* worktree mode never skips */
+}
+
+/* §6 live: install_hook=true on a git repo (resolved SHA) installs the post-merge
+ * reindex hook and reports it; absent the opt-in the hook is never installed. */
+static void test_code_scan_installs_hook(void)
+{
+   char buf[512];
+   g_db_initialized = 1;
+   g_code_scan_rc = 5;
+   g_hook_install_rc = 0;
+   g_hook_project[0] = '\0';
+   snprintf(g_branch_sha, sizeof(g_branch_sha), "tree-ccc");
+   snprintf(g_stored_sha, sizeof(g_stored_sha), "tree-bbb"); /* moved -> scans */
+   const char *body = "{\"project\":\"proj-alpha\",\"root_path\":\"/tmp/repo\",\"install_hook\":true}";
+   int s = kb_http_route_ex("POST", "/v1/code/scan", NULL, NULL, NULL, body, (int)strlen(body), buf,
+                            sizeof(buf));
+   g_branch_sha[0] = '\0';
+   assert(s == 200);
+   assert(strstr(buf, "\"hook_installed\":true") != NULL);
+   assert(strcmp(g_hook_project, "proj-alpha") == 0);
+
+   /* without the opt-in: no install, hook_installed:false. */
+   g_hook_project[0] = '\0';
+   snprintf(g_branch_sha, sizeof(g_branch_sha), "tree-ddd");
+   snprintf(g_stored_sha, sizeof(g_stored_sha), "tree-ccc");
+   const char *body2 = "{\"project\":\"proj-alpha\",\"root_path\":\"/tmp/repo\"}";
+   s = kb_http_route_ex("POST", "/v1/code/scan", NULL, NULL, NULL, body2, (int)strlen(body2), buf,
+                        sizeof(buf));
+   g_branch_sha[0] = '\0';
+   assert(s == 200);
+   assert(strstr(buf, "\"hook_installed\":false") != NULL);
+   assert(g_hook_project[0] == '\0'); /* installer not called */
 }
 
 static void test_code_scan_ok(void)

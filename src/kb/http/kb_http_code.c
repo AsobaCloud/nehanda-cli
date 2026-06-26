@@ -1520,10 +1520,17 @@ int handle_post_code_scan(const char *body, char *out_buf, int out_cap)
       db2_kb_runtime_state_set(sha_key, sha_now);
    }
 
+   /* §6 live (opt-in): install the post-merge reindex hook so future pulls keep the
+    * graph fresh. Only for a resolved git repo; best-effort — a foreign hook (-2) or
+    * any failure just omits the field, never failing the scan. */
+   int hook_installed = 0;
+   if (sha_now[0] && code_scan_bool(root, "install_hook", 0))
+      hook_installed = (code_index_install_branch_hook(root_path, project) == 0);
+
    snprintf(out_buf, (size_t)out_cap,
             "{\"status\":\"ok\",\"skipped\":false,\"project\":\"%s\",\"files\":%d,"
-            "\"inspected\":%d}",
-            project, files, inspected);
+            "\"inspected\":%d,\"hook_installed\":%s}",
+            project, files, inspected, hook_installed ? "true" : "false");
    cJSON_Delete(root);
    return 200;
 }
