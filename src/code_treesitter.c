@@ -647,11 +647,25 @@ int code_treesitter_definitions(const char *ext, const char *content, definition
 
 /* ---- call edges (caller -> callee) ------------------------------------------------- */
 
+/* A node carrying the type arguments of a generic/template call (`<IFoo>`, `<T>`, the
+ * Rust turbofish `::<u32>`). The call NAME precedes it, so the callee-name search must
+ * not descend into it — otherwise a generic call records the type argument as the callee
+ * (`GetService<IFoo>()` -> IFoo, `obj.run<T>()` -> T). */
+static int is_type_arguments(const char *t)
+{
+   return strcmp(t, "type_argument_list") == 0 || strcmp(t, "type_arguments") == 0 ||
+          strcmp(t, "template_argument_list") == 0 || strcmp(t, "type_parameters") == 0;
+}
+
 /* Reverse pre-order DFS for the LAST identifier-like descendant — the called name in a
- * callee expression (`obj.m` -> m, `a::b::c` -> c, `g` -> g). */
+ * callee expression (`obj.m` -> m, `a::b::c` -> c, `g` -> g), skipping type-argument
+ * lists so a generic call resolves to the method name, not a type argument. */
 static int last_identifier(TSNode node, TSNode *out)
 {
-   if (is_identifier_type(ts_node_type(node)))
+   const char *t = ts_node_type(node);
+   if (is_type_arguments(t))
+      return 0;
+   if (is_identifier_type(t))
    {
       *out = node;
       return 1;

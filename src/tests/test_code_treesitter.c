@@ -255,6 +255,11 @@ int main(void)
    wantcall(".rs", "fn f(){ g(); h::k(); }\n", "f", "k");   /* scoped -> last */
    wantcall(".java", "class C{ void f(){ g(); obj.m(); } }\n", "f", "m");
    wantcall(".cs", "class C{ void F(){ G(); o.M(); } }\n", "F", "M");
+   /* generic/template calls resolve to the method name, not a type argument. */
+   wantcall(".cs", "class C{ void F(){ provider.GetService<IFoo>(); } }\n", "F", "GetService");
+   wantcall(".cs", "class C{ void F(){ var x = new List<Bar>(); } }\n", "F", "List");
+   wantcall(".cpp", "void f(){ obj.run<T>(y); }\n", "f", "run");
+   wantcall(".rs", "fn f(){ parse::<u32>(); }\n", "f", "parse"); /* turbofish */
    wantcall(".php", "<?php\nfunction f(){ g(); $o->m(); }\n", "f", "m");
    wantcall(".rb", "def f\n  g()\n  obj.m\nend\n", "f", "m"); /* g() w/ parens + obj.m */
    wantcall(".swift", "func f(){ g(); obj.m() }\n", "f", "g");
