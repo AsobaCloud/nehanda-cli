@@ -2,7 +2,9 @@
 #include "cmd_agent_delegate_impl.h"
 #include "agent_config.h"
 #include "agent_coord.h"
+#include "config.h"
 #include "delegate_role.h"
+#include "guardrails_blast_radius.h"
 #include "kb_client.h"
 #include "log.h"
 #include "persona.h"
@@ -1481,6 +1483,127 @@ char *delegate_inject_code_context(const char *prompt)
    if (pos <= 0)
       return NULL;
 
+   buf[pos] = '\0'; /* a truncated final snprintf leaves buf[pos] non-NUL; terminate so
+                     * the malloc(pos+1)/memcpy(pos+1) returns a valid C string. */
+   char *out = malloc((size_t)(pos + 1));
+   if (!out)
+      return NULL;
+   memcpy(out, buf, (size_t)(pos + 1));
+   return out;
+}
+
+/* Append " a, b, c (+N)" — up to `max_names` of `count` entries from names[][]. */
+static void graph_ctx_append_names(char *buf, int *pos, int *rem, char names[][MAX_PATH_LEN],
+                                   int count, int max_names)
+{
+   int cap = count < max_names ? count : max_names;
+   for (int k = 0; k < cap && *rem > 32; k++)
+   {
+      int w = snprintf(buf + *pos, (size_t)*rem, " %s%s", names[k], (k + 1 < cap) ? "," : "");
+      if (w > 0 && w < *rem)
+      {
+         *pos += w;
+         *rem -= w;
+      }
+   }
+   if (count > cap)
+   {
+      int w = snprintf(buf + *pos, (size_t)*rem, " (+%d)", count - cap);
+      if (w > 0 && w < *rem)
+      {
+         *pos += w;
+         *rem -= w;
+      }
+   }
+}
+
+/* §7 graph-informed delegation: prepend a structural-context block — the callers
+ * (dependents) and dependencies of the file paths the delegate task references —
+ * so the delegate starts with the structural neighborhood. Opt-in
+ * (`delegate_graph_context_enabled`, default off) and FAIL-OPEN (NULL on any
+ * miss: flag off, no referenced paths, kb unreachable, or no structural edges).
+ * Uses ONLY the deterministic structural graph (kb_client_index_blast_radius via
+ * the shared resolver), never the LLM entity graph — the same R1 constraint as
+ * the §7 blast-radius advisory. Returns a heap block the caller frees, or NULL. */
+char *delegate_inject_graph_context(const char *prompt, const char *cwd)
+{
+   if (!prompt || !prompt[0])
+      return NULL;
+   config_t cfg;
+   if (config_load(&cfg) != 0 || !cfg.delegate_graph_context_enabled)
+      return NULL;
+
+   char paths[DELEGATE_DRIFT_MAX_PATHS][DELEGATE_DRIFT_PATH_MAX];
+   int np = delegate_extract_named_paths(prompt, paths, DELEGATE_DRIFT_MAX_PATHS);
+   if (np <= 0)
+      return NULL;
+
+   char buf[4096];
+   int pos = 0, rem = (int)sizeof(buf);
+   int w = snprintf(buf + pos, (size_t)rem,
+                    "\n\n## Structural context (code graph)\n"
+                    "Callers/dependencies of the files this task references, from the "
+                    "structural index — review before changing a shared interface:\n");
+   if (w > 0 && w < rem)
+   {
+      pos += w;
+      rem -= w;
+   }
+
+   int files_emitted = 0;
+   for (int i = 0; i < np && files_emitted < 6 && rem > 96; i++)
+   {
+      char abs[MAX_PATH_LEN];
+      if (paths[i][0] == '/' || !cwd || !cwd[0])
+         snprintf(abs, sizeof(abs), "%s", paths[i]);
+      else
+         snprintf(abs, sizeof(abs), "%s/%s", cwd, paths[i]);
+
+      blast_radius_t br;
+      if (guardrails_blast_radius_for_abs_path(abs, &br) != 0)
+         continue; /* fail-open: path not indexed / kb down */
+      if (br.dependent_count <= 0 && br.dependency_count <= 0)
+         continue;
+
+      w = snprintf(buf + pos, (size_t)rem, "- `%s`", paths[i]);
+      if (w <= 0 || w >= rem)
+         break; /* the file header didn't fit; stop rather than attribute callers to nothing */
+      pos += w;
+      rem -= w;
+      if (br.dependent_count > 0)
+      {
+         w = snprintf(buf + pos, (size_t)rem, " — callers:");
+         if (w > 0 && w < rem)
+         {
+            pos += w;
+            rem -= w;
+         }
+         graph_ctx_append_names(buf, &pos, &rem, br.dependents, br.dependent_count, 5);
+      }
+      if (br.dependency_count > 0)
+      {
+         w = snprintf(buf + pos, (size_t)rem,
+                      "%s depends on:", br.dependent_count > 0 ? ";" : " —");
+         if (w > 0 && w < rem)
+         {
+            pos += w;
+            rem -= w;
+         }
+         graph_ctx_append_names(buf, &pos, &rem, br.dependencies, br.dependency_count, 5);
+      }
+      w = snprintf(buf + pos, (size_t)rem, "\n");
+      if (w > 0 && w < rem)
+      {
+         pos += w;
+         rem -= w;
+      }
+      files_emitted++;
+   }
+
+   if (files_emitted == 0)
+      return NULL; /* no structural edges for any referenced file */
+
+   buf[pos] = '\0'; /* defensive: ensure a valid C string even if a write truncated */
    char *out = malloc((size_t)(pos + 1));
    if (!out)
       return NULL;

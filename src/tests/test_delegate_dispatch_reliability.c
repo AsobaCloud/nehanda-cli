@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "cmd_agent_delegate_impl.h"
 #include "index.h"
@@ -39,6 +41,55 @@ static void stub_hits_add(const char *file_path, const char *snippet)
    int i = g_stub_hit_count++;
    snprintf(g_stub_hits[i].file_path, sizeof(g_stub_hits[i].file_path), "%s", file_path);
    snprintf(g_stub_hits[i].snippet, sizeof(g_stub_hits[i].snippet), "%s", snippet);
+}
+
+/* ── stub: guardrails_blast_radius_for_abs_path (the §7 structural resolver) ── */
+
+static int g_br_rc = -1; /* what the resolver returns: 0 = filled, else fail-open */
+static blast_radius_t g_br;
+
+int guardrails_blast_radius_for_abs_path(const char *abs_path, blast_radius_t *out)
+{
+   (void)abs_path;
+   if (g_br_rc != 0 || !out)
+      return -1;
+   *out = g_br;
+   return 0;
+}
+
+static void set_blast_radius(const char *const *deps, int ndeps, const char *const *dependencies,
+                             int ndependencies)
+{
+   memset(&g_br, 0, sizeof(g_br));
+   g_br.dependent_count = ndeps;
+   for (int i = 0; i < ndeps && i < 64; i++)
+      snprintf(g_br.dependents[i], sizeof(g_br.dependents[i]), "%s", deps[i]);
+   g_br.dependency_count = ndependencies;
+   for (int i = 0; i < ndependencies && i < 64; i++)
+      snprintf(g_br.dependencies[i], sizeof(g_br.dependencies[i]), "%s", dependencies[i]);
+   g_br_rc = 0;
+}
+
+/* Drive the real config_load via a temp AIMEE_HOME/aimee.yaml (config.o is linked,
+ * so config_load can't be stubbed). AIMEE_NO_CACHE defeats the config cache. */
+static char g_graph_home[256];
+static void graph_flag_setup(void)
+{
+   snprintf(g_graph_home, sizeof(g_graph_home), "/tmp/aimee-gctx-%d", (int)getpid());
+   mkdir(g_graph_home, 0700);
+   setenv("AIMEE_HOME", g_graph_home, 1);
+   setenv("AIMEE_NO_CACHE", "1", 1);
+}
+static void graph_flag_write(int on)
+{
+   char p[512];
+   snprintf(p, sizeof(p), "%s/aimee.yaml", g_graph_home);
+   FILE *f = fopen(p, "w");
+   if (f)
+   {
+      fprintf(f, "delegate_graph_context_enabled: %s\n", on ? "true" : "false");
+      fclose(f);
+   }
 }
 
 /* ── 1. delegate_extract_named_paths tests ──────────────────────────────── */
@@ -135,6 +186,65 @@ static void test_inject_null_prompt(void)
    printf("  PASS: test_inject_null_prompt\n");
 }
 
+/* ── 2b. delegate_inject_graph_context (§7 graph-informed delegation) ─────── */
+
+/* Flag on + a referenced file with structural edges → a "## Structural context"
+ * block naming the callers and dependencies. */
+static void test_graph_ctx_block_with_edges(void)
+{
+   graph_flag_setup();
+   graph_flag_write(1);
+   const char *deps[] = {"src/caller_a.c", "src/caller_b.c"};
+   const char *dependencies[] = {"src/dep_x.c"};
+   set_blast_radius(deps, 2, dependencies, 1);
+
+   char *ctx = delegate_inject_graph_context("please fix the bug in src/foo.c handler", "/repo");
+   assert(ctx != NULL);
+   assert(strstr(ctx, "## Structural context") != NULL);
+   assert(strstr(ctx, "src/foo.c") != NULL); /* the referenced file */
+   assert(strstr(ctx, "callers:") != NULL);
+   assert(strstr(ctx, "src/caller_a.c") != NULL && strstr(ctx, "src/caller_b.c") != NULL);
+   assert(strstr(ctx, "depends on:") != NULL && strstr(ctx, "src/dep_x.c") != NULL);
+   free(ctx);
+   printf("  PASS: test_graph_ctx_block_with_edges\n");
+}
+
+/* Flag OFF → NULL even with referenced files + edges (opt-in). */
+static void test_graph_ctx_disabled_is_null(void)
+{
+   graph_flag_setup();
+   graph_flag_write(0);
+   const char *deps[] = {"src/caller_a.c"};
+   set_blast_radius(deps, 1, NULL, 0);
+   char *ctx = delegate_inject_graph_context("fix src/foo.c", "/repo");
+   assert(ctx == NULL);
+   printf("  PASS: test_graph_ctx_disabled_is_null\n");
+}
+
+/* Flag on but the prompt references no file path → NULL. */
+static void test_graph_ctx_no_paths_is_null(void)
+{
+   graph_flag_setup();
+   graph_flag_write(1);
+   const char *deps[] = {"src/caller_a.c"};
+   set_blast_radius(deps, 1, NULL, 0);
+   char *ctx = delegate_inject_graph_context("just refactor the thing, no files named", "/repo");
+   assert(ctx == NULL);
+   printf("  PASS: test_graph_ctx_no_paths_is_null\n");
+}
+
+/* Flag on + file referenced but the resolver fails (kb down / unindexed) →
+ * NULL (fail-open). */
+static void test_graph_ctx_resolver_fail_open(void)
+{
+   graph_flag_setup();
+   graph_flag_write(1);
+   g_br_rc = -1; /* resolver returns "no data" for every path */
+   char *ctx = delegate_inject_graph_context("fix src/foo.c", "/repo");
+   assert(ctx == NULL);
+   printf("  PASS: test_graph_ctx_resolver_fail_open\n");
+}
+
 /* ── 3. delegate_worktree_has_changes tests ─────────────────────────────── */
 
 static void test_worktree_has_changes_empty_input(void)
@@ -189,6 +299,10 @@ int main(void)
    test_inject_returns_context_block_with_hits();
    test_inject_handles_multiple_hits();
    test_inject_null_prompt();
+   test_graph_ctx_block_with_edges();
+   test_graph_ctx_disabled_is_null();
+   test_graph_ctx_no_paths_is_null();
+   test_graph_ctx_resolver_fail_open();
 
    test_worktree_has_changes_empty_input();
    test_worktree_has_changes_nonexistent_path();
