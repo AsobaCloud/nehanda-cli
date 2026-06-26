@@ -202,6 +202,84 @@ static void test_non_git_uses_worktree(void)
    printf("  test_non_git_uses_worktree: ok\n");
 }
 
+/* §6 live: the default-branch tree SHA tracks commits, and the pure change-gate
+ * decides when a re-index is warranted. */
+static void test_default_branch_sha_tracks_commits(void)
+{
+   make_root("sha");
+   git("init -q -b main");
+   git("config user.email t@t");
+   git("config user.name t");
+   write_file("src/a.c", "int a(void){return 1;}");
+   git("add -A");
+   git("commit -qm c1");
+
+   char sha1[128] = "", sha1b[128] = "";
+   assert(git_resolve_default_sha(g_root, sha1, sizeof(sha1)) == 0 && sha1[0]);
+   assert(git_resolve_default_sha(g_root, sha1b, sizeof(sha1b)) == 0);
+   assert(strcmp(sha1, sha1b) == 0); /* stable when nothing moved */
+
+   write_file("src/b.c", "int b(void){return 2;}");
+   git("add -A");
+   git("commit -qm c2");
+   char sha2[128] = "";
+   assert(git_resolve_default_sha(g_root, sha2, sizeof(sha2)) == 0);
+   assert(strcmp(sha1, sha2) != 0); /* a commit moves the tree SHA */
+
+   assert(code_default_branch_changed(sha1, sha2) == 1); /* moved -> reindex */
+   assert(code_default_branch_changed(sha1, sha1) == 0); /* unchanged -> skip */
+   assert(code_default_branch_changed("", sha1) == 1);   /* never indexed -> reindex */
+   assert(code_default_branch_changed(sha1, "") == 0);   /* unresolved -> don't thrash */
+   printf("  test_default_branch_sha_tracks_commits: ok\n");
+}
+
+/* Regression: a default branch whose NAME contains a single quote must resolve
+ * correctly (and never break out of the shell) — the ref is shquoted, not hand-
+ * wrapped. Set up via a clone so origin/HEAD points at the quote-named branch. */
+static void test_default_branch_sha_quote_in_ref(void)
+{
+   make_root("qsha");
+   char up[1200];
+   snprintf(up, sizeof(up), "%s-rem", g_root);
+   sh("rm -rf '%s' '%s'", up, g_root); /* clone needs a non-existent / empty target */
+   sh("git init -q -b \"wip'x\" '%s'", up);
+   sh("git -C '%s' config user.email t@t && git -C '%s' config user.name t", up, up);
+   sh("printf 'int q(void){return 0;}' > '%s/q.c'", up);
+   sh("git -C '%s' add -A && git -C '%s' commit -qm c", up, up);
+   sh("git clone -q '%s' '%s'", up, g_root);
+
+   char sha[128] = "";
+   int rc = git_resolve_default_sha(g_root, sha, sizeof(sha));
+   assert(rc == 0 && strlen(sha) >= 7); /* resolved despite the quote in the ref name */
+   sh("rm -rf '%s'", up);
+   printf("  test_default_branch_sha_quote_in_ref: ok\n");
+}
+
+/* The worktree-source predicate reflects AIMEE_CODE_INDEX_SOURCE (gates off the
+ * default-branch SHA optimization when the index tracks WIP). */
+static void test_index_source_is_worktree(void)
+{
+   unsetenv("AIMEE_CODE_INDEX_SOURCE");
+   assert(code_index_source_is_worktree() == 0);
+   setenv("AIMEE_CODE_INDEX_SOURCE", "default", 1);
+   assert(code_index_source_is_worktree() == 0);
+   setenv("AIMEE_CODE_INDEX_SOURCE", "worktree", 1);
+   assert(code_index_source_is_worktree() == 1);
+   unsetenv("AIMEE_CODE_INDEX_SOURCE");
+   printf("  test_index_source_is_worktree: ok\n");
+}
+
+/* A non-git dir has no default branch SHA; `out` is cleared and -1 returned. */
+static void test_default_branch_sha_non_git(void)
+{
+   make_root("nogit-sha");
+   write_file("a.c", "x");
+   char sha[128] = "preset";
+   assert(git_resolve_default_sha(g_root, sha, sizeof(sha)) == -1);
+   assert(sha[0] == '\0');
+   printf("  test_default_branch_sha_non_git: ok\n");
+}
+
 int main(void)
 {
    printf("test_code_collect:\n");
@@ -216,6 +294,10 @@ int main(void)
    test_clone_resolves_origin_head();
    test_no_default_branch_skips();
    test_non_git_uses_worktree();
+   test_default_branch_sha_tracks_commits();
+   test_default_branch_sha_quote_in_ref();
+   test_index_source_is_worktree();
+   test_default_branch_sha_non_git();
    sh("rm -rf '%s'", g_root);
    printf("ALL PASS\n");
    return 0;

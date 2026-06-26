@@ -281,9 +281,8 @@ int kb_curator_contradictions_json(int limit, char *out, size_t out_cap)
    return 1;
 }
 
-/* §2c: stubs for the new /v1/reembed + /v1/search-guard db2 refs in kb_http.o.
- * g_test_reembed_in_progress lets a test drive the maintenance marker so the
- * /v1/search 503 guard can be exercised deterministically. */
+/* §2c: stubs for the /v1/reembed + /v1/search-guard db2 refs in kb_http.o.
+ * g_test_reembed_in_progress drives the maintenance marker (the /v1/search 503 guard). */
 static int g_test_reembed_in_progress = 0;
 int db2_reembed_in_progress_get(int *target_dim, long *started_epoch)
 {
@@ -524,8 +523,7 @@ int canonical_index_project_lang_breakdown(const char *project, char *buf, size_
    return 0;
 }
 
-/* Must mirror code_search_hit_t (index.h) exactly — the handler casts the out
- * buffer to it; a layout mismatch would corrupt the read. */
+/* Must mirror code_search_hit_t (index.h) exactly (handler casts the out buffer to it). */
 typedef struct
 {
    char project[128];
@@ -907,8 +905,8 @@ int db2_demotion_profile_read(const char *memory_class, const char *scope_kind,
    return 0;
 }
 
-/* kb_intel_payload's bandit.sample/close builders call these; this test does not
- * link kb_bandit.o. Stub sample as "disabled" and reward as a no-op success. */
+/* kb_intel_payload's bandit.sample/close builders call these (kb_bandit.o unlinked):
+ * stub sample as "disabled", reward as a no-op success. */
 int kb_bandit_sample(const config_t *cfg, const char *decision_point, const char *context_json,
                      const char (*arm_ids)[KB_BANDIT_MAX_ARM_ID], int n_arms, char *decision_id_out)
 {
@@ -1945,6 +1943,9 @@ int main(void)
    test_blast_radius_not_found();
    test_blast_radius_ok();
    test_code_scan_ok();
+   test_code_scan_skips_unchanged_branch();
+   test_code_scan_runs_on_branch_move();
+   test_code_scan_worktree_ignores_sha();
    test_code_scan_missing_root_path();
    test_code_scan_pushed_files_ok();
    test_code_scan_pushed_files_rejects_invalid_item();
