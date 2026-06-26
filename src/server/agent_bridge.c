@@ -165,8 +165,8 @@ cJSON *agent_build_request_openai(const agent_t *agent, cJSON *messages, cJSON *
       cJSON_AddBoolToObject(kwargs, "enable_thinking", 0);
    }
    openrouter_add_routing_hint(agent, req);
-   if (agent && (strcmp(agent->provider, "minimax") == 0 ||
-                 strstr(agent->endpoint, "api.minimax.") || strstr(agent->model, "MiniMax-M2.7")))
+   /* M2.7-only: MiniMax-M3 rejects reasoning_split with HTTP 400, and it is never read back. */
+   if (agent && strstr(agent->model, "MiniMax-M2.7"))
       cJSON_AddBoolToObject(req, "reasoning_split", 1);
 
    return req;
