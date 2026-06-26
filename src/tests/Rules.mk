@@ -30,7 +30,7 @@ TEST_WORKSPACE_OBJS_EXTRA = $(OBJDIR)/workspace.o $(DB1_OBJS) \
                              $(OBJDIR)/server/mcp_client.o $(OBJDIR)/server/mcp_client_registry.o \
                              $(OBJDIR)/server/http_retry.o $(OBJDIR)/server/failover.o \
                              $(OBJDIR)/posix/cli_client.o $(OBJDIR)/aimee_tls.o $(OBJDIR)/codex_auth.o $(OBJDIR)/posix/cli_main.o \
-	                             $(OBJDIR)/guardrails.o $(OBJDIR)/guardrails_orchestrator.o $(OBJDIR)/guardrails_tdd.o $(OBJDIR)/guardrails_semantic.o $(OBJDIR)/skill.o $(OBJDIR)/session_state.o $(OBJDIR)/file_safety.o $(OBJDIR)/git_verify.o $(OBJDIR)/git_verify_config.o $(OBJDIR)/git_verify_jobs.o $(OBJDIR)/git_verify_hook.o $(OBJDIR)/git_verify_ops.o $(OBJDIR)/git_verify_select.o $(OBJDIR)/git_verify_step.o \
+	                             $(OBJDIR)/guardrails.o $(OBJDIR)/guardrails_orchestrator.o $(OBJDIR)/guardrails_tdd.o $(OBJDIR)/guardrails_semantic.o $(OBJDIR)/guardrails_blast_radius.o $(OBJDIR)/skill.o $(OBJDIR)/session_state.o $(OBJDIR)/file_safety.o $(OBJDIR)/git_verify.o $(OBJDIR)/git_verify_config.o $(OBJDIR)/git_verify_jobs.o $(OBJDIR)/git_verify_hook.o $(OBJDIR)/git_verify_ops.o $(OBJDIR)/git_verify_select.o $(OBJDIR)/git_verify_step.o \
                              $(OBJDIR)/branch_ownership.o \
                              $(OBJDIR)/dstr.o $(OBJDIR)/diff.o \
                              $(OBJDIR)/server/web_search.o \
@@ -81,7 +81,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-guardrails $(TESTPREFIX)/unit-test-memory $(TESTPREFIX)/unit-test-tasks \
                $(TESTPREFIX)/unit-test-cmd-hooks-scope \
                $(TESTPREFIX)/unit-test-agent $(TESTPREFIX)/unit-test-agent-repair $(TESTPREFIX)/unit-test-agent-apikey $(TESTPREFIX)/unit-test-script-runner $(TESTPREFIX)/unit-test-provider-cli-adapter $(TESTPREFIX)/unit-test-cli-acp $(TESTPREFIX)/unit-test-acp-server $(TESTPREFIX)/unit-test-extractors \
-               $(TESTPREFIX)/unit-test-text $(TESTPREFIX)/unit-test-config $(TESTPREFIX)/unit-test-config-surface $(TESTPREFIX)/unit-test-ingress-preinject $(TESTPREFIX)/unit-test-gw-stage-memory $(TESTPREFIX)/unit-test-attention-guard $(TESTPREFIX)/unit-test-codex-auth $(TESTPREFIX)/unit-test-code-audit $(TESTPREFIX)/unit-test-code-audit-graph $(TESTPREFIX)/unit-test-db2-code-audit $(TESTPREFIX)/unit-test-cron-config $(TESTPREFIX)/unit-test-cron-runtime $(TESTPREFIX)/unit-test-feedback \
+               $(TESTPREFIX)/unit-test-text $(TESTPREFIX)/unit-test-config $(TESTPREFIX)/unit-test-config-surface $(TESTPREFIX)/unit-test-ingress-preinject $(TESTPREFIX)/unit-test-code-span $(TESTPREFIX)/unit-test-code-match $(TESTPREFIX)/unit-test-gw-stage-memory $(TESTPREFIX)/unit-test-attention-guard $(TESTPREFIX)/unit-test-codex-auth $(TESTPREFIX)/unit-test-code-audit $(TESTPREFIX)/unit-test-code-audit-graph $(TESTPREFIX)/unit-test-db2-code-audit $(TESTPREFIX)/unit-test-cron-config $(TESTPREFIX)/unit-test-cron-runtime $(TESTPREFIX)/unit-test-feedback \
                $(TESTPREFIX)/unit-test-render $(TESTPREFIX)/unit-test-index $(TESTPREFIX)/unit-test-manuscript $(TESTPREFIX)/unit-test-persona $(TESTPREFIX)/unit-test-server-http $(TESTPREFIX)/unit-test-openai-shape $(TESTPREFIX)/unit-test-openai-chat-policed $(TESTPREFIX)/unit-test-openai-responses-store \
                $(TESTPREFIX)/unit-test-feedback-shadow $(TESTPREFIX)/unit-test-graph-fusion $(TESTPREFIX)/unit-test-code-vectors $(TESTPREFIX)/unit-test-graph-scoring $(TESTPREFIX)/unit-test-code-projection $(TESTPREFIX)/unit-test-entity-nodes $(TESTPREFIX)/unit-test-memory-advanced $(TESTPREFIX)/unit-test-memory-health \
                $(TESTPREFIX)/unit-test-memory-ranker-boundary \
@@ -124,6 +124,11 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-kb-client-docs \
                $(TESTPREFIX)/unit-test-kb-client-search \
                $(TESTPREFIX)/unit-test-kb-client-memory \
+               $(TESTPREFIX)/unit-test-kb-graph \
+               $(TESTPREFIX)/unit-test-kb-rrf \
+               $(TESTPREFIX)/unit-test-kb-graph-analytics \
+               $(TESTPREFIX)/unit-test-guardrails-blast-radius \
+               $(TESTPREFIX)/unit-test-code-collect \
                $(TESTPREFIX)/unit-test-server-compute \
                $(TESTPREFIX)/unit-test-server-memory-benchmark \
                $(TESTPREFIX)/unit-test-server-jobs-aux \
@@ -378,6 +383,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-curator-serve \
                $(TESTPREFIX)/unit-test-curator-pipeline \
                $(TESTPREFIX)/unit-test-curator-judge \
+               $(TESTPREFIX)/unit-test-kb-surprising-judge \
                $(TESTPREFIX)/unit-test-curator-synthesize \
                $(TESTPREFIX)/unit-test-curator-promote \
                $(TESTPREFIX)/unit-test-db1-write-retry \
@@ -765,11 +771,21 @@ $(TESTPREFIX)/unit-test-text: $(OBJDIR)/tests/test_text.o $(OBJDIR)/util.o $(OBJ
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 $(TESTPREFIX)/unit-test-ingress-preinject: $(OBJDIR)/tests/test_ingress_preinject.o \
-                     $(OBJDIR)/server/ingress_preinject.o $(OBJDIR)/cJSON.o $(OBJDIR)/dstr.o
+                     $(OBJDIR)/server/ingress_preinject.o $(OBJDIR)/server/request_context.o \
+                     $(OBJDIR)/log.o $(OBJDIR)/cJSON.o $(OBJDIR)/dstr.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-code-span: $(OBJDIR)/tests/test_code_span.o \
+                     $(OBJDIR)/server/code_span.o $(OBJDIR)/kb/kb_doc_hash.o \
+                     $(TEST_DATA_OBJS) $(TEST_WORKSPACE_OBJS_EXTRA)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-code-match: $(OBJDIR)/tests/test_code_match.o $(OBJDIR)/code_match.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 $(TESTPREFIX)/unit-test-gw-stage-memory: $(OBJDIR)/tests/test_gw_stage_memory.o \
                      $(OBJDIR)/server/gw_stage_memory.o $(OBJDIR)/server/ingress_preinject.o \
+                     $(OBJDIR)/server/request_context.o $(OBJDIR)/log.o \
                      $(OBJDIR)/cJSON.o $(OBJDIR)/dstr.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
@@ -1314,6 +1330,34 @@ $(TESTPREFIX)/unit-test-dstr: $(OBJDIR)/tests/test_dstr.o $(OBJDIR)/dstr.o
 
 # The aimee-client test compiles its in-process TLS mock only in WITH_TLS builds.
 $(OBJDIR)/tests/test_aimee_client.o: C_FLAGS += $(TLS_FLAGS)
+$(OBJDIR)/tests/test_kb_graph.o: C_FLAGS += -Ikb
+$(OBJDIR)/tests/test_kb_rrf.o: C_FLAGS += -Ikb
+$(OBJDIR)/tests/test_kb_graph_analytics.o: C_FLAGS += -Ikb
+
+$(TESTPREFIX)/unit-test-kb-graph: $(OBJDIR)/tests/test_kb_graph.o \
+                                  $(OBJDIR)/kb/kb_service_graph.o $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(L_CORE)
+
+# Reciprocal Rank Fusion core (§5 hybrid retrieval scoring model). Pure: no DB.
+$(TESTPREFIX)/unit-test-kb-rrf: $(OBJDIR)/tests/test_kb_rrf.o $(OBJDIR)/kb/kb_rrf.o
+	$(TESTLINK) -o $@ $^ $(L_CORE) -lm
+
+# Graph analytics: degree-centrality hub ranking (§4). Pure: no DB.
+$(TESTPREFIX)/unit-test-kb-graph-analytics: $(OBJDIR)/tests/test_kb_graph_analytics.o \
+                                            $(OBJDIR)/kb/kb_graph_analytics.o
+	$(TESTLINK) -o $@ $^ $(L_CORE)
+
+# Blast-radius advisory: structural §7 actuation. Hermetic — config_load and the
+# kb_client_index_* sidecar calls are stubbed in the test, so no DB/sidecar.
+$(TESTPREFIX)/unit-test-guardrails-blast-radius: $(OBJDIR)/tests/test_guardrails_blast_radius.o \
+                                                 $(OBJDIR)/guardrails_blast_radius.o
+	$(TESTLINK) -o $@ $^ $(L_CORE)
+
+# Code collector source selection (git default branch vs working tree). Drives
+# the real collector against throwaway git repos materialized under TMPDIR.
+$(TESTPREFIX)/unit-test-code-collect: $(OBJDIR)/tests/test_code_collect.o \
+                                      $(OBJDIR)/code_collect.o $(OBJDIR)/cJSON.o $(PLATFORM_BASIC_OBJS)
+	$(TESTLINK) -o $@ $^ $(L_CORE)
 
 $(TESTPREFIX)/unit-test-aimee-client: $(OBJDIR)/tests/test_aimee_client.o $(OBJDIR)/aimee_client.o \
                                       $(OBJDIR)/posix/platform_net.o $(OBJDIR)/http_uds_client.o \
@@ -1634,6 +1678,7 @@ $(TESTPREFIX)/unit-test-kb-mining: $(OBJDIR)/tests/test_kb_mining.o \
                              $(OBJDIR)/db2/mining.o $(OBJDIR)/db2/artifacts.o \
                              $(OBJDIR)/db2/feature_rows.o \
                              $(OBJDIR)/learning_evidence.o $(OBJDIR)/db2/learning_synth_ops.o \
+                             $(OBJDIR)/db2/learning.o \
                              $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o $(OBJDIR)/db2/db_schema.o \
                              $(OBJDIR)/db2/feedback.o \
                              $(TEST_CORE_OBJS)
@@ -2031,6 +2076,20 @@ $(TESTPREFIX)/unit-test-curator-link-artifacts: \
 $(TESTPREFIX)/unit-test-curator-judge: \
                                        $(OBJDIR)/tests/test_curator_judge.o \
                                        $(OBJDIR)/kb/kb_curator_judge.o \
+                                       $(OBJDIR)/kb/kb_curator_sidecar.o \
+                                       $(OBJDIR)/kb/kb_curator_llm.o \
+                                       $(OBJDIR)/kb_curator_provider.o \
+                                       $(OBJDIR)/provider_client.o \
+                                       $(OBJDIR)/tests/support/mock_agent_http.o \
+                                       $(OBJDIR)/cJSON.o \
+                                       $(PLATFORM_BASIC_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+# §4 surprising-links judge: real request-build + verdict-parse; DB accessors stubbed
+# in the test, the LLM faked via the curator sidecar seam (cfg=NULL + printf judge_cmd).
+$(TESTPREFIX)/unit-test-kb-surprising-judge: \
+                                       $(OBJDIR)/tests/test_kb_surprising_judge.o \
+                                       $(OBJDIR)/kb/kb_surprising_judge.o \
                                        $(OBJDIR)/kb/kb_curator_sidecar.o \
                                        $(OBJDIR)/kb/kb_curator_llm.o \
                                        $(OBJDIR)/kb_curator_provider.o \
@@ -2980,6 +3039,8 @@ $(TESTPREFIX)/unit-test-kb-http-routes: $(OBJDIR)/tests/test_kb_http_routes.o \
                      $(OBJDIR)/kb/kb_intel_payload.o \
                      $(OBJDIR)/kb/kb_bandit_registry.o \
                      $(OBJDIR)/kb/http/kb_http_code.o \
+                     $(OBJDIR)/kb/kb_rrf.o \
+                     $(OBJDIR)/kb/kb_graph_analytics.o \
                      $(OBJDIR)/kb/http/kb_http_pdf.o \
                      $(OBJDIR)/kb/http/kb_http_jobs.o \
                      $(OBJDIR)/cJSON.o \

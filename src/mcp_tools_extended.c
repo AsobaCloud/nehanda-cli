@@ -80,12 +80,57 @@ void mcp_add_extended_tools(cJSON *tools)
    ext_prop(t, "project", "string", "Project the file belongs to (optional).");
    ext_require(t, "file_path");
 
+   t = ext_tool(tools, "code_span_get",
+                "Read an exact line range from an indexed source file (the recovery resolver for a "
+                "folded code reference). Returns the span content plus a source_version hash for "
+                "drift detection. The path is validated to stay within the project's workspace.");
+   ext_prop(t, "project", "string", "Project the file belongs to (required for path scoping).");
+   ext_prop(t, "file_path", "string", "File path within the project (relative to its root).");
+   ext_prop(t, "line_start", "integer", "First line to read (1-based; default 1).");
+   ext_prop(t, "line_end", "integer",
+            "Last line to read (1-based, inclusive; default line_start).");
+   ext_require(t, "project");
+   ext_require(t, "file_path");
+
    t = ext_tool(tools, "index_blast_radius",
                 "Impact analysis for one file: the files that depend on it (dependents) and the "
                 "files it depends on (dependencies), from the code index.");
    ext_prop(t, "file_path", "string", "File path within the indexed project.");
    ext_prop(t, "project", "string", "Project the file belongs to (optional).");
    ext_require(t, "file_path");
+
+   t = ext_tool(tools, "index_hybrid",
+                "Hybrid code retrieval: fuse lexical code search with the structural call graph "
+                "(callers of a symbol) into one ranking, plus the recorded reasoning ('why') from "
+                "memory. Prefer this over plain search when you have a seed symbol — it surfaces "
+                "files that are both textually relevant AND structurally connected.");
+   ext_prop(t, "query", "string", "Free-text query for the lexical-code and memory legs.");
+   ext_prop(t, "symbol", "string",
+            "Seed symbol whose callers form the graph leg (optional; omit for code+memory only).");
+   ext_prop(t, "project", "string", "Restrict to a project (optional; omit to search all).");
+   ext_prop(t, "max_results", "integer", "Max fused results (default 20, max 100).");
+   ext_require(t, "query");
+
+   t = ext_tool(tools, "index_graph_hubs",
+                "Rank a project's most-connected symbols by degree centrality over the code "
+                "projection graph — a refactor-risk signal ('editing this touches a lot'). Returns "
+                "in/out/weighted degree per hub.");
+   ext_prop(t, "project", "string", "Project to analyze.");
+   ext_prop(t, "max_results", "integer", "Max hubs to return (default 20, max 200).");
+   ext_require(t, "project");
+
+   t = ext_tool(
+       tools, "index_graph_surprising",
+       "Find 'surprising links': file pairs that are semantically close (high embedding "
+       "similarity) yet structurally far apart in the call/dependency graph (or "
+       "disconnected) — a duplicated-logic / parallel-implementation signal. Returns pairs "
+       "with cosine + hop distance.");
+   ext_prop(t, "project", "string", "Project to analyze.");
+   ext_prop(t, "max_results", "integer", "Max surprising pairs to return (default 20, max 200).");
+   ext_prop(t, "judge", "boolean",
+            "Confirm the top candidates with an LLM (shared-symbol cross-check + a batched "
+            "judge): each gets confirmed + reason. Default false (structural candidates only).");
+   ext_require(t, "project");
 
    /* ── Memory grounding: explain a retrieval + provenance/history ───────────── */
    t = ext_tool(tools, "memory_explain_match",
@@ -225,11 +270,15 @@ static const struct fam_def MCP_FAMILIES[] = {
       {NULL, NULL}}},
     {"index",
      "command",
-     "Code-index navigation. Set 'command'.",
+     "Code-index navigation, hybrid retrieval, and graph analytics. Set 'command'.",
      {{"find_callers", "index_find_callers"},
       {"structure", "index_structure"},
+      {"span", "code_span_get"},
       {"blast_radius", "index_blast_radius"},
       {"preview", "preview_blast_radius"},
+      {"hybrid", "index_hybrid"},
+      {"hubs", "index_graph_hubs"},
+      {"surprising", "index_graph_surprising"},
       {NULL, NULL}}},
     {"note",
      "command",

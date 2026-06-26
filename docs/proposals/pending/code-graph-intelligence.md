@@ -1,6 +1,13 @@
 # Proposal: Code-graph intelligence — a living, embedded, reasoning graph over code
 
-- **State:** DRAFT — R1 (roundtable-revised), pre proposal-gate.
+- **State:** IN PROGRESS — §0.5/§1/§3/§4/§5/§7/§8-backend implemented (on the
+  `testing` branch), including the §5 code+graph+vector hybrid, §7 graph-informed
+  delegation, the §4 surprising-links route + its LLM-judge relevance gate, and the §8
+  read-only `/v1/code/graph` backend route, and the §6 cross-session memory-fusion
+  leg in `/v1/code/hybrid`; remainder (§2 tree-sitter, §6 *live* reindex hook, §8
+  webchat frontend, and the §4 precision self-suppress monitoring) still open, as
+  build-/integration-/frontend-tier work. See the
+  "Implementation status" section below.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
   built without a manual step, (b) parsed broadly, (c) ranked by **graph structure
   AND vector similarity AND memory** in one query, and (d) able to *change what the
@@ -32,6 +39,53 @@ visualization for humans.
   via the embed drain (`kb_curator_drain.c`). This is the differentiator we under-use.
 - **Parse — hand-rolled.** `extractors.c` / `extractors_extra.c` / `extractors_new_langs.c`
   — limited language set, brittle vs real grammars.
+
+## §0.5 Source of truth: the git default branch
+
+**Principle.** Code indexing — the graph **and** the embeddings — is sourced from
+the repository's **git default branch** (e.g. `origin/main`), not the user's
+working tree, current checkout, or a feature branch they are mid-edit on. The kb's
+code view must be **stable and canonical**: a developer's WIP, an uncommitted edit,
+or a throwaway branch must never thrash the graph/embeddings or pollute what other
+sessions retrieve as "the code."
+
+**Resolution order** (`code_collect.c`, `git_resolve_default_ref`):
+1. `git symbolic-ref --short refs/remotes/origin/HEAD` — the remote's advertised
+   default (kept in `origin/<branch>` form end-to-end, no prefix mixing).
+2. If unset (common when the remote was added after clone), repair **once** with
+   `git remote set-head origin -a` and retry — don't surface the transient state.
+3. First existing of `origin/main`, `origin/master`, `main`, `master`.
+4. **No fall-through to the current HEAD or working tree.** A git repo with no
+   resolvable default branch is **skipped** with a diagnostic — silently indexing
+   the checkout would re-introduce the exact WIP-thrash this eliminates.
+
+**Non-git dirs** fall back to the working-tree walk unconditionally. An explicit
+opt-in `AIMEE_CODE_INDEX_SOURCE=worktree` indexes the working tree for a user who
+*wants* their WIP indexed (documented as team-unsafe, since it re-introduces
+thrash); `default`/`auto` (the default) honor the chain above.
+
+**Read mechanism.** One `git ls-tree -r -z <ref>` enumerates `(oid, path)` pairs;
+one `git cat-file --batch` (fed the wanted oids from a temp file, so our side only
+reads — no bidirectional-pipe deadlock) streams content in request order. Content
+is paired to path **by sequence**, so a newline in a path can't misattribute a
+blob. The same extension/skip-dir/size/binary filters as the worktree walk apply.
+
+**Code-vs-edit-tool split (invariant).** Graph + embedding **indexing** reads the
+default branch. **Edit-time** tools that ask "what does *this in-progress change*
+touch" — blast-radius (§7), and the sweep proposer when proposing from
+staged/unstaged changes — read the **working tree** via their own reader and
+deliberately do **not** route through the indexing collector. Conflating the two
+would make a blast-radius query against the default-branch graph silently miss the
+very edit the user is asking about. The choice is documented per tool, never
+inferred. (Today only `kb_client_index` and `server_sweep` use the canonical
+collector; blast-radius already has its own working-tree reader, so the split
+holds structurally.)
+
+**Idempotency interaction.** §1's content fingerprint (md5 over file `(path,hash)`)
+is unaffected — it already captures "did the default-branch content change." A
+future optimization can use the branch tree SHA (`git rev-parse <ref>^{tree}`) as a
+cheaper outer skip-gate, with the per-file `(path,hash)` set still driving
+upsert/delete on a change. Submodule content drift is out of scope unless opted in.
 
 ## §1 Auto-build all three layers on ingest (highest-leverage, cheap)
 
@@ -76,6 +130,18 @@ callers can filter by trust.
 Computed over `code_projection_edges` + embeddings, served read-only:
 - **Communities** (Louvain/Leiden over the typed graph) → module/cluster map.
 - **Hubs/centrality** → most-connected symbols (refactor-risk ranking).
+  **Status — shipped.** `GET /v1/code/graph/hubs?project&max_results` ranks a
+  project's symbols by **degree centrality** over the visible projection graph:
+  `db2_code_projection_list_edges` reads the published generation's edges, the pure
+  `kb_graph_hubs` (`src/kb/kb_graph_analytics.c`) tallies in/out/weighted degree and
+  returns the top N (deterministic: degree desc → weighted-degree desc → node asc),
+  and the route surfaces `edge_count` + a `truncated` flag (the analytics cap is
+  10k edges; beyond it the ranking is over a deterministic source/target-ordered
+  prefix). Unit tested (`unit-test-kb-graph-analytics`: aggregation, tie-break
+  determinism under input permutation, self-loops, truncation, empty endpoints) +
+  shim route test (`test_code_graph_hubs_*`). **Agent-callable** via the MCP `index`
+  family — `index({command:"hubs", project})` — through `kb_client_code_graph_hubs`.
+  Weighted/betweenness/PageRank centrality and community detection are follow-ups.
 - **Surprising links** — pairs `(a,b)` with **high embedding similarity AND high
   graph distance**, made precise + gated (R1):
   - *similarity*: cosine(emb a, emb b) at/above the **top percentile** of the
@@ -89,6 +155,37 @@ Computed over `code_projection_edges` + embeddings, served read-only:
     candidates — before it is shown. Precision is sampled (LLM-judge or human
     spot-check) and the feature **self-suppresses** if sampled precision drops below a
     floor. Only computable because aimee has vectors.
+
+  **Status — distance + selection core shipped.** Two pure analytics primitives
+  back the precise definition above: `kb_graph_shortest_hops` (undirected BFS over
+  `code_projection_edges`, capped at `KB_GRAPH_BFS_MAX_NODES`, returns hop count /
+  0 / -1-for-disconnected) and `kb_graph_surprising` (a **data-driven** cosine floor
+  at the requested similarity percentile of the supplied pair set, then keeps pairs
+  whose hop distance ≥ `d_min` **or** which are disconnected, in deterministic order)
+  in `src/kb/kb_graph_analytics.c`, unit-tested in `unit-test-kb-graph-analytics`.
+
+  **Status — route shipped.** `GET /v1/code/graph/surprising?project&max_results&k&
+  d_min&percentile&min_cosine` gathers candidate pairs from `code_embeddings` via a
+  project-scoped, anchor-bounded **lateral self-kNN** (`pgvec_code_similar_pairs`,
+  riding the HNSW cosine index), whose `node_key` is byte-identical to the projection
+  file-node key (`db2_entity_node_key_file`) so pairs map to graph nodes with no
+  remapping, then runs the pure core above. The hop distance is computed over the
+  graph **with the project containment super-hub excluded** — otherwise every
+  same-project file pair is 2 hops (file←project→file) and the signal is meaningless.
+  A genuine vector-store outage is a 503 (distinct from an empty 200); every link
+  carries `hops` (-1 = disconnected) + a `disconnected` bool. The SQL was validated
+  against real pgvector/halfvec.
+
+  **Status — relevance gate shipped.** With `judge=true` the top candidates go through
+  the §4 confirmation: a cheap shared-symbol cross-check plus ONE batched **Tier-B
+  LLM-judge** call (`kb_surprising_judge`, via the curator's `kb_curator_llm_run` —
+  reuses the configured `kb_curator_tier_b_*` provider, no new endpoint) that confirms
+  genuine parallel/duplicated logic vs coincidental similarity. Each judged link gains
+  `shared_symbols` and (when the model returns a verdict) `confirmed` + `reason`;
+  verdicts for pairs not actually sent are rejected so the model can't fabricate a
+  confirmation. Bounded to the top 12 links; opt-in (no LLM configured → unconfirmed
+  structural candidates). The remaining **precision self-suppress** (sample judged
+  precision, auto-disable below a floor) is a monitoring layer left as a follow-up.
 
 ## §5 Hybrid graph+vector+memory retrieval (the headline)
 
@@ -111,21 +208,86 @@ memory top-M by recency·relevance), so fusion cost is bounded. Surfaced via a n
 `/v1/code/context` (or an extended `/v1/code/search`) + an MCP tool the primary agent
 calls before grepping.
 
+**Status — fusion core shipped.** The RRF scoring model is implemented as a pure,
+self-contained module `src/kb/kb_rrf.c` (`kb_rrf_fuse`): it takes N ranked signal
+lists + per-signal weights + the RRF constant `k`, and returns one ranking by
+`Σ_s w_s/(k+rank_s)`, robust to absent signals, with deterministic tie-breaks
+(structural-trust desc, then id) and a cross-signal-consensus boost. Fully unit
+tested (`unit-test-kb-rrf`): exact rank-blend math, weighting, consensus-beats-single,
+absent-signal robustness, determinism under input-order permutation, truncation.
+
+**Status — route shipped.** `GET /v1/code/hybrid?query&symbol&project` fuses two
+signals in **file-path** space through `kb_rrf_fuse` so consensus is meaningful — a
+file that is both textually relevant to `query` AND structurally connected to
+`symbol` (calls it) ranks highest: `code` (lexical `canonical_index_code_search`) +
+`graph` (`canonical_index_find_callers`, marked structural). Memory recall
+(`db2_memory_find_facts_like`) returns as a separate typed `why` array — the recorded
+reasoning behind the code, context rather than a fused file row (matching the §5
+example "+ the decision that explains X"). Each result is labeled with its
+contributing `signals`, enriched (snippet / caller), and carries `signal_hits` +
+`structural_weight`. Shim-tested end-to-end in `unit-test-kb-http-routes`
+(`test_code_hybrid_*`: both legs fuse + label + enrich, memory why, no-symbol path,
+missing-query 400). **Agent-callable** via the MCP `index` family — `index({command:
+"hybrid", query, symbol?, project?})` — wired through `kb_client_code_hybrid`
+(verbatim JSON forward). **Per-signal weights are config-tunable** (shipped):
+`kb.code_hybrid.{weight_code,weight_graph,rrf_k}` (defaults `1.0/1.0/60` preserve the
+prior behavior; `weight ≤ 0` disables a leg) flow from `config_load` into
+`kb_rrf_fuse`, so an operator can re-balance lexical-vs-structural relevance without a
+rebuild. **Remaining:** the **vector** leg (`pgvec_code_search`, needs the query
+embedder — integration/deploy-tier) as a third fused signal.
+
 ## §6 Live + cross-session memory fusion
 
-- **Incremental updates** on file-change/commit (hook + watch) so the graph tracks
-  the working tree, not a snapshot.
+- **Incremental updates** on default-branch movement (post-merge / fetch hook +
+  watch) so the graph tracks new commits on the canonical branch (§0.5), not a
+  stale snapshot — and not the working tree.
+
+  **Status — change-detection gate shipped.** The `/v1/code/scan` route now no-ops
+  the expensive git re-walk when the default branch hasn't moved: `git_resolve_default_sha`
+  (the default ref's tree SHA, §0.5 chain) is compared via the pure
+  `code_default_branch_changed` against the last-indexed SHA stored in
+  `kb_runtime_state`; unchanged + non-`force` → `{"skipped":true}` (`unit-test-code-collect`
+  exercises the SHA-tracks-commits + gate logic against real git repos). This is the
+  cheap gate a post-merge/fetch **hook** reuses; installing that hook (mirroring
+  `verify_install_git_hook`) + the watch loop remain the integration follow-up.
 - **Fuse the graph with conversation memory + the decision log** so the "why" behind
   a symbol is the *actual recorded reasoning*, not just parsed comments — queryable
   via §5. This is the thing a regenerated artifact can never hold.
+
+  **Status — fusion half shipped.** `/v1/code/hybrid` now fuses a 4th ranked
+  **`memory`** signal: symbol-anchored, it walks the symbol's incident curator-built
+  knowledge-graph edges and resolves each neighbor entity to a `file_path`, so files
+  the recorded reasoning associates with the symbol rank alongside the code/graph/
+  vector legs (not just the post-fusion `why`). Config-tunable `code_hybrid_weight_memory`;
+  empty (no-op) until the curator has synthesized an entity graph
+  (`handle_get_code_hybrid` memory leg, `test_code_hybrid_memory_leg`). The **live
+  half** (incremental reindex on default-branch movement) remains open.
 
 ## §7 Agent actuation (the graph changes behavior)
 
 - **Blast-radius-aware edits**: before a write, surface graph-impacted files into the
   guardrail/context path (`guardrails_orchestrator.c`).
+  **Status — shipped.** `pre_tool_check` now emits a structural blast-radius
+  **ADVISORY** before an `Edit`/`Write`/`MultiEdit`: it lists the dependent files
+  that the edited file structurally affects (from the KB sidecar's
+  `/v1/code/blast-radius`, i.e. the call graph + typed projection edges — never the
+  LLM entity graph), and appends a high-centrality **hub** note at/above the
+  refactor-risk threshold (≥5 dependents), folding the stale-edge guard below into
+  the same surface. Advisory + **fail-open**: gated behind
+  `guardrails.blast_radius.advisory_enabled` (default **off**, opt-in); never
+  blocks; any miss (flag off, no indexed project owns the path, sidecar error, no
+  dependents) leaves the existing guardrail decision untouched, and it never
+  clobbers a higher-priority guardrail message. The decision is a pure, testable
+  core (`blast_radius_advisory_format` in `src/guardrails_blast_radius.c`) over an
+  already-fetched `blast_radius_t`, with the sidecar I/O resolver kept thin and
+  shared with `classify_path`'s existing severity check (no duplicate fetch path).
+  Unit tested hermetically (`unit-test-guardrails-blast-radius`: listing, ellipsis
+  cap, singular/plural, hub note, truncation-safety, project resolution + path
+  boundary, fail-open on no-match/sidecar-error, flag gate, message precedence).
 - **Graph-informed delegation**: route a delegate task with the relevant subgraph as
-  context automatically.
+  context automatically. *(Follow-up — not yet wired.)*
 - **Stale-edge guard**: warn when an edit touches a high-centrality/hub symbol.
+  *(Shipped as the hub note within the blast-radius advisory above.)*
 
 **Safety constraint (R1).** Anything on the safety-critical guardrail path uses ONLY
 the **deterministic structural layers** — the call graph + typed projection edges
@@ -144,12 +306,72 @@ symbol → callers/callees/neighbors + provenance + the linked "why". Backed by 
 read-only `/v1/code/graph` projection (paged). Human-facing exploration; not on the
 agent's hot path.
 
+**Status — backend route shipped.** `GET /v1/code/graph?project&node&max_results`
+returns a node's incident projection edges — each with `neighbor`, `relation`,
+`direction` (`out` = node→neighbor, `in` = neighbor→node, `self` = recursive edge),
+`structural_weight`, and the §3 `provenance` tag — plus `match_count` (total incident,
+pre-cap) and a `truncated` flag that fires when **either** the page cap (`max_results`,
+1–200) **or** the projection scan window (`HUBS_MAX_EDGES`) bounds the result. Reuses
+`db2_code_projection_list_edges` + `kb_graph_edge_provenance` (`handle_get_code_graph`
+in `src/kb/http/kb_http_code.c`); read-only, off the agent hot path. Shim route tests
+(`test_code_graph_node_*`: out/in neighbors, page-cap truncation, self-loop). The
+webchat **frontend** consumer remains open.
+
 ## Phasing (each independently shippable)
 
 - **P1 (now):** §1 auto-build + §3 provenance. Mostly wiring; makes the graph complete.
 - **P2:** §2 tree-sitter + §5 hybrid retrieval (parallel) — coverage + headline.
 - **P3:** §4 analytics + §8 webchat viz.
 - **P4:** §6 live/memory fusion + §7 actuation — compounds the platform.
+
+## Implementation status (as of this revision)
+
+**Shipped to `testing`:**
+- **§0.5** default-branch sourcing (`code_collect.c`, `unit-test-code-collect`).
+- **§1** auto-build of the projection graph on the curator drain, content-addressed +
+  idempotent (`kb_graph_build_project_if_changed`, `unit-test-kb-graph`).
+- **§3** edge provenance (`structural`/`inferred`/`ambiguous`) surfaced in `graph.explain`.
+- **§4** hub/degree-centrality analytics — `GET /v1/code/graph/hubs`
+  (`kb_graph_analytics.c`, `unit-test-kb-graph-analytics`), **agent-callable** via
+  `index({command:"hubs"})`; plus the **surprising-links route** `GET
+  /v1/code/graph/surprising` — an anchor-bounded pgvector self-kNN
+  (`pgvec_code_similar_pairs`) feeding the pure `kb_graph_surprising`
+  (BFS distance + data-driven percentile), over the coupling graph **with the project
+  containment hub excluded** (`handle_get_code_graph_surprising`,
+  `test_code_graph_surprising_*`), with an opt-in **LLM-judge relevance gate**
+  (`judge=true` → shared-symbol cross-check + one batched Tier-B judge,
+  `kb_surprising_judge`, `unit-test-kb-surprising-judge`).
+- **§5+§6** RRF fusion core (`kb_rrf.c`, `unit-test-kb-rrf`) + the `GET /v1/code/hybrid`
+  route fusing `code` + `graph` + **`vector`** (embedding similarity over
+  `code_embeddings` via `pgvec_code_search_paths`, gated on a dim-matched embedder,
+  graceful-degrading) + **`memory`** (the §6 cross-session knowledge-graph leg,
+  symbol-anchored over curator entity edges) in file-path space with a typed memory
+  `why`, **agent-callable** via `index({command:"hybrid"})`, with **config-tunable
+  per-signal weights** (`kb.code_hybrid.*`). The vector SQL was validated against real
+  pgvector/halfvec.
+- **§7** structural blast-radius **advisory** on the guardrail edit path + **graph-informed
+  delegation** (a delegate's prompt is prefixed with the callers/dependencies of the
+  files its task references) — both advisory, fail-open, structural-only, opt-in
+  (`guardrails_blast_radius.c`, `delegate_inject_graph_context`,
+  `unit-test-guardrails-blast-radius`, `test_delegate_dispatch_reliability`); folds in
+  the stale-edge hub note.
+- **§8** read-only node-projection route — `GET /v1/code/graph?project&node&max_results`
+  returns a node's incident edges (relation / direction incl. `self` / structural weight /
+  §3 provenance) with `match_count` + a page-or-scan `truncated` flag
+  (`handle_get_code_graph`, `test_code_graph_node_*`). Backs the webchat graph view.
+
+**Deferred — needs the embedder / a build-tier dependency / a deployed corpus / a frontend
+(not completable in the agent host):**
+- **§2 tree-sitter** front-end — large build-tier work (vendor ~30 grammars + ABI).
+- **§4 precision self-suppress** — the LLM-judge relevance gate is shipped (opt-in
+  `judge=true`); the precision-sampling monitor that auto-disables the feature below a
+  quality floor needs a deployed corpus + judged-precision telemetry over time.
+- **§6 live half** — the change-detection gate (default-branch SHA + `/v1/code/scan`
+  skip-when-unchanged) and the memory-fusion leg are shipped; the post-merge/fetch
+  **hook install** + watch loop that *fire* the gate on a git event remain, needing a
+  running KB + git events to validate.
+- **§8 webchat visualization** — the **frontend** consumer; the read-only `/v1/code/graph`
+  backend route is shipped (above).
 
 ## Non-goals
 
@@ -170,10 +392,15 @@ agent's hot path.
 ## Tests
 
 - Unit: projection-sync **idempotency** (sync twice → identical edge set + zero-work
-  second pass); provenance tagging; **RRF fusion ordering** (rank blend + tie-break);
-  surprising-links relevance gate (quality floor + threshold).
+  second pass); provenance tagging; **RRF fusion ordering** (rank blend + tie-break)
+  — shipped as `unit-test-kb-rrf`; surprising-links relevance gate (quality floor +
+  threshold).
 - Integration: `workspace add` of a sample repo → all three layers populated +
   searchable (extends the docker e2e); incremental update on file change.
+- Source selection (`unit-test-code-collect`): the canonical collector indexes the
+  git **default branch** (not feature-branch/working-tree WIP); resolves & repairs
+  `origin/HEAD`; **skips** a git repo with no default branch; falls back to the
+  working tree for non-git dirs and the `AIMEE_CODE_INDEX_SOURCE=worktree` opt-in.
 - Coverage: per-language parse fixtures for the tree-sitter front-end + the P1
   edges/file coverage metric.
 
@@ -193,3 +420,20 @@ converged on four load-bearing gaps; each is now addressed in-line:
    metric so the §2 gap is measured, not assumed.
 4. **Actuation coupled a safety path to an LLM-augmented graph (§7)** → guardrail path
    restricted to deterministic structural edges; actuation advisory + fail-open.
+
+## Review revisions (R2) — source of truth
+
+A second roundtable (`mistral` / `mimo-2.5-pro` / `glm-5.2`; 3/3, 0 failed) on the
+indexing source converged on §0.5: index the **git default branch**, not the
+working tree. Load-bearing outcomes, all now in §0.5:
+
+1. **Drop the current-HEAD fallback** — it re-introduced WIP-thrash; an unresolvable
+   default branch now **skips** with a diagnostic instead.
+2. **Repair `origin/HEAD`** with `git remote set-head origin -a` before descending
+   the fallback chain (it is unset on a long tail of real checkouts).
+3. **Read via `ls-tree` + `cat-file --batch`** (one fork each), pairing content to
+   path by sequence (NUL-safe), not per-file `git show` (N forks).
+4. **Code-vs-edit-tool split is a first-class invariant** — indexing reads the
+   default branch; blast-radius / staged-change tools read the working tree.
+
+Implemented in `code_collect.c` with `unit-test-code-collect` covering all cases.

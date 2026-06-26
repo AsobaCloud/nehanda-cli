@@ -182,9 +182,28 @@ int pgvec_code_delete(int64_t point_id);
 int pgvec_code_delete_project(const char *project);
 int pgvec_code_search(const char *project, const float *vec, int dim, int limit, int64_t *ids,
                       double *scores, int max);
+/* Like pgvec_code_search but returns file paths (flat buffer of `max` slots of
+ * `path_cap` bytes) for the §5 hybrid file-path-space fusion. <0 on error. */
+int pgvec_code_search_paths(const char *project, const float *vec, int dim, int limit, char *paths,
+                            int path_cap, double *scores, int max);
 /* Returns 1 if a code_embeddings row with (project, node_key, content_hash,
  * body_hash) exists. body_hash may be blank for legacy callers. */
 int pgvec_code_exists_by_hash(const char *project, const char *node_key, const char *content_hash,
                               const char *body_hash);
+/* §4 surprising-links candidate gather: for each file-node embedding in `project`,
+ * its top-`k` nearest OTHER embeddings by cosine; emits unordered node_key pairs
+ * whose cosine >= `min_cosine`, deduped (canonical a<b, best cosine kept) in C.
+ * a_keys/b_keys are flat buffers of `max` slots of `key_cap` bytes; cosines[max].
+ * A row's node_key is the projection file-node key (db2_entity_node_key_file), so
+ * each pair joins the code-projection graph directly. `project` is required (the
+ * self-join is project-scoped); `anchor_cap` bounds the outer scan (HNSW probes)
+ * so cost is O(anchor_cap*k) independent of project size. Read-only analytics;
+ * <0 on error, else pair count. */
+int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, int anchor_cap,
+                             char *a_keys, char *b_keys, int key_cap, double *cosines, int max);
+/* Resolve a code-embedding node_key back to its file_path (the two are stored on
+ * the same code_embeddings row). Writes into `out` (out_cap); 0 on hit, -1 if the
+ * node is unknown / on error. Used by the §4 surprising-links LLM judge. */
+int pgvec_code_node_path(const char *project, const char *node_key, char *out, int out_cap);
 
 #endif /* DEC_DB2_PGVEC_TRANSPORT_H */

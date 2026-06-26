@@ -223,6 +223,12 @@ int delegate_filter_route_capabilities(agent_config_t *cfg, const char *role,
  * or the query yields no results. */
 char *delegate_inject_code_context(const char *prompt);
 
+/* §7 graph-informed delegation: build a "## Structural context (code graph)" block
+ * from the callers/dependencies of the file paths the prompt references (joined
+ * with cwd). Opt-in via delegate_graph_context_enabled; structural-only,
+ * fail-open. Heap string (caller frees) or NULL. */
+char *delegate_inject_graph_context(const char *prompt, const char *cwd);
+
 /* Rewrite every occurrence of `cwd` in `prompt` to `worktree_path` so a delegate
  * running in an isolated sibling worktree sees paths under its own checkout.
  * Returns a newly malloc'd string (caller frees) and sets *occurrences_out to

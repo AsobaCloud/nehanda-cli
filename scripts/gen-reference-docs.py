@@ -105,6 +105,7 @@ CFG_KEY_DESC = {
     "cache_min_chars": "Minimum prompt size (chars) before cache-shaping applies.",
     "cache_shaping_enabled": "Enable prompt cache-shaping.",
     "claude_cli_delegate_enabled": "Allow delegating to the local Claude CLI agent.",
+    "delegate_graph_context_enabled": "Prepend a structural code-graph context block (callers/dependencies of files a delegate task references) to the delegate prompt (advisory, fail-open, default off).",
     "claude_model": "Default Claude model (empty = CLI default).",
     "gateway_prevent_subagents": "Gateway strips subagent-spawning tools (Task/Agent/etc.) from proxied requests so the served model cannot spawn subagents. Default off.",
     "gateway_pin_model": "Gateway forces the proxied /v1/messages served model to the configured primary's model, overriding the client-requested model. Default off (the passthrough honors the client model); enable for single-model Anthropic-compatible shims.",
@@ -132,6 +133,12 @@ CFG_KEY_DESC = {
     "fidelity_check_enabled": "Run the answer-fidelity judge on terminal-text turns "
     "(default off; requires kb_evidence_emit_enabled + ingress_preinject_enabled).",
     "guardrail_mode": "Guardrail enforcement mode (off / warn / block).",
+    "code_hybrid_weight_code": "RRF weight for the lexical-code signal in /v1/code/hybrid (default 1.0; <=0 disables it).",
+    "code_hybrid_weight_graph": "RRF weight for the structural call-graph signal in /v1/code/hybrid (default 1.0; <=0 disables it).",
+    "code_hybrid_weight_vector": "RRF weight for the embedding-similarity signal in /v1/code/hybrid (default 1.0; <=0 disables it; auto-skips when no dim-matched embedder).",
+    "code_hybrid_weight_memory": "RRF weight for the cross-session knowledge-graph signal in /v1/code/hybrid (default 1.0; <=0 disables it; symbol-anchored, empty without an entity graph).",
+    "code_hybrid_rrf_k": "Reciprocal Rank Fusion rank constant k for /v1/code/hybrid (default 60).",
+    "guardrails_blast_radius_advisory_enabled": "Surface a structural blast-radius advisory (graph-impacted files) before an edit (advisory, fail-open).",
     "guardrails_semantic_allow_ml_only_block": "Allow blocking on the ML classifier alone.",
     "guardrails_semantic_block_threshold": "Semantic score threshold to block.",
     "guardrails_semantic_command": "External semantic-guardrail classifier command.",
@@ -142,10 +149,20 @@ CFG_KEY_DESC = {
     "identity_working_profile_injection_enabled": "Inject the working-profile identity into prompts.",
     "ingress_audit_async": "Audit ingress requests asynchronously.",
     "ingress_max_raw_scans": "Max raw-content scans per ingress request.",
+    "code_span_max_lines": "Max line span the code_span_get recovery resolver returns per call "
+    "(default 400).",
     "require_session_worktree": "Fail closed on mutating ops outside an aimee-managed worktree "
     "(session-isolation guard; default off).",
     "ingress_preinject_assembly_budget": "Token budget for ingress context pre-injection.",
     "ingress_preinject_enabled": "Enable `<aimee-context>` pre-injection on ingress.",
+    "ingress_preinject_anthropic_enabled": "Inject the `<aimee-context>` envelope on the "
+    "Anthropic-native /v1/messages passthrough too (default off).",
+    "ingress_compress_enabled": "Enable ingress envelope compression: span-enrich code hits and "
+    "fold code entries into recoverable references (default off).",
+    "ingress_compress_min_chars": "Minimum code-snippet length (chars) before it is folded to a "
+    "file:line reference (default 80).",
+    "ingress_cache_placement_enabled": "Append the <aimee-context> envelope after the stable "
+    "instructions prefix (not before) so provider prefix caches survive (default off).",
     "ingress_trusted_proxy_secret": "Shared secret authenticating a trusted ingress proxy.",
     "ingress_usage_accounting_enabled": "Account token usage on ingress requests.",
     "integrity_dry_run": "Run integrity checks without enforcing.",

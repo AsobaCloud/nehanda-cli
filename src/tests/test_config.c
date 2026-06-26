@@ -6,7 +6,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "aimee.h"
+#include "cJSON.h"
 #include "config_database.h"
+#include "config_sections.h"
 #include "server.h" /* SERVER_REMOTE_WRITES_* */
 #include "aimee_home.h"
 #include "platform_path.h"
@@ -45,6 +47,12 @@ int main(void)
       config_load(&cfg);
       assert(strcmp(cfg.provider, "claude") == 0);
       assert(strcmp(cfg.guardrail_mode, "approve") == 0);
+      /* §5 hybrid RRF weights + rank constant default to equal weights / k=60,
+       * and the §7 blast-radius advisory is opt-in (off). */
+      assert(fabs(cfg.code_hybrid_weight_code - 1.0) < 1e-9);
+      assert(fabs(cfg.code_hybrid_weight_graph - 1.0) < 1e-9);
+      assert(fabs(cfg.code_hybrid_rrf_k - 60.0) < 1e-9);
+      assert(cfg.guardrails_blast_radius_advisory_enabled == 0);
       assert(cfg.db1_path[0] != '\0');
       assert(cfg.guardrails_semantic_advisory_only == 1);
       assert(cfg.skills_review_nudge_interval == 10);
@@ -1888,6 +1896,28 @@ int main(void)
       }
       else
          platform_unsetenv("AIMEE_EMBEDDING_DIM");
+   }
+
+   /* --- §5 hybrid RRF weights parse from kb.code_hybrid.* --- */
+   {
+      static config_t cfg;
+      memset(&cfg, 0, sizeof(cfg));
+      config_load(&cfg); /* valid baseline; the parse below overrides the asserted fields */
+      cJSON *root = cJSON_CreateObject();
+      cJSON *kb = cJSON_AddObjectToObject(root, "kb");
+      cJSON *ch = cJSON_AddObjectToObject(kb, "code_hybrid");
+      cJSON_AddNumberToObject(ch, "weight_code", 2.5);
+      cJSON_AddNumberToObject(ch, "weight_graph", 0.5);
+      cJSON_AddNumberToObject(ch, "rrf_k", 30);
+      config_parse_kb_section2(&cfg, root);
+      assert(fabs(cfg.code_hybrid_weight_code - 2.5) < 1e-9);
+      assert(fabs(cfg.code_hybrid_weight_graph - 0.5) < 1e-9);
+      assert(fabs(cfg.code_hybrid_rrf_k - 30.0) < 1e-9);
+      /* rrf_k <= 0 is rejected (keeps the prior value). */
+      cJSON_ReplaceItemInObjectCaseSensitive(ch, "rrf_k", cJSON_CreateNumber(0));
+      config_parse_kb_section2(&cfg, root);
+      assert(fabs(cfg.code_hybrid_rrf_k - 30.0) < 1e-9);
+      cJSON_Delete(root);
    }
 
    printf("all tests passed\n");

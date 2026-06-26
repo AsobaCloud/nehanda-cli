@@ -422,6 +422,15 @@ static void test_build_request_openai_minimax_options(void)
    assert(cJSON_IsTrue(split));
 
    cJSON_Delete(req);
+
+   /* MiniMax-M3 (and any non-M2.7 MiniMax model) must NOT get reasoning_split —
+    * the current MiniMax API rejects it with HTTP 400. */
+   snprintf(agent.model, sizeof(agent.model), "MiniMax-M3");
+   cJSON *req_m3 = agent_build_request_openai(&agent, messages, NULL, 1024, 0.0);
+   assert(req_m3 != NULL);
+   assert(cJSON_GetObjectItem(req_m3, "reasoning_split") == NULL);
+   cJSON_Delete(req_m3);
+
    cJSON_Delete(messages);
    printf("build_request_openai_minimax_options OK\n");
 }

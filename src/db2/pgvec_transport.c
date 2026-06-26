@@ -1508,6 +1508,209 @@ int pgvec_code_search(const char *project, const float *vec, int dim, int limit,
    return (rc == AIMEE_PG_ERR) ? -1 : n;
 }
 
+/* Like pgvec_code_search, but returns each hit's file_path instead of its
+ * point_id — the hybrid retrieval leg (§5) fuses signals in file-path space, so
+ * it needs paths, not point ids. paths is a flat buffer of `max` slots each
+ * `path_cap` bytes (paths + i*path_cap); rows with an empty file_path are
+ * skipped. Returns the distinct-file count, or -1 on a bad arg / query error
+ * (the caller treats <0 as "no vector signal" and degrades gracefully).
+ *
+ * code_embeddings holds MANY rows per file (one per code unit/symbol), so a
+ * plain LIMIT N over rows would collapse to far fewer than N distinct files. We
+ * over-fetch index-ordered rows (the ORDER BY uses the ANN index) and dedup by
+ * file_path in C, keeping the first occurrence per file — its best (lowest-
+ * distance) row, since rows arrive in ascending distance. */
+int pgvec_code_search_paths(const char *project, const float *vec, int dim, int limit, char *paths,
+                            int path_cap, double *scores, int max)
+{
+   if (!vec || dim <= 0 || !paths || path_cap <= 0 || !scores || max <= 0)
+      return -1;
+   void *pg = db2_conn();
+   if (!pg)
+      return -1;
+
+   char *vec_text = build_vec_text(vec, dim);
+   if (!vec_text)
+      return -1;
+
+   const char *sql;
+   if (project && *project)
+      sql = "SELECT file_path, 1.0 - (embedding <=> :qvec::halfvec) AS score"
+            " FROM code_embeddings"
+            " WHERE project = :project AND file_path <> ''"
+            " ORDER BY embedding <=> :qvec::halfvec LIMIT :lim";
+   else
+      sql = "SELECT file_path, 1.0 - (embedding <=> :qvec::halfvec) AS score"
+            " FROM code_embeddings"
+            " WHERE file_path <> ''"
+            " ORDER BY embedding <=> :qvec::halfvec LIMIT :lim";
+
+   char errbuf[256];
+   aimee_pg_stmt_t *stmt = aimee_pg_prepare(pg, sql, errbuf, sizeof(errbuf));
+   if (!stmt)
+   {
+      free(vec_text);
+      return 0;
+   }
+   /* Over-fetch rows so the C-side dedup can fill `max` DISTINCT files (16x,
+    * capped at 1024 — the ANN ORDER BY still drives the scan). */
+   int want = limit > 0 ? limit : max;
+   int row_lim = want <= 64 ? want * 16 : 1024;
+   if (row_lim > 1024)
+      row_lim = 1024;
+   if (row_lim < want)
+      row_lim = want;
+   aimee_pg_bind_text(stmt, "qvec", vec_text);
+   if (project && *project)
+      aimee_pg_bind_text(stmt, "project", project);
+   aimee_pg_bind_int(stmt, "lim", row_lim);
+
+   int64_t t0 = monotonic_us();
+   int n = 0;
+   aimee_pg_step_t rc;
+   while ((rc = aimee_pg_step(stmt, errbuf, sizeof(errbuf))) == AIMEE_PG_ROW)
+   {
+      if (n >= max)
+         break;
+      const char *fp = aimee_pg_column_text(stmt, 0);
+      if (!fp || !fp[0])
+         continue; /* unfusable in file-path space */
+      int dup = 0; /* keep only the first (best-distance) row per file */
+      for (int k = 0; k < n; k++)
+         if (strcmp(paths + (size_t)k * path_cap, fp) == 0)
+         {
+            dup = 1;
+            break;
+         }
+      if (dup)
+         continue;
+      snprintf(paths + (size_t)n * path_cap, (size_t)path_cap, "%s", fp);
+      scores[n] = aimee_pg_column_double(stmt, 1);
+      n++;
+   }
+   aimee_pg_finalize(stmt);
+   free(vec_text);
+   record_latency(monotonic_us() - t0);
+   return (rc == AIMEE_PG_ERR) ? -1 : n;
+}
+
+int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, int anchor_cap,
+                             char *a_keys, char *b_keys, int key_cap, double *cosines, int max)
+{
+   if (!project || !*project || !a_keys || !b_keys || key_cap <= 0 || !cosines || max <= 0)
+      return -1;
+   if (k <= 0)
+      k = 5;
+   if (anchor_cap <= 0)
+      anchor_cap = 5000;
+   void *pg = db2_conn();
+   if (!pg)
+      return -1;
+
+   /* For each file-node embedding, its top-k nearest OTHER embeddings (the lateral
+    * rides the HNSW index per anchor row), cosine-floored, ordered closest first.
+    * Pairs are deduped to a canonical (a<b) form in C rather than in SQL: kNN is
+    * asymmetric (b can be in a's neighborhood without a being in b's), so filtering
+    * `ak < bk` in SQL would silently drop one-directional pairs.
+    * The anchor relation is bounded by :acap so worst-case work is O(acap*k) HNSW
+    * probes regardless of project size — the final LIMIT can't push into the outer
+    * scan (the ORDER BY cosine is global), so without the bound an N-file project
+    * would fan out into N probes. */
+   const char *sql = "SELECT ak, bk, cosine FROM ("
+                     "  SELECT a.node_key AS ak, b.node_key AS bk,"
+                     "         1.0 - (a.embedding <=> b.embedding) AS cosine"
+                     "  FROM (SELECT node_key, embedding, point_id, project FROM code_embeddings"
+                     "        WHERE project = :project AND node_key <> '' LIMIT :acap) a"
+                     "  CROSS JOIN LATERAL ("
+                     "     SELECT x.node_key, x.embedding FROM code_embeddings x"
+                     "     WHERE x.project = a.project AND x.point_id <> a.point_id"
+                     "       AND x.node_key <> ''"
+                     "     ORDER BY x.embedding <=> a.embedding LIMIT :k"
+                     "  ) b"
+                     ") p WHERE cosine >= :minc ORDER BY cosine DESC LIMIT :lim";
+
+   char errbuf[256];
+   aimee_pg_stmt_t *stmt = aimee_pg_prepare(pg, sql, errbuf, sizeof(errbuf));
+   if (!stmt)
+      return 0;
+   /* Over-fetch: an unordered pair can surface from both endpoints, so the raw row
+    * set is up to ~2x the distinct pairs; 8x (capped) lets the C dedup fill `max`. */
+   int row_lim = max <= 1024 ? max * 8 : max * 2;
+   if (row_lim > 8192)
+      row_lim = 8192;
+   if (row_lim < max)
+      row_lim = max;
+   aimee_pg_bind_int(stmt, "k", k);
+   aimee_pg_bind_text(stmt, "project", project);
+   aimee_pg_bind_double(stmt, "minc", min_cosine);
+   aimee_pg_bind_int(stmt, "acap", anchor_cap);
+   aimee_pg_bind_int(stmt, "lim", row_lim);
+
+   int64_t t0 = monotonic_us();
+   int n = 0;
+   aimee_pg_step_t rc;
+   while ((rc = aimee_pg_step(stmt, errbuf, sizeof(errbuf))) == AIMEE_PG_ROW)
+   {
+      if (n >= max)
+         break;
+      const char *ak = aimee_pg_column_text(stmt, 0);
+      const char *bk = aimee_pg_column_text(stmt, 1);
+      if (!ak || !ak[0] || !bk || !bk[0] || strcmp(ak, bk) == 0)
+         continue; /* skip blanks + self-pairs */
+      /* canonical order so {a,b} and {b,a} collapse to one slot */
+      const char *lo = strcmp(ak, bk) < 0 ? ak : bk;
+      const char *hi = strcmp(ak, bk) < 0 ? bk : ak;
+      int dup = 0;
+      for (int j = 0; j < n; j++)
+         if (strcmp(a_keys + (size_t)j * key_cap, lo) == 0 &&
+             strcmp(b_keys + (size_t)j * key_cap, hi) == 0)
+         {
+            dup = 1;
+            break;
+         }
+      if (dup)
+         continue; /* rows arrive cosine-desc, so the first hit already has the best cosine */
+      snprintf(a_keys + (size_t)n * key_cap, (size_t)key_cap, "%s", lo);
+      snprintf(b_keys + (size_t)n * key_cap, (size_t)key_cap, "%s", hi);
+      cosines[n] = aimee_pg_column_double(stmt, 2);
+      n++;
+   }
+   aimee_pg_finalize(stmt);
+   record_latency(monotonic_us() - t0);
+   return (rc == AIMEE_PG_ERR) ? -1 : n;
+}
+
+int pgvec_code_node_path(const char *project, const char *node_key, char *out, int out_cap)
+{
+   if (!project || !*project || !node_key || !*node_key || !out || out_cap <= 0)
+      return -1;
+   out[0] = '\0';
+   void *pg = db2_conn();
+   if (!pg)
+      return -1;
+   const char *sql = "SELECT file_path FROM code_embeddings"
+                     " WHERE project = :project AND node_key = :node_key AND file_path <> ''"
+                     " LIMIT 1";
+   char errbuf[256];
+   aimee_pg_stmt_t *stmt = aimee_pg_prepare(pg, sql, errbuf, sizeof(errbuf));
+   if (!stmt)
+      return -1;
+   aimee_pg_bind_text(stmt, "project", project);
+   aimee_pg_bind_text(stmt, "node_key", node_key);
+   int found = 0;
+   if (aimee_pg_step(stmt, errbuf, sizeof(errbuf)) == AIMEE_PG_ROW)
+   {
+      const char *fp = aimee_pg_column_text(stmt, 0);
+      if (fp && fp[0])
+      {
+         snprintf(out, (size_t)out_cap, "%s", fp);
+         found = 1;
+      }
+   }
+   aimee_pg_finalize(stmt);
+   return found ? 0 : -1;
+}
+
 int pgvec_code_exists_by_hash(const char *project, const char *node_key, const char *content_hash,
                               const char *body_hash)
 {

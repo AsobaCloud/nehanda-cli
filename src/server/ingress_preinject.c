@@ -8,6 +8,8 @@
 #include "config.h"
 #include "kb_client.h"
 #include "dstr.h"
+#include "log.h"
+#include "request_context.h"
 #include "platform_random.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -286,6 +288,17 @@ static char *format_code_body(const code_search_hit_t *hit)
    return dstr_steal(&d);
 }
 
+/* Folded (lossy) body for a code hit (ingress-compression P1b): the snippet is
+ * dropped in favour of a compact `file:line` reference the model recovers in full
+ * via the code_span_get resolver named in the envelope's explore-with line. */
+static char *format_code_fold(const code_search_hit_t *hit)
+{
+   dstr_t d;
+   dstr_init(&d);
+   dstr_appendf(&d, "  - %s:%d\n", hit->file_path, hit->line);
+   return dstr_steal(&d);
+}
+
 /* Per-record body for a memory preview (no group header). Returns NULL for an
  * empty row (id <= 0) — the old NULL candidate, which produced no output and was
  * not counted. Bumps *headline_missing when the row carries no headline. */
@@ -429,12 +442,29 @@ char *ingress_preinject_build(const char *query, int request_disabled)
    size_t envelope_budget = (size_t)configured_budget;
    if (envelope_budget <= INGRESS_FOOTER_RESERVE_BYTES)
       return NULL;
+   /* P1b lossy code fold (ingress-compression §1.2/§1.3): when enabled, a code
+    * hit's snippet is replaced by a compact `file:line` reference recovered via
+    * code_span_get. Gated by config and a per-request X-Aimee-Compress:0 opt-out
+    * (request context, §1.4/B1 — never a thread-local, never forced on). Folding
+    * a hit additionally requires a known matched line (PR1b enrichment) and a
+    * snippet long enough to be worth folding — so it is fail-closed: no line ->
+    * keep the snippet. */
+   int compress = cfg.ingress_compress_enabled;
+   const request_context_t *rctx = request_context_get();
+   if (rctx && rctx->compress_disabled)
+      compress = 0;
+   int compress_min = cfg.ingress_compress_min_chars > 0 ? cfg.ingress_compress_min_chars : 80;
+   const char *code_header =
+       compress ? "recommended (code — expand via code_span_get):\n" : "recommended (code):\n";
+
    /* P0 Envelope IR: gather each source into a typed entry, then render the block
     * from the list. CAP = 6 code + 5 memory + 1 facts + 1 audit. */
    ingress_entry_t entries[6 + 5 + 1 + 1];
    int k = 0;
    double score = 0.0;
    int headline_missing_count = 0;
+   int folded_count = 0;
+   long folded_saved = 0;
 
    /* Primary signal: code search over the turn query. The code index is the
     * richest source, so recommended code files lead the envelope; the agent
@@ -447,10 +477,18 @@ char *ingress_preinject_build(const char *query, int request_disabled)
                       : 0;
    for (int i = 0; i < n; i++)
    {
+      int fold = compress && hits[i].line > 0 && (int)strlen(hits[i].snippet) > compress_min;
       entries[k].kind = ING_SRC_CODE;
-      entries[k].transform = ING_XF_NONE;
-      entries[k].header = "recommended (code):\n";
-      entries[k].preview = format_code_body(&hits[i]);
+      entries[k].transform = fold ? ING_XF_CODE_SIGNATURE_SPAN : ING_XF_NONE;
+      entries[k].header = code_header;
+      entries[k].preview = fold ? format_code_fold(&hits[i]) : format_code_body(&hits[i]);
+      if (fold)
+      {
+         folded_count++;
+         /* Resident saving estimate: the snippet bytes the fold dropped (the
+          * preview text the unfolded body would have carried), for §6 telemetry. */
+         folded_saved += (long)strlen(hits[i].snippet);
+      }
       k++;
    }
    if (n > 0)
@@ -591,6 +629,13 @@ char *ingress_preinject_build(const char *query, int request_disabled)
    for (int i = 0; i < k; i++)
       free(entries[i].preview);
 
+   /* §6 telemetry: attribute the fold's resident saving per turn (only when the
+    * compression lever is engaged). The bench reads this to compute net token
+    * economics; here it is an observable, non-dead record of what was folded. */
+   if (compress && folded_count > 0)
+      LOG_DEBUG("ingress-compress", "folded %d code %s, dropped ~%ld snippet bytes", folded_count,
+                folded_count == 1 ? "hit" : "hits", folded_saved);
+
    if (!blk || !blk[0])
    {
       free(blk);
@@ -603,6 +648,16 @@ char *ingress_preinject_build(const char *query, int request_disabled)
 
 char *ingress_preinject_apply(const char *instructions, const char *envelope)
 {
+   /* Cache-prefix placement (§2): when the lever is on, place the volatile
+    * envelope AFTER the stable instructions prefix (append) instead of before
+    * (prepend), so the provider's automatic prefix cache survives the per-turn
+    * envelope. The choice lives here — not in the caller — so the gateway stage
+    * stays config-free and every consumer links unchanged. Default off => prepend
+    * (byte-identical to before). */
+   config_t cfg;
+   if (config_load(&cfg) == 0 && cfg.ingress_cache_placement_enabled)
+      return ingress_preinject_append(instructions, envelope);
+
    int env_blank = 1;
    if (envelope)
       for (const char *p = envelope; *p; p++)
@@ -621,5 +676,34 @@ char *ingress_preinject_apply(const char *instructions, const char *envelope)
    dstr_append_str(&d, "\n\n");
    if (instructions && instructions[0])
       dstr_append_str(&d, instructions);
+   return dstr_steal(&d);
+}
+
+char *ingress_preinject_append(const char *instructions, const char *envelope)
+{
+   int env_blank = 1;
+   if (envelope)
+      for (const char *p = envelope; *p; p++)
+         if (*p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
+         {
+            env_blank = 0;
+            break;
+         }
+
+   if (env_blank)
+      return instructions ? strdup(instructions) : NULL;
+
+   /* Cache-prefix placement (§2): the stable instructions prefix stays at the
+    * front and the volatile <aimee-context> envelope lands at the tail, so the
+    * provider's automatic prefix cache (OpenAI/Codex) is not invalidated by the
+    * per-turn envelope. Mirror of ingress_preinject_apply with the order flipped. */
+   dstr_t d;
+   dstr_init(&d);
+   if (instructions && instructions[0])
+   {
+      dstr_append_str(&d, instructions);
+      dstr_append_str(&d, "\n\n");
+   }
+   dstr_append_str(&d, envelope);
    return dstr_steal(&d);
 }

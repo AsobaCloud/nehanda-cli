@@ -508,6 +508,8 @@ static void config_set_defaults(config_t *cfg)
    cfg->integrity_dry_run = 1;
    cfg->ingress_preinject_assembly_budget = 6144;
    cfg->ingress_max_raw_scans = 0;
+   cfg->code_span_max_lines = 400;
+   cfg->ingress_compress_min_chars = 80;
    cfg->require_session_worktree = 0;
    /* Default-on as of the virtual-context rollout: the long-session benchmark
     * gate (make virtual-context-eval-check) passes on synthetic and real
@@ -539,10 +541,16 @@ static void config_set_defaults(config_t *cfg)
    cfg->guardrails_semantic_prompt_threshold = 0.70;
    cfg->guardrails_semantic_block_threshold = 0.90;
    cfg->guardrails_semantic_allow_ml_only_block = 0;
+   cfg->guardrails_blast_radius_advisory_enabled = 0;
    cfg->kb_api_http_port = 0;
    cfg->kb_api_bearer_token[0] = '\0';
    cfg->kb_worker_count = CONFIG_DEFAULT_KB_WORKER_THREADS;
    cfg->kb_connection_workers = 2;
+   cfg->code_hybrid_weight_code = 1.0;
+   cfg->code_hybrid_weight_graph = 1.0;
+   cfg->code_hybrid_weight_vector = 1.0;
+   cfg->code_hybrid_weight_memory = 1.0;
+   cfg->code_hybrid_rrf_k = 60.0; /* KB_RRF_DEFAULT_K */
    cfg->kb_bg_ingest_enabled = 1;
    cfg->kb_bg_ingest_interval_hours = 6;
 #ifdef __linux__
@@ -560,6 +568,7 @@ static void config_set_defaults(config_t *cfg)
    cfg->kb_maintenance_orphan_days = 90;
    cfg->kb_mining_enabled = 1;
    cfg->kb_mining_min_poll_s = 300;
+   cfg->kb_mining_failure_learning_enabled = 0;
    cfg->review_scheduler_enabled = 0;
    cfg->review_idle_trigger_minutes = 30;
    cfg->review_session_cooldown_hours = 24;
@@ -831,6 +840,10 @@ int config_load(config_t *cfg)
    if (cJSON_IsBool(item))
       cfg->claude_cli_delegate_enabled = cJSON_IsTrue(item);
 
+   item = cJSON_GetObjectItemCaseSensitive(root, "delegate_graph_context_enabled");
+   if (cJSON_IsBool(item))
+      cfg->delegate_graph_context_enabled = cJSON_IsTrue(item);
+
    item = cJSON_GetObjectItemCaseSensitive(root, "verify_cross_project");
    if (cJSON_IsBool(item))
       cfg->verify_cross_project = cJSON_IsTrue(item);
@@ -838,6 +851,22 @@ int config_load(config_t *cfg)
    item = cJSON_GetObjectItemCaseSensitive(root, "ingress_preinject_enabled");
    if (cJSON_IsBool(item))
       cfg->ingress_preinject_enabled = cJSON_IsTrue(item);
+
+   item = cJSON_GetObjectItemCaseSensitive(root, "ingress_preinject_anthropic_enabled");
+   if (cJSON_IsBool(item))
+      cfg->ingress_preinject_anthropic_enabled = cJSON_IsTrue(item);
+
+   item = cJSON_GetObjectItemCaseSensitive(root, "ingress_compress_enabled");
+   if (cJSON_IsBool(item))
+      cfg->ingress_compress_enabled = cJSON_IsTrue(item);
+
+   item = cJSON_GetObjectItemCaseSensitive(root, "ingress_cache_placement_enabled");
+   if (cJSON_IsBool(item))
+      cfg->ingress_cache_placement_enabled = cJSON_IsTrue(item);
+
+   item = cJSON_GetObjectItemCaseSensitive(root, "ingress_compress_min_chars");
+   if (cJSON_IsNumber(item) && item->valuedouble > 0)
+      cfg->ingress_compress_min_chars = (int)item->valuedouble;
 
    item = cJSON_GetObjectItemCaseSensitive(root, "gateway_prevent_subagents");
    if (cJSON_IsBool(item))
@@ -865,6 +894,10 @@ int config_load(config_t *cfg)
    item = cJSON_GetObjectItemCaseSensitive(root, "ingress_max_raw_scans");
    if (cJSON_IsNumber(item) && item->valuedouble >= 0)
       cfg->ingress_max_raw_scans = (int)item->valuedouble;
+
+   item = cJSON_GetObjectItemCaseSensitive(root, "code_span_max_lines");
+   if (cJSON_IsNumber(item) && item->valuedouble > 0)
+      cfg->code_span_max_lines = (int)item->valuedouble;
 
    item = cJSON_GetObjectItemCaseSensitive(root, "require_session_worktree");
    if (cJSON_IsBool(item))

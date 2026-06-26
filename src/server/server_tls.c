@@ -48,6 +48,39 @@ static int mtls_verify_cb(int preverify_ok, X509_STORE_CTX *ctx)
    return 1;
 }
 
+/* ALPN selection: aimee's /v1 server speaks HTTP/1.1 only (hand-rolled HTTP/1.1
+ * server — see server_http.c). Advertise that explicitly so ALPN-strict clients
+ * settle on HTTP/1.1 instead of attempting HTTP/2 on an un-negotiated channel.
+ * The Codex CLI's model client (reqwest/hyper) does exactly this: without a
+ * negotiated ALPN it tries HTTP/2 and the request fails before reaching the
+ * server; offered "http/1.1" it uses HTTP/1.1 and connects. We never advertise
+ * "h2" (we cannot speak it).
+ *
+ * On no overlap we deliberately return NOACK, not a fatal no_application_protocol
+ * alert (RFC 7301 §3.2). NOACK makes OpenSSL omit the ALPN extension from the
+ * ServerHello, which is wire-identical to this server's prior no-ALPN behaviour —
+ * an h2-only or legacy no-ALPN client (e.g. the aimee thin client) keeps the
+ * exact handshake it had before. A fatal alert would instead *regress* those
+ * clients into a hard handshake failure, so backward-compatibility wins here.
+ *
+ * SSL_select_next_proto is the canonical ALPN-selection helper (see the example
+ * in SSL_CTX_set_alpn_select_cb(3)); the (unsigned char **) cast is mandated by
+ * its signature. Requires OpenSSL >= 1.0.2 — far below the 1.1.0+ floor this
+ * file already assumes via SSL_CTX_set_min_proto_version. */
+static int alpn_select_cb(SSL *ssl, const unsigned char **out, unsigned char *outlen,
+                          const unsigned char *in, unsigned int inlen, void *arg)
+{
+   (void)ssl;
+   (void)arg;
+   /* ALPN protocol list = length-prefixed wire form; the leading 8 is the byte
+    * length of "http/1.1" and must track the literal. */
+   static const unsigned char http11[] = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+   if (SSL_select_next_proto((unsigned char **)out, outlen, http11, sizeof(http11), in, inlen) !=
+       OPENSSL_NPN_NEGOTIATED)
+      return SSL_TLSEXT_ERR_NOACK; /* client didn't offer http/1.1 -> leave ALPN unset */
+   return SSL_TLSEXT_ERR_OK;
+}
+
 int server_tls_init(const char *cert_path, const char *key_path, int mtls_mode,
                     const char *client_ca_path)
 {
@@ -69,6 +102,9 @@ int server_tls_init(const char *cert_path, const char *key_path, int mtls_mode,
    /* Modern floor; no client-cert verification (plain server TLS — the bearer is
     * the caller's authentication, the TLS is the channel). */
    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+   /* Advertise HTTP/1.1 over ALPN so ALPN-strict clients (e.g. Codex) don't
+    * fall back to HTTP/2 on this HTTP/1.1-only server. */
+   SSL_CTX_set_alpn_select_cb(ctx, alpn_select_cb, NULL);
    /* The private key authenticates the server; warn loudly if it is readable by
     * group/other (defense-in-depth — the operator should 0600 it). */
    struct stat kst;
