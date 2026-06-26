@@ -10,6 +10,7 @@
 #ifdef AIMEE_POSIX
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -304,16 +305,20 @@ int code_index_install_branch_hook(const char *project_root, const char *project
    if (!project_root || !project_root[0] || !project_name || !project_name[0])
       return -1;
 
-   char gitdir[MAX_PATH_LEN];
-   if (git_capture_line(project_root, "rev-parse --git-common-dir", gitdir, sizeof(gitdir)) != 0 ||
-       !gitdir[0])
+   /* `--git-path hooks` resolves the ACTUAL hooks dir — honoring core.hooksPath and
+    * worktree/submodule layouts — unlike a hand-built `<git-dir>/hooks`, so the hook we
+    * install is the one git actually runs. */
+   char hooks_rel[MAX_PATH_LEN];
+   if (git_capture_line(project_root, "rev-parse --git-path hooks", hooks_rel, sizeof(hooks_rel)) !=
+           0 ||
+       !hooks_rel[0])
       return -1;
 
    char hooks_dir[MAX_PATH_LEN];
-   if (gitdir[0] == '/')
-      snprintf(hooks_dir, sizeof(hooks_dir), "%s/hooks", gitdir);
+   if (hooks_rel[0] == '/')
+      snprintf(hooks_dir, sizeof(hooks_dir), "%s", hooks_rel);
    else
-      snprintf(hooks_dir, sizeof(hooks_dir), "%s/%s/hooks", project_root, gitdir);
+      snprintf(hooks_dir, sizeof(hooks_dir), "%s/%s", project_root, hooks_rel);
    if (mkdir(hooks_dir, 0755) != 0 && errno != EEXIST)
       return -1;
 
@@ -345,9 +350,17 @@ int code_index_install_branch_hook(const char *project_root, const char *project
        shquote(project_root, qroot, sizeof(qroot)) != 0)
       return -1;
 
-   FILE *f = fopen(hook_path, "w");
-   if (!f)
+   /* O_NOFOLLOW: refuse to write THROUGH a symlinked post-merge (defense-in-depth
+    * against a planted symlink redirecting the write outside the repo). */
+   int fd = open(hook_path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0755);
+   if (fd < 0)
       return -1;
+   FILE *f = fdopen(fd, "w");
+   if (!f)
+   {
+      close(fd);
+      return -1;
+   }
    fprintf(f, "#!/bin/sh\n");
    fprintf(f, "# post-merge hook -- installed by aimee (live code-graph reindex)\n");
    fprintf(f, "# Re-index this project after a merge/pull advances the default branch; the\n");
