@@ -155,16 +155,27 @@ int main(void)
    want(".swift", swift, "C", "type");
    want(".swift", swift, "P", "type");
 
-   /* --- Kotlin (no name field — exercises identifier digging) --- */
-   const char *kt = "fun f(){}\nclass C{}\nobject O{}\n";
+   /* --- Kotlin (no name field — the name is the first DIRECT identifier child, which
+    * must survive a leading annotation/modifier, a type-parameter list, or an extension
+    * receiver that themselves contain identifiers). --- */
+   const char *kt = "fun f(){}\nclass C{}\nobject O{}\n"
+                    "@Entity class User {}\n"    /* annotation precedes the name */
+                    "@Test fun shouldWork(){}\n" /* annotation precedes the name */
+                    "fun <T> identity(x: T){}\n" /* type params precede the name */
+                    "fun String.shout(){}\n";    /* receiver precedes the name */
    want(".kt", kt, "f", "function");
    want(".kt", kt, "C", "type");
    want(".kt", kt, "O", "type");
+   want(".kt", kt, "User", "type");
+   want(".kt", kt, "shouldWork", "function");
+   want(".kt", kt, "identity", "function");
+   want(".kt", kt, "shout", "function");
 
-   /* --- Dart --- */
-   const char *dart = "void f(){}\nclass C{}\nenum E{a}\n";
+   /* --- Dart (annotated mixin: name survives the leading annotation) --- */
+   const char *dart = "void f(){}\nclass C{}\nenum E{a}\n@sealed mixin Foo {}\n";
    want(".dart", dart, "f", "function");
    want(".dart", dart, "C", "type");
+   want(".dart", dart, "Foo", "type");
 
    /* --- CSS (@keyframes name) --- */
    want(".css", "@keyframes spin { from {} to {} }\n.cls { color: red }\n", "spin", "type");
