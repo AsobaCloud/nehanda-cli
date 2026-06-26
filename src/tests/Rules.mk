@@ -383,6 +383,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-curator-serve \
                $(TESTPREFIX)/unit-test-curator-pipeline \
                $(TESTPREFIX)/unit-test-curator-judge \
+               $(TESTPREFIX)/unit-test-kb-surprising-judge \
                $(TESTPREFIX)/unit-test-curator-synthesize \
                $(TESTPREFIX)/unit-test-curator-promote \
                $(TESTPREFIX)/unit-test-db1-write-retry \
@@ -2075,6 +2076,20 @@ $(TESTPREFIX)/unit-test-curator-link-artifacts: \
 $(TESTPREFIX)/unit-test-curator-judge: \
                                        $(OBJDIR)/tests/test_curator_judge.o \
                                        $(OBJDIR)/kb/kb_curator_judge.o \
+                                       $(OBJDIR)/kb/kb_curator_sidecar.o \
+                                       $(OBJDIR)/kb/kb_curator_llm.o \
+                                       $(OBJDIR)/kb_curator_provider.o \
+                                       $(OBJDIR)/provider_client.o \
+                                       $(OBJDIR)/tests/support/mock_agent_http.o \
+                                       $(OBJDIR)/cJSON.o \
+                                       $(PLATFORM_BASIC_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+# §4 surprising-links judge: real request-build + verdict-parse; DB accessors stubbed
+# in the test, the LLM faked via the curator sidecar seam (cfg=NULL + printf judge_cmd).
+$(TESTPREFIX)/unit-test-kb-surprising-judge: \
+                                       $(OBJDIR)/tests/test_kb_surprising_judge.o \
+                                       $(OBJDIR)/kb/kb_surprising_judge.o \
                                        $(OBJDIR)/kb/kb_curator_sidecar.o \
                                        $(OBJDIR)/kb/kb_curator_llm.o \
                                        $(OBJDIR)/kb_curator_provider.o \
