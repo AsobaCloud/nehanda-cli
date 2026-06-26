@@ -734,6 +734,11 @@ int code_default_branch_changed(const char *stored_sha, const char *current_sha)
       return 1;
    return strcmp(stored_sha, current_sha) != 0;
 }
+static int g_worktree_mode = 0; /* drives the SHA-gate bypass under the worktree opt-in */
+int code_index_source_is_worktree(void)
+{
+   return g_worktree_mode;
+}
 
 /* Unchanged default branch (stored SHA == current) + !force -> skip the re-walk. */
 static void test_code_scan_skips_unchanged_branch(void)
@@ -769,6 +774,25 @@ static void test_code_scan_runs_on_branch_move(void)
    assert(s == 200);
    assert(strstr(buf, "\"skipped\":false") != NULL);
    assert(strcmp(g_runtime_state_set_val, "tree-bbb") == 0); /* persisted for next time */
+}
+
+/* Under the worktree opt-in the branch-SHA gate is bypassed: even an unchanged
+ * default-branch SHA must NOT skip, because the index tracks the working tree. */
+static void test_code_scan_worktree_ignores_sha(void)
+{
+   char buf[512];
+   g_db_initialized = 1;
+   g_code_scan_rc = 5;
+   g_worktree_mode = 1;
+   snprintf(g_branch_sha, sizeof(g_branch_sha), "tree-aaa");
+   snprintf(g_stored_sha, sizeof(g_stored_sha), "tree-aaa"); /* would skip in default mode */
+   const char *body = "{\"project\":\"proj-alpha\",\"root_path\":\"/tmp/repo\"}";
+   int s = kb_http_route_ex("POST", "/v1/code/scan", NULL, NULL, NULL, body, (int)strlen(body), buf,
+                            sizeof(buf));
+   g_worktree_mode = 0;
+   g_branch_sha[0] = '\0';
+   assert(s == 200);
+   assert(strstr(buf, "\"skipped\":false") != NULL); /* worktree mode never skips */
 }
 
 static void test_code_scan_ok(void)
