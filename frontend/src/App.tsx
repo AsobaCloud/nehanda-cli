@@ -6,6 +6,7 @@ import Chat from './pages/Chat';
 import Dashboard from './pages/Dashboard';
 import Workflows from './pages/Workflows';
 import Projects from './pages/Projects';
+import Graph from './pages/Graph';
 import Editor from './pages/Editor';
 import { SessionProvider, useSessions } from './SessionContext';
 import SettingsPanel from './components/SettingsPanel';
@@ -63,6 +64,7 @@ const NAV_ITEMS: Tab[] = [
   { label: 'Dashboard', icon: '📊', route: '/dashboard' },
   { label: 'Workflows', icon: '🔀', route: '/workflows' },
   { label: 'Projects', icon: '📁', route: '/projects' },
+  { label: 'Graph', icon: '🕸️', route: '/graph' },
   { label: 'Editor', icon: '🖥️', route: '/editor' },
 ];
 
@@ -232,6 +234,7 @@ export default function App() {
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/workflows" element={<Workflows />} />
                 <Route path="/projects" element={<Projects />} />
+                <Route path="/graph" element={<Graph />} />
                 <Route path="/editor" element={<Editor />} />
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Routes>

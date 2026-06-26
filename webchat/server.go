@@ -123,6 +123,9 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/dashboard", s.requireAuth(s.handleSPA))
 	mux.HandleFunc("/workflows", s.requireAuth(s.handleSPA))
 	mux.HandleFunc("/projects", s.requireAuth(s.handleSPA))
+	// Code-graph visualization (§8): a read-only SPA page backed by the /api/graph/*
+	// proxies (which forward aimee-server's index_graph_* MCP tools).
+	mux.HandleFunc("/graph", s.requireAuth(s.handleSPA))
 	// The Editor tab is a SPA page that embeds the in-app VSCode in an iframe, so
 	// the nav shell stays visible. The iframe's src is the /vscode proxy below.
 	mux.HandleFunc("/editor", s.requireAuth(s.handleSPA))
@@ -167,6 +170,11 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 
 	// Aggregate dashboard endpoint — all panels in one server round-trip
 	mux.HandleFunc("/api/dashboard", s.requireAuth(s.handleDashboardAll))
+
+	// Code-graph visualization (§8): read-only views via aimee-server's index_graph_* MCP tools.
+	mux.HandleFunc("/api/graph/hubs", s.requireAuth(s.handleGraphHubs))
+	mux.HandleFunc("/api/graph/surprising", s.requireAuth(s.handleGraphSurprising))
+	mux.HandleFunc("/api/graph/neighbors", s.requireAuth(s.handleGraphNeighbors))
 
 	// Workflow visual composer (W7): proxy to aimee-server /v1/workflow/*.
 	mux.HandleFunc("/api/workflow/blocks", s.requireAuth(s.handleWorkflowBlocks))
