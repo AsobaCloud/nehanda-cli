@@ -317,7 +317,20 @@ static void test_install_branch_hook(void)
    assert(strstr(body, "&")); /* backgrounded */
    free(body);
 
-   /* idempotent: re-installing our own hook succeeds. */
+   /* post-checkout is installed too, gated so only a branch switch ($3 == 1) reindexes. */
+   char co[2048];
+   snprintf(co, sizeof(co), "%s/.git/hooks/post-checkout", g_root);
+   struct stat cst;
+   assert(stat(co, &cst) == 0);
+   assert(cst.st_mode & S_IXUSR);
+   char *cbody = read_file(co);
+   assert(cbody);
+   assert(strstr(cbody, "installed by aimee"));
+   assert(strstr(cbody, "aimee index scan 'proj-alpha'"));
+   assert(strstr(cbody, "\"$3\" = \"1\"")); /* branch-switch gate */
+   free(cbody);
+
+   /* idempotent: re-installing our own hooks succeeds. */
    assert(code_index_install_branch_hook(g_root, "proj-alpha") == 0);
 
    /* a foreign hook is not clobbered (-2). */

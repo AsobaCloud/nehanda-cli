@@ -274,16 +274,21 @@ embedder — integration/deploy-tier) as a third fused signal.
   `kb_runtime_state`; unchanged + non-`force` → `{"skipped":true}` (`unit-test-code-collect`
   exercises the SHA-tracks-commits + gate logic against real git repos).
 
-  **Status — post-merge hook shipped.** `code_index_install_branch_hook` writes a
-  marker-guarded `post-merge` git hook (mirroring `verify_install_git_hook`; won't
-  clobber a foreign hook) that backgrounds `aimee index scan <project> <root>`, so a
-  pull/merge advancing the default branch re-indexes the graph — and the SHA gate above
-  makes that a cheap no-op when nothing moved. Opt-in via `/v1/code/scan
-  {install_hook:true}` (so `workspace add` can enable live reindex); best-effort, never
-  failing the scan. Tested against real git repos (`test_install_branch_hook`) + the
-  route (`test_code_scan_installs_hook`). §6 live is now end-to-end: **detect** (SHA
-  gate) → **fire** (hook) → **rebuild** (§1 drain). A fanotify/inotify watch for
-  non-git or always-on freshness remains an optional follow-up.
+  **Status — post-merge + post-checkout hooks shipped.** `code_index_install_branch_hook`
+  writes marker-guarded `post-merge` **and** `post-checkout` git hooks (mirroring
+  `verify_install_git_hook`; won't clobber a foreign hook, O_NOFOLLOW) that background
+  `aimee index scan <project> <root>`, so a pull/merge **or branch switch** advancing the
+  default branch re-indexes the graph — and the SHA gate above makes that a cheap no-op
+  when nothing moved (the post-checkout hook reindexes only on a branch switch, `$3==1`,
+  not a per-file checkout). Two entry points: the server-side `/v1/code/scan
+  {install_hook:true}` (so `workspace add` can enable live reindex), and the client-side
+  `aimee index watch <name> <root>` — a local command, the correct path when the repo
+  lives on the client (a remote server can't write the client's `.git/hooks`). Best-effort,
+  never failing the scan. Tested against real git repos (`test_install_branch_hook`
+  asserts both hooks + the branch-switch gate) + the route (`test_code_scan_installs_hook`).
+  §6 live is now end-to-end: **detect** (SHA gate) → **fire** (hook) → **rebuild** (§1
+  drain). A fanotify/inotify watch for non-git or always-on freshness remains an optional
+  follow-up.
 - **Fuse the graph with conversation memory + the decision log** so the "why" behind
   a symbol is the *actual recorded reasoning*, not just parsed comments — queryable
   via §5. This is the thing a regenerated artifact can never hold.
