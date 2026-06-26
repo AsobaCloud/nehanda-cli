@@ -130,15 +130,19 @@ static void node_text(TSNode node, const char *src, char *out, int cap)
    out[n] = '\0';
 }
 
-/* Pre-order DFS for the first descendant whose type is one of the identifier kinds —
- * used to dig a name out of a subtree (e.g. the function name under a declarator, or a
- * Kotlin definition that exposes no `name` field). */
+static int is_identifier_type(const char *t)
+{
+   return strcmp(t, "identifier") == 0 || strcmp(t, "type_identifier") == 0 ||
+          strcmp(t, "field_identifier") == 0 || strcmp(t, "simple_identifier") == 0 ||
+          strcmp(t, "constant") == 0 || strcmp(t, "name") == 0;
+}
+
+/* Pre-order DFS for the first descendant whose type is one of the identifier kinds — used
+ * to dig a name out of a C/C++ declarator (where the name nests under pointer/array/
+ * function declarators). Recurses, so it must only be given the declarator subtree. */
 static int first_identifier(TSNode node, TSNode *out)
 {
-   const char *t = ts_node_type(node);
-   if (strcmp(t, "identifier") == 0 || strcmp(t, "type_identifier") == 0 ||
-       strcmp(t, "field_identifier") == 0 || strcmp(t, "simple_identifier") == 0 ||
-       strcmp(t, "constant") == 0 || strcmp(t, "name") == 0)
+   if (is_identifier_type(ts_node_type(node)))
    {
       *out = node;
       return 1;
@@ -150,15 +154,33 @@ static int first_identifier(TSNode node, TSNode *out)
    return 0;
 }
 
-/* The name node for a definition: its `name` field if it has one, else the first
- * identifier-like descendant. Returns a possibly-null node (caller re-checks). */
+/* The first DIRECT identifier-like child. The name of a definition is always a direct
+ * child (the deeper recursion of first_identifier would wrongly pick up identifiers
+ * inside a preceding modifier/annotation, type-parameter list, or extension receiver). */
+static int direct_identifier(TSNode node, TSNode *out)
+{
+   uint32_t n = ts_node_named_child_count(node);
+   for (uint32_t i = 0; i < n; i++)
+   {
+      TSNode c = ts_node_named_child(node, i);
+      if (is_identifier_type(ts_node_type(c)))
+      {
+         *out = c;
+         return 1;
+      }
+   }
+   return 0;
+}
+
+/* The name node for a definition: its `name` field if it has one, else the first direct
+ * identifier-like child. Returns a possibly-null node (caller re-checks). */
 static TSNode name_node(TSNode node)
 {
    TSNode nm = ts_node_child_by_field_name(node, "name", 4);
    if (!ts_node_is_null(nm))
       return nm;
    TSNode id;
-   if (first_identifier(node, &id))
+   if (direct_identifier(node, &id))
       return id;
    return nm; /* null */
 }
