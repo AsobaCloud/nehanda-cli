@@ -19,7 +19,7 @@ credentials live in the server's **sealed vault**; see
   (the turn's attested principal, falling back to the server principal). The
   legacy **client-held keyring and the RAM per-session push (`POST
   /v1/session/credentials`) are gone**. Migrate any leftover
-  `~/.config/aimee/agent-keys.json` with `aimee agent key import [--scrub]`.
+  `~/.config/aimee/agent-keys.json` with `aimee agent key import` (which scrubs the plaintext copy by default; `--keep` to retain it).
 - **Codex OAuth in the vault**: `aimee agent setup codex-oauth` runs the
   server-hosted OAuth flow and seals the token into the vault; a Codex agent then
   authenticates server-side as a primary provider or delegate, with no
