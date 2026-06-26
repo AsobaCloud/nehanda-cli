@@ -1242,6 +1242,7 @@ typedef struct config
     * A weight <= 0 disables that signal's contribution. See kb_rrf.c / §5. */
    double code_hybrid_weight_code;
    double code_hybrid_weight_graph;
+   double code_hybrid_weight_vector;
    double code_hybrid_rrf_k;
    /* embedder-runtime-fetch-autodim §2c: when 0 (default) a recorded-vs-configured
     * embedding-dim mismatch is REFUSED at startup (refuse-and-instruct). When 1, the
