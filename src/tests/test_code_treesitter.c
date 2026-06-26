@@ -77,11 +77,15 @@ int main(void)
    const char *js_src = "import x from 'y'\n"
                         "function add(a, b) { return a + b }\n"
                         "class Point { m() {} }\n"
-                        "function* gen() {}\n";
+                        "function* gen() {}\n"
+                        "export function pub() {}\n" /* export_statement unwrap */
+                        "export class Wid {}\n";     /* export_statement unwrap */
    n = code_treesitter_definitions(".js", js_src, defs, 32);
    assert(has(defs, n, "add", "function")); /* function_declaration */
    assert(has(defs, n, "Point", "type"));   /* class_declaration */
    assert(has(defs, n, "gen", "function")); /* generator_function_declaration */
+   assert(has(defs, n, "pub", "function")); /* export function */
+   assert(has(defs, n, "Wid", "type"));     /* export class */
 
    /* --- Rust (fn, struct, enum, trait) --- */
    const char *rs_src = "use std::io;\n"

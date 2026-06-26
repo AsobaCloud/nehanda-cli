@@ -203,11 +203,19 @@ static int classify_go(TSNode node, const char **kind, TSNode *name_root)
    return 0;
 }
 
-/* JavaScript: function (incl. generator) and class declarations. Arrow functions
- * bound to a const/let are not surfaced (no name field) — a follow-up. */
+/* JavaScript: function (incl. generator) and class declarations, including those behind
+ * an `export`/`export default`. Arrow functions bound to a const/let are not surfaced
+ * (no name field) — a follow-up. */
 static int classify_js(TSNode node, const char **kind, TSNode *name_root)
 {
    const char *t = ts_node_type(node);
+   if (strcmp(t, "export_statement") == 0)
+   {
+      TSNode inner = ts_node_child_by_field_name(node, "declaration", 11);
+      if (ts_node_is_null(inner))
+         return 0; /* re-export / `export const x = ...` — no named declaration */
+      return classify_js(inner, kind, name_root);
+   }
    if (strcmp(t, "function_declaration") == 0 || strcmp(t, "generator_function_declaration") == 0)
       *kind = "function";
    else if (strcmp(t, "class_declaration") == 0)
