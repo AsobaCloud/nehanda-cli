@@ -3,10 +3,10 @@
 - **State:** IN PROGRESS — §0.5/§1/§3/§4/§5/§7/§8-backend implemented (on the
   `testing` branch), including the §5 code+graph+vector hybrid, §7 graph-informed
   delegation, the §4 surprising-links route + its LLM-judge relevance gate, and the §8
-  read-only `/v1/code/graph` backend route, and the §6 cross-session memory-fusion
-  leg in `/v1/code/hybrid`; remainder (§2 tree-sitter, §6 *live* reindex hook, §8
-  webchat frontend, and the §4 precision self-suppress monitoring) still open, as
-  build-/integration-/frontend-tier work. See the
+  read-only `/v1/code/graph` backend route + the §8 webchat Graph view, and the §6
+  cross-session memory-fusion leg in `/v1/code/hybrid`; remainder (§2 tree-sitter, §6
+  *live* reindex hook, and the §4 precision self-suppress monitoring) still open, as
+  build-/integration-tier work. See the
   "Implementation status" section below.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
   built without a manual step, (b) parsed broadly, (c) ranked by **graph structure
@@ -314,8 +314,17 @@ pre-cap) and a `truncated` flag that fires when **either** the page cap (`max_re
 1–200) **or** the projection scan window (`HUBS_MAX_EDGES`) bounds the result. Reuses
 `db2_code_projection_list_edges` + `kb_graph_edge_provenance` (`handle_get_code_graph`
 in `src/kb/http/kb_http_code.c`); read-only, off the agent hot path. Shim route tests
-(`test_code_graph_node_*`: out/in neighbors, page-cap truncation, self-loop). The
-webchat **frontend** consumer remains open.
+(`test_code_graph_node_*`: out/in neighbors, page-cap truncation, self-loop).
+
+**Status — frontend shipped.** A read-only **Graph** page in the webchat SPA
+(`frontend/src/pages/Graph.tsx`): for the active session's project it ranks the hubs,
+click one to expand its callers/callees/neighbors (direction + relation + §3
+provenance), drill into any neighbor, and surface the surprising links (with optional
+LLM confirm). It is an adjacency explorer (no heavy graph lib). Backed by webchat Go
+proxies `/api/graph/{hubs,surprising,neighbors}` (`webchat/graph.go`,
+`webchat/graph_test.go`) that forward aimee-server's `index_graph_*` MCP tools (the
+per-node route was exposed as `index({command:"neighbors"})` / `index_graph_node` so
+all three are reachable from the frontend over the trusted UDS hop).
 
 ## Phasing (each independently shippable)
 
@@ -358,7 +367,10 @@ webchat **frontend** consumer remains open.
 - **§8** read-only node-projection route — `GET /v1/code/graph?project&node&max_results`
   returns a node's incident edges (relation / direction incl. `self` / structural weight /
   §3 provenance) with `match_count` + a page-or-scan `truncated` flag
-  (`handle_get_code_graph`, `test_code_graph_node_*`). Backs the webchat graph view.
+  (`handle_get_code_graph`, `test_code_graph_node_*`) — **plus the webchat Graph view**
+  (`frontend/src/pages/Graph.tsx`) that ranks hubs, drills neighbors, and shows
+  surprising links, via webchat Go proxies `/api/graph/*` (`webchat/graph.go`,
+  `webchat/graph_test.go`) over the `index_graph_*` MCP tools.
 
 **Deferred — needs the embedder / a build-tier dependency / a deployed corpus / a frontend
 (not completable in the agent host):**
@@ -370,8 +382,6 @@ webchat **frontend** consumer remains open.
   skip-when-unchanged) and the memory-fusion leg are shipped; the post-merge/fetch
   **hook install** + watch loop that *fire* the gate on a git event remain, needing a
   running KB + git events to validate.
-- **§8 webchat visualization** — the **frontend** consumer; the read-only `/v1/code/graph`
-  backend route is shipped (above).
 
 ## Non-goals
 
