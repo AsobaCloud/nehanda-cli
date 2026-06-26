@@ -1105,6 +1105,10 @@ char *kb_client_code_graph_hubs(const char *project, int max_results, int *statu
  * structurally far (project required). `judge` opts into the LLM confirmation. */
 char *kb_client_code_graph_surprising(const char *project, int max_results, int judge,
                                       int *status_out);
+/* /v1/code/graph: a node's incident projection edges (callers/callees/neighbors);
+ * project + node required. Backs the webchat graph view (§8). */
+char *kb_client_code_graph_node(const char *project, const char *node, int max_results,
+                                int *status_out);
 
 /* Counts of indexed files / definition-kind terms for one project.
  * Uses /v1 over remote HTTP or local UDS.

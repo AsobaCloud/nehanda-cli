@@ -1053,6 +1053,21 @@ static cJSON *mcph_index_graph_hubs(struct mcp_call *c)
    return code_graph_passthrough(json, status, "index_graph_hubs");
 }
 
+static cJSON *mcph_index_graph_node(struct mcp_call *c)
+{
+   cJSON *jp = cJSON_GetObjectItemCaseSensitive(c->jargs, "project");
+   cJSON *jn = cJSON_GetObjectItemCaseSensitive(c->jargs, "node");
+   if (!cJSON_IsString(jp) || !jp->valuestring[0])
+      return text_content("error: index_graph_node requires 'project'");
+   if (!cJSON_IsString(jn) || !jn->valuestring[0])
+      return text_content("error: index_graph_node requires 'node'");
+   long long mr = 0;
+   int max_results = pdf_arg_pos_int(c->jargs, "max_results", 200.0, &mr) ? (int)mr : 50;
+   int status = -1;
+   char *json = kb_client_code_graph_node(jp->valuestring, jn->valuestring, max_results, &status);
+   return code_graph_passthrough(json, status, "index_graph_node");
+}
+
 static cJSON *mcph_index_graph_surprising(struct mcp_call *c)
 {
    cJSON *jp = cJSON_GetObjectItemCaseSensitive(c->jargs, "project");
@@ -1251,6 +1266,7 @@ static const struct
     {"index_hybrid", mcph_index_hybrid},
     {"index_graph_hubs", mcph_index_graph_hubs},
     {"index_graph_surprising", mcph_index_graph_surprising},
+    {"index_graph_node", mcph_index_graph_node},
     {"memory_explain_match", mcph_memory_explain_match},
     /* P3b */
     {"index_blast_radius", mcph_index_blast_radius},
