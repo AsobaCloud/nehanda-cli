@@ -1359,6 +1359,19 @@ $(TESTPREFIX)/unit-test-code-collect: $(OBJDIR)/tests/test_code_collect.o \
                                       $(OBJDIR)/code_collect.o $(OBJDIR)/cJSON.o $(PLATFORM_BASIC_OBJS)
 	$(TESTLINK) -o $@ $^ $(L_CORE)
 
+# §2 tree-sitter front-end test — opt-in only (links the fetched runtime + grammar).
+# Default `make unit-tests` (CI) never builds it: the target + its TEST_TARGETS entry are
+# gated on AIMEE_TREESITTER, so the vendored objects are required only when enabled.
+ifdef AIMEE_TREESITTER
+TEST_TARGETS += $(TESTPREFIX)/unit-test-code-treesitter
+$(OBJDIR)/code_treesitter.o: C_FLAGS += -DAIMEE_TREESITTER -Ivendor/tree-sitter/lib/include
+$(TESTPREFIX)/unit-test-code-treesitter: $(OBJDIR)/tests/test_code_treesitter.o \
+                                         $(OBJDIR)/code_treesitter.o \
+                                         $(OBJDIR)/vendor/ts_runtime.o $(OBJDIR)/vendor/ts_c.o \
+                                         $(PLATFORM_BASIC_OBJS)
+	$(TESTLINK) -o $@ $^ $(L_CORE)
+endif
+
 $(TESTPREFIX)/unit-test-aimee-client: $(OBJDIR)/tests/test_aimee_client.o $(OBJDIR)/aimee_client.o \
                                       $(OBJDIR)/posix/platform_net.o $(OBJDIR)/http_uds_client.o \
                                       $(OBJDIR)/aimee_home.o $(TLS_OBJS)
