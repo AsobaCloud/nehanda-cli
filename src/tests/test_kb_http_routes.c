@@ -523,8 +523,7 @@ int canonical_index_project_lang_breakdown(const char *project, char *buf, size_
    return 0;
 }
 
-/* Must mirror code_search_hit_t (index.h) exactly — the handler casts the out
- * buffer to it; a layout mismatch would corrupt the read. */
+/* Must mirror code_search_hit_t (index.h) exactly (handler casts the out buffer to it). */
 typedef struct
 {
    char project[128];
