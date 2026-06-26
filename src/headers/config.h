@@ -1261,6 +1261,7 @@ typedef struct config
    double code_hybrid_weight_code;
    double code_hybrid_weight_graph;
    double code_hybrid_weight_vector;
+   double code_hybrid_weight_memory;
    double code_hybrid_rrf_k;
    /* embedder-runtime-fetch-autodim §2c: when 0 (default) a recorded-vs-configured
     * embedding-dim mismatch is REFUSED at startup (refuse-and-instruct). When 1, the

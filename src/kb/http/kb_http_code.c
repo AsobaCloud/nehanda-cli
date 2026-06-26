@@ -8,6 +8,8 @@
 #include "db2/memory_query.h"
 #include "db2/code_projection.h"
 #include "db2/pgvec_transport.h"
+#include "db2/entity_edges.h" /* §6 memory-fusion leg: knowledge-graph edges */
+#include "db2/entity_nodes.h" /* db2_entity_node_get -> file_path */
 #include "memory.h"
 #include "kb/kb_rrf.h"
 #include "kb/kb_graph_analytics.h"
@@ -571,11 +573,12 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
    kb_rrf_item_t *code_items = calloc(HYBRID_PER_SIGNAL, sizeof(*code_items));
    kb_rrf_item_t *graph_items = calloc(HYBRID_PER_SIGNAL, sizeof(*graph_items));
    kb_rrf_item_t *vector_items = calloc(HYBRID_PER_SIGNAL, sizeof(*vector_items));
+   kb_rrf_item_t *memory_items = calloc(HYBRID_PER_SIGNAL, sizeof(*memory_items));
    char(*vpaths)[256] = calloc(HYBRID_PER_SIGNAL, sizeof(*vpaths));
    double *vscores = calloc(HYBRID_PER_SIGNAL, sizeof(*vscores));
-   kb_rrf_result_t *fused = calloc(HYBRID_PER_SIGNAL * 3, sizeof(*fused));
-   if (!chits || !ghits || !mems || !code_items || !graph_items || !vector_items || !vpaths ||
-       !vscores || !fused)
+   kb_rrf_result_t *fused = calloc(HYBRID_PER_SIGNAL * 4, sizeof(*fused));
+   if (!chits || !ghits || !mems || !code_items || !graph_items || !vector_items || !memory_items ||
+       !vpaths || !vscores || !fused)
    {
       free(chits);
       free(ghits);
@@ -583,6 +586,7 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
       free(code_items);
       free(graph_items);
       free(vector_items);
+      free(memory_items);
       free(vpaths);
       free(vscores);
       free(fused);
@@ -621,12 +625,13 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
 
    /* Per-signal RRF weights + rank constant are config-tunable (§5). */
    config_t hcfg;
-   double w_code = 1.0, w_graph = 1.0, w_vector = 1.0, rrf_k = KB_RRF_DEFAULT_K;
+   double w_code = 1.0, w_graph = 1.0, w_vector = 1.0, w_memory = 1.0, rrf_k = KB_RRF_DEFAULT_K;
    if (config_load(&hcfg) == 0)
    {
       w_code = hcfg.code_hybrid_weight_code;
       w_graph = hcfg.code_hybrid_weight_graph;
       w_vector = hcfg.code_hybrid_weight_vector;
+      w_memory = hcfg.code_hybrid_weight_memory;
       if (hcfg.code_hybrid_rrf_k > 0)
          rrf_k = hcfg.code_hybrid_rrf_k;
    }
@@ -656,12 +661,54 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
       }
    }
 
-   kb_rrf_signal_t sigs[3] = {
+   /* Signal D — cross-session memory / knowledge graph (§6 fusion). Symbol-anchored
+    * like the graph leg: seed the symbol's entity node and walk its incident
+    * knowledge-graph edges (built by the curator across sessions), resolving each
+    * neighbor entity to a file_path. Surfaces files the recorded reasoning associates
+    * with the symbol — a signal a regenerated code-only snapshot can never hold.
+    * w_memory<=0 disables it; absent a symbol or an entity graph it is simply empty. */
+   int nmem = 0;
+   if (w_memory > 0.0 && symbol[0])
+   {
+      char skey[GRAPH_ENDPOINT_MAX];
+      db2_entity_edge_explain_t *eedges = calloc(HYBRID_PER_SIGNAL, sizeof(*eedges));
+      if (eedges && db2_entity_node_key_symbol(proj, symbol, skey, sizeof(skey)) == 0)
+      {
+         int ne2 = db2_entity_edge_explain_by_entity(skey, eedges, HYBRID_PER_SIGNAL);
+         for (int i = 0; i < ne2 && nmem < HYBRID_PER_SIGNAL; i++)
+         {
+            /* the neighbor is whichever endpoint isn't the seed symbol */
+            const char *neighbor =
+                strcmp(eedges[i].source, skey) == 0 ? eedges[i].target : eedges[i].source;
+            if (strcmp(neighbor, skey) == 0)
+               continue; /* self-edge: the symbol isn't its own memory neighbor */
+            db2_entity_node_t node;
+            if (db2_entity_node_get(neighbor, &node) != 0 || !node.file_path[0])
+               continue;
+            int dup = 0; /* keep the best-ranked row per file (edges arrive weight-desc) */
+            for (int j = 0; j < nmem; j++)
+               if (strcmp(memory_items[j].id, node.file_path) == 0)
+               {
+                  dup = 1;
+                  break;
+               }
+            if (dup)
+               continue;
+            snprintf(memory_items[nmem].id, sizeof(memory_items[nmem].id), "%s", node.file_path);
+            memory_items[nmem].structural_weight = eedges[i].structural_weight;
+            nmem++;
+         }
+      }
+      free(eedges);
+   }
+
+   kb_rrf_signal_t sigs[4] = {
        {code_items, nc, w_code, "code"},
        {graph_items, ng, w_graph, "graph"},
        {vector_items, nv, w_vector, "vector"},
+       {memory_items, nmem, w_memory, "memory"},
    };
-   int nf = kb_rrf_fuse(sigs, 3, rrf_k, fused, HYBRID_PER_SIGNAL * 3);
+   int nf = kb_rrf_fuse(sigs, 4, rrf_k, fused, HYBRID_PER_SIGNAL * 4);
    if (nf < 0)
       nf = 0;
    if (nf > max_r)
@@ -683,6 +730,7 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
       free(code_items);
       free(graph_items);
       free(vector_items);
+      free(memory_items);
       free(vpaths);
       free(vscores);
       free(fused);
@@ -736,6 +784,13 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
             cJSON_AddNumberToObject(row, "vector_score", vscores[j]);
             break;
          }
+      for (int j = 0; j < nmem; j++)
+         if (strcmp(memory_items[j].id, fp) == 0)
+         {
+            if (which)
+               cJSON_AddItemToArray(which, cJSON_CreateString("memory"));
+            break;
+         }
       cJSON_AddItemToArray(results, row);
    }
 
@@ -780,6 +835,7 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
    free(code_items);
    free(graph_items);
    free(vector_items);
+   free(memory_items);
    free(vpaths);
    free(vscores);
    free(fused);
