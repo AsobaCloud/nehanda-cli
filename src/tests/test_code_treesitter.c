@@ -112,6 +112,20 @@ int main(void)
    want(".ts", ts, "T", "type");
    want(".ts", ts, "h", "function");
    want(".tsx", "export function App(){ return null }\n", "App", "function");
+   /* arrow / function expressions bound to a const/let or a class field. */
+   want(".js", "const f = () => {}\n", "f", "function");
+   want(".js", "const g = function(){}\n", "g", "function");
+   want(".js", "export const k = () => 2\n", "k", "function");
+   want(".js", "class W { fld = () => {} }\n", "fld", "function"); /* class field arrow */
+   want(".ts", "export const ah = async (): Promise<void> => {}\n", "ah", "function");
+   {
+      /* a plain value binding is not a function; an arrow body's locals don't leak. */
+      definition_t e[32];
+      int m = code_treesitter_definitions(".js", "let x = 1\nconst f = () => { const inner = 1 }\n",
+                                          e, 32);
+      for (int i = 0; i < m; i++)
+         assert(strcmp(e[i].name, "x") != 0 && strcmp(e[i].name, "inner") != 0);
+   }
 
    /* --- Rust --- */
    const char *rs =
