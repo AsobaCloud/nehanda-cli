@@ -1077,6 +1077,13 @@ void config_parse_guardrails_section(config_t *cfg, cJSON *root)
          if (cJSON_IsBool(item))
             cfg->guardrails_semantic_allow_ml_only_block = cJSON_IsTrue(item) ? 1 : 0;
       }
+      cJSON *br = cJSON_GetObjectItemCaseSensitive(gr, "blast_radius");
+      if (cJSON_IsObject(br))
+      {
+         item = cJSON_GetObjectItemCaseSensitive(br, "advisory_enabled");
+         if (cJSON_IsBool(item))
+            cfg->guardrails_blast_radius_advisory_enabled = cJSON_IsTrue(item) ? 1 : 0;
+      }
    }
 }
 void config_parse_auxiliary_section(config_t *cfg, cJSON *root)

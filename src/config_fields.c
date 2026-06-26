@@ -185,6 +185,8 @@ const config_field_t config_fields[] = {
     {"cache_min_chars", offsetof(config_t, cache_min_chars), sizeof(int), 0, CFG_INT},
     {"guardrails_semantic_enabled", offsetof(config_t, guardrails_semantic_enabled), sizeof(int), 0,
      CFG_BOOL},
+    {"guardrails_blast_radius_advisory_enabled",
+     offsetof(config_t, guardrails_blast_radius_advisory_enabled), sizeof(int), 0, CFG_BOOL},
     {"guardrails_semantic_dry_run", offsetof(config_t, guardrails_semantic_dry_run), sizeof(int), 0,
      CFG_BOOL},
     {"guardrails_semantic_command", offsetof(config_t, guardrails_semantic_command),

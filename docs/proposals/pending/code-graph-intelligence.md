@@ -208,9 +208,27 @@ per-signal weights.
 
 - **Blast-radius-aware edits**: before a write, surface graph-impacted files into the
   guardrail/context path (`guardrails_orchestrator.c`).
+  **Status — shipped.** `pre_tool_check` now emits a structural blast-radius
+  **ADVISORY** before an `Edit`/`Write`/`MultiEdit`: it lists the dependent files
+  that the edited file structurally affects (from the KB sidecar's
+  `/v1/code/blast-radius`, i.e. the call graph + typed projection edges — never the
+  LLM entity graph), and appends a high-centrality **hub** note at/above the
+  refactor-risk threshold (≥5 dependents), folding the stale-edge guard below into
+  the same surface. Advisory + **fail-open**: gated behind
+  `guardrails.blast_radius.advisory_enabled` (default **off**, opt-in); never
+  blocks; any miss (flag off, no indexed project owns the path, sidecar error, no
+  dependents) leaves the existing guardrail decision untouched, and it never
+  clobbers a higher-priority guardrail message. The decision is a pure, testable
+  core (`blast_radius_advisory_format` in `src/guardrails_blast_radius.c`) over an
+  already-fetched `blast_radius_t`, with the sidecar I/O resolver kept thin and
+  shared with `classify_path`'s existing severity check (no duplicate fetch path).
+  Unit tested hermetically (`unit-test-guardrails-blast-radius`: listing, ellipsis
+  cap, singular/plural, hub note, truncation-safety, project resolution + path
+  boundary, fail-open on no-match/sidecar-error, flag gate, message precedence).
 - **Graph-informed delegation**: route a delegate task with the relevant subgraph as
-  context automatically.
+  context automatically. *(Follow-up — not yet wired.)*
 - **Stale-edge guard**: warn when an edit touches a high-centrality/hub symbol.
+  *(Shipped as the hub note within the blast-radius advisory above.)*
 
 **Safety constraint (R1).** Anything on the safety-critical guardrail path uses ONLY
 the **deterministic structural layers** — the call graph + typed projection edges
