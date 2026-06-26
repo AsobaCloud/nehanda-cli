@@ -1060,8 +1060,10 @@ static cJSON *mcph_index_graph_surprising(struct mcp_call *c)
       return text_content("error: index_graph_surprising requires 'project'");
    long long mr = 0;
    int max_results = pdf_arg_pos_int(c->jargs, "max_results", 200.0, &mr) ? (int)mr : 20;
+   cJSON *jj = cJSON_GetObjectItemCaseSensitive(c->jargs, "judge");
+   int judge = cJSON_IsTrue(jj) ? 1 : 0;
    int status = -1;
-   char *json = kb_client_code_graph_surprising(jp->valuestring, max_results, &status);
+   char *json = kb_client_code_graph_surprising(jp->valuestring, max_results, judge, &status);
    return code_graph_passthrough(json, status, "index_graph_surprising");
 }
 
