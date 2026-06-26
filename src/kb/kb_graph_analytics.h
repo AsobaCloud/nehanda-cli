@@ -83,4 +83,14 @@ int kb_graph_surprising(const kb_graph_edge_t *edges, int n_edges, const kb_grap
                         int n_pairs, double sim_percentile, int d_min, kb_graph_surprising_t *out,
                         int max);
 
+/* §4 precision self-suppress. The LLM judge samples the structural candidate
+ * generator's precision: `confirmed`/`judged` is the fraction of cosine+distance
+ * candidates the judge deemed genuine. Returns 1 when the surprising feature should
+ * SUPPRESS its (unjudged) structural candidates because that sampled precision has
+ * dropped below `floor` over a meaningful sample — i.e. the structural filter is
+ * mostly surfacing false positives, so showing raw candidates would be noise. Returns
+ * 0 when there isn't enough signal yet (`judged` < `min_samples`), the floor is
+ * disabled (`floor` <= 0), or precision is at/above the floor. Pure. */
+int kb_surprising_precision_suppress(int judged, int confirmed, int min_samples, double floor);
+
 #endif /* KB_GRAPH_ANALYTICS_H */
