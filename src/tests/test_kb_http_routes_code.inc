@@ -397,6 +397,30 @@ static void test_code_graph_hubs_missing_project(void)
    assert(strstr(buf, "missing project") != NULL);
 }
 
+/* §4 judge stub: confirm the first link (the disconnected file:x/file:y pair) with a
+ * canned verdict so the route test stays hermetic (no curator-LLM link). Mirrors the
+ * real kb_surprising_judge writing verdicts parallel to the links. */
+int kb_surprising_judge(const config_t *cfg, const char *judge_cmd, const char *project,
+                        const kb_graph_surprising_t *links, int n, kb_surprising_verdict_t *out,
+                        char *errbuf, size_t errlen)
+{
+   (void)cfg;
+   (void)judge_cmd;
+   (void)project;
+   (void)links;
+   (void)errbuf;
+   (void)errlen;
+   if (!out || n <= 0)
+      return -1;
+   for (int i = 0; i < n; i++)
+      memset(&out[i], 0, sizeof(out[i]));
+   out[0].judged = 1;
+   out[0].confirmed = 1;
+   out[0].shared_symbols = 2;
+   snprintf(out[0].reason, sizeof(out[0].reason), "parallel auth implementations");
+   return 1;
+}
+
 /* §8 read-only node-neighborhood projection. Seed edges: hub->a, hub->b, c->hub. */
 static void test_code_graph_node_ok(void)
 {
@@ -491,6 +515,21 @@ static void test_code_graph_surprising_missing_project(void)
                             sizeof(buf));
    assert(s == 400);
    assert(strstr(buf, "missing project") != NULL);
+}
+
+/* judge=true runs the §4 confirmation: the stubbed judge confirms the first link, so
+ * the route annotates it with confirmed/reason/shared_symbols + a top-level judged. */
+static void test_code_graph_surprising_judge(void)
+{
+   char buf[4096];
+   int s = kb_http_route_ex("GET", "/v1/code/graph/surprising",
+                            "project=proj-alpha&percentile=0&d_min=2&judge=true&max_results=10",
+                            NULL, NULL, NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"confirmed\":true") != NULL);
+   assert(strstr(buf, "\"shared_symbols\":2") != NULL);
+   assert(strstr(buf, "parallel auth implementations") != NULL);
+   assert(strstr(buf, "\"judged\":1") != NULL);
 }
 
 /* A vector-store failure (pgvec gather returns <0) is surfaced as 503, not a silent

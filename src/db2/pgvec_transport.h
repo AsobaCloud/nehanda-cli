@@ -201,5 +201,9 @@ int pgvec_code_exists_by_hash(const char *project, const char *node_key, const c
  * <0 on error, else pair count. */
 int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, int anchor_cap,
                              char *a_keys, char *b_keys, int key_cap, double *cosines, int max);
+/* Resolve a code-embedding node_key back to its file_path (the two are stored on
+ * the same code_embeddings row). Writes into `out` (out_cap); 0 on hit, -1 if the
+ * node is unknown / on error. Used by the §4 surprising-links LLM judge. */
+int pgvec_code_node_path(const char *project, const char *node_key, char *out, int out_cap);
 
 #endif /* DEC_DB2_PGVEC_TRANSPORT_H */
