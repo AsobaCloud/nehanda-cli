@@ -119,6 +119,16 @@ void mcp_add_extended_tools(cJSON *tools)
    ext_prop(t, "max_results", "integer", "Max hubs to return (default 20, max 200).");
    ext_require(t, "project");
 
+   t = ext_tool(
+       tools, "index_graph_surprising",
+       "Find 'surprising links': file pairs that are semantically close (high embedding "
+       "similarity) yet structurally far apart in the call/dependency graph (or "
+       "disconnected) — a duplicated-logic / parallel-implementation signal. Returns pairs "
+       "with cosine + hop distance.");
+   ext_prop(t, "project", "string", "Project to analyze.");
+   ext_prop(t, "max_results", "integer", "Max surprising pairs to return (default 20, max 200).");
+   ext_require(t, "project");
+
    /* ── Memory grounding: explain a retrieval + provenance/history ───────────── */
    t = ext_tool(tools, "memory_explain_match",
                 "Explain WHY a memory matches a query: the per-signal score breakdown "
@@ -265,6 +275,7 @@ static const struct fam_def MCP_FAMILIES[] = {
       {"preview", "preview_blast_radius"},
       {"hybrid", "index_hybrid"},
       {"hubs", "index_graph_hubs"},
+      {"surprising", "index_graph_surprising"},
       {NULL, NULL}}},
     {"note",
      "command",

@@ -1101,6 +1101,9 @@ char *kb_client_pdf_inspect_structure(const char *project, const char *document_
 char *kb_client_code_hybrid(const char *query, const char *symbol, const char *project,
                             int max_results, int *status_out);
 char *kb_client_code_graph_hubs(const char *project, int max_results, int *status_out);
+/* /v1/code/graph/surprising: file pairs that are semantically close yet
+ * structurally far (project required). */
+char *kb_client_code_graph_surprising(const char *project, int max_results, int *status_out);
 
 /* Counts of indexed files / definition-kind terms for one project.
  * Uses /v1 over remote HTTP or local UDS.
