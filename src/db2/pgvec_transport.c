@@ -1594,6 +1594,85 @@ int pgvec_code_search_paths(const char *project, const float *vec, int dim, int 
    return (rc == AIMEE_PG_ERR) ? -1 : n;
 }
 
+int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, char *a_keys,
+                             char *b_keys, int key_cap, double *cosines, int max)
+{
+   if (!project || !*project || !a_keys || !b_keys || key_cap <= 0 || !cosines || max <= 0)
+      return -1;
+   if (k <= 0)
+      k = 5;
+   void *pg = db2_conn();
+   if (!pg)
+      return -1;
+
+   /* For each file-node embedding, its top-k nearest OTHER embeddings (the lateral
+    * rides the HNSW index per anchor row), cosine-floored, ordered closest first.
+    * Pairs are deduped to a canonical (a<b) form in C rather than in SQL: kNN is
+    * asymmetric (b can be in a's neighborhood without a being in b's), so filtering
+    * `ak < bk` in SQL would silently drop one-directional pairs. */
+   const char *sql = "SELECT ak, bk, cosine FROM ("
+                     "  SELECT a.node_key AS ak, b.node_key AS bk,"
+                     "         1.0 - (a.embedding <=> b.embedding) AS cosine"
+                     "  FROM code_embeddings a"
+                     "  CROSS JOIN LATERAL ("
+                     "     SELECT x.node_key, x.embedding FROM code_embeddings x"
+                     "     WHERE x.project = a.project AND x.point_id <> a.point_id"
+                     "       AND x.node_key <> ''"
+                     "     ORDER BY x.embedding <=> a.embedding LIMIT :k"
+                     "  ) b"
+                     "  WHERE a.project = :project AND a.node_key <> ''"
+                     ") p WHERE cosine >= :minc ORDER BY cosine DESC LIMIT :lim";
+
+   char errbuf[256];
+   aimee_pg_stmt_t *stmt = aimee_pg_prepare(pg, sql, errbuf, sizeof(errbuf));
+   if (!stmt)
+      return 0;
+   /* Over-fetch: an unordered pair can surface from both endpoints, so the raw row
+    * set is up to ~2x the distinct pairs; 8x (capped) lets the C dedup fill `max`. */
+   int row_lim = max <= 512 ? max * 8 : 4096;
+   if (row_lim > 4096)
+      row_lim = 4096;
+   if (row_lim < max)
+      row_lim = max;
+   aimee_pg_bind_int(stmt, "k", k);
+   aimee_pg_bind_text(stmt, "project", project);
+   aimee_pg_bind_double(stmt, "minc", min_cosine);
+   aimee_pg_bind_int(stmt, "lim", row_lim);
+
+   int64_t t0 = monotonic_us();
+   int n = 0;
+   aimee_pg_step_t rc;
+   while ((rc = aimee_pg_step(stmt, errbuf, sizeof(errbuf))) == AIMEE_PG_ROW)
+   {
+      if (n >= max)
+         break;
+      const char *ak = aimee_pg_column_text(stmt, 0);
+      const char *bk = aimee_pg_column_text(stmt, 1);
+      if (!ak || !ak[0] || !bk || !bk[0] || strcmp(ak, bk) == 0)
+         continue; /* skip blanks + self-pairs */
+      /* canonical order so {a,b} and {b,a} collapse to one slot */
+      const char *lo = strcmp(ak, bk) < 0 ? ak : bk;
+      const char *hi = strcmp(ak, bk) < 0 ? bk : ak;
+      int dup = 0;
+      for (int j = 0; j < n; j++)
+         if (strcmp(a_keys + (size_t)j * key_cap, lo) == 0 &&
+             strcmp(b_keys + (size_t)j * key_cap, hi) == 0)
+         {
+            dup = 1;
+            break;
+         }
+      if (dup)
+         continue; /* rows arrive cosine-desc, so the first hit already has the best cosine */
+      snprintf(a_keys + (size_t)n * key_cap, (size_t)key_cap, "%s", lo);
+      snprintf(b_keys + (size_t)n * key_cap, (size_t)key_cap, "%s", hi);
+      cosines[n] = aimee_pg_column_double(stmt, 2);
+      n++;
+   }
+   aimee_pg_finalize(stmt);
+   record_latency(monotonic_us() - t0);
+   return (rc == AIMEE_PG_ERR) ? -1 : n;
+}
+
 int pgvec_code_exists_by_hash(const char *project, const char *node_key, const char *content_hash,
                               const char *body_hash)
 {
