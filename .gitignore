@@ -114,3 +114,7 @@ agent-keys.json
 # compiles against them only in the opt-in AIMEE_TREESITTER build.
 src/vendor/tree-sitter/
 src/vendor/tree-sitter-c/
+src/vendor/tree-sitter-python/
+src/vendor/tree-sitter-go/
+src/vendor/tree-sitter-javascript/
+src/vendor/tree-sitter-rust/
