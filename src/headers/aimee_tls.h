@@ -41,6 +41,17 @@ extern "C"
    int aimee_tls_client_cert_eligible(const char *home, char *crt, size_t crt_n, char *key,
                                       size_t key_n);
 
+   /* Open a fresh TLS connection to |host|:|port| WITHOUT verifying the server,
+    * and return its leaf certificate as PEM (caller free()s *pem_out) plus the
+    * SHA-256 fingerprint as uppercase colon-hex in |fp_out|. For `aimee remote
+    * set/trust` to pin a self-signed/private server (trust-on-first-use): the
+    * caller surfaces the fingerprint for an out-of-band check and writes the PEM
+    * to <aimee_home>/remote-ca.pem, which aimee_tls_connect then trusts with
+    * verification still ON. Returns 0 on success, -1 on failure (incl. platforms
+    * where it is not yet implemented). */
+   int aimee_tls_fetch_peer_cert(const char *host, const char *port, char **pem_out, char *fp_out,
+                                 size_t fp_n);
+
 #ifdef __cplusplus
 }
 #endif
