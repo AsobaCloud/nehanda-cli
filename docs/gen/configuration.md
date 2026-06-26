@@ -22,7 +22,7 @@ aimee config set <key> <value>    # set one value
 
 Structured options (arrays, nested objects — e.g. `ensemble.reference_models`) are not CLI-settable; they are written into the config file under the sections listed at the end.
 
-## CLI-settable keys (111)
+## CLI-settable keys (112)
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -57,6 +57,7 @@ Structured options (arrays, nested objects — e.g. `ensemble.reference_models`)
 | `gateway_pin_model` | bool | Gateway forces the proxied /v1/messages served model to the configured primary's model, overriding the client-requested model. Default off (the passthrough honors the client model); enable for single-model Anthropic-compatible shims. |
 | `gateway_prevent_subagents` | bool | Gateway strips subagent-spawning tools (Task/Agent/etc.) from proxied requests so the served model cannot spawn subagents. Default off. |
 | `guardrail_mode` | string | Guardrail enforcement mode (off / warn / block). |
+| `guardrails_blast_radius_advisory_enabled` | bool | Surface a structural blast-radius advisory (graph-impacted files) before an edit (advisory, fail-open). |
 | `guardrails_semantic_allow_ml_only_block` | bool | Allow blocking on the ML classifier alone. |
 | `guardrails_semantic_block_threshold` | float | Semantic score threshold to block. |
 | `guardrails_semantic_command` | string | External semantic-guardrail classifier command. |
@@ -157,7 +158,7 @@ Set in the config JSON as `{"<section>": {"<key>": ...}}`. Keys are derived from
 - **`dedup`** — _Response deduplication._ Keys: `enabled`, `window_seconds`
 - **`dogfood`** — _Session capture for dogfood data._ Keys: `commit_raw`, `enabled`, `inline_tagging`, `log_dir`
 - **`ensemble`** — _Roundtable ensemble panel + aggregator._ Keys: `aggregator`, `max_cost_usd`, `min_successful`, `reference_models`, `reference_personas`
-- **`guardrails`** — _Semantic guardrail policy._ Keys: `semantic`
+- **`guardrails`** — _Semantic guardrail policy._ Keys: `blast_radius`, `semantic`
 - **`identity`** — _Working-profile identity injection._ Keys: `working_profile_injection`
 - **`ingress`** — _Ingress (proxy frontends) behavior._ Keys: `audit_async`, `trusted_proxy_secret`, `usage_accounting_enabled`
 - **`integrity`** — _Integrity gate._ Keys: `dry_run`, `enabled`

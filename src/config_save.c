@@ -462,6 +462,15 @@ int config_save(const config_t *cfg)
       cJSON_AddBoolToObject(semantic, "allow_ml_only_block",
                             cfg->guardrails_semantic_allow_ml_only_block ? 1 : 0);
    }
+   if (cfg->guardrails_blast_radius_advisory_enabled)
+   {
+      /* Reuse the guardrails object if the semantic block above created it. */
+      cJSON *guardrails = cJSON_GetObjectItemCaseSensitive(root, "guardrails");
+      if (!guardrails)
+         guardrails = cJSON_AddObjectToObject(root, "guardrails");
+      cJSON *br = cJSON_AddObjectToObject(guardrails, "blast_radius");
+      cJSON_AddBoolToObject(br, "advisory_enabled", 1);
+   }
    if (cfg->memory_maintenance_trigger_inserts > 0 || cfg->memory_maintenance_trigger_secs > 0 ||
        cfg->memory_maintenance_enabled || cfg->memory_maintenance_interval_seconds > 0 ||
        cfg->memory_maintenance_summarize_enabled)
