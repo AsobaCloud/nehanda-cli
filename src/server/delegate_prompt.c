@@ -4,7 +4,6 @@
 #include "agent_coord.h"
 #include "config.h"
 #include "delegate_role.h"
-#include "guardrails_blast_radius.h"
 #include "kb_client.h"
 #include "log.h"
 #include "persona.h"
@@ -1517,14 +1516,41 @@ static void graph_ctx_append_names(char *buf, int *pos, int *rem, char names[][M
    }
 }
 
+/* Resolve an abs path to its indexed project + relpath and fetch the structural
+ * blast radius (call graph + projection edges). Returns 0 with *out filled on a
+ * project match + successful fetch, -1 otherwise (FAIL-OPEN). Mirrors the §7
+ * advisory's guardrails_blast_radius_for_abs_path, inlined here so delegate_prompt
+ * stays decoupled from the guardrails object (it already links kb_client_index). */
+static int delegate_blast_radius_for_abs_path(const char *abs_path, blast_radius_t *out)
+{
+   if (!abs_path || !abs_path[0] || !out)
+      return -1;
+   project_info_t projects[32];
+   int pcount = kb_client_index_list(projects, 32);
+   for (int p = 0; p < pcount; p++)
+   {
+      size_t rlen = strlen(projects[p].root);
+      if (strncmp(abs_path, projects[p].root, rlen) == 0 &&
+          (abs_path[rlen] == '/' || abs_path[rlen] == '\0'))
+      {
+         const char *rel = abs_path + rlen;
+         if (*rel == '/')
+            rel++;
+         memset(out, 0, sizeof(*out));
+         return kb_client_index_blast_radius(projects[p].name, rel, out) == 0 ? 0 : -1;
+      }
+   }
+   return -1; /* no indexed project owns this path */
+}
+
 /* §7 graph-informed delegation: prepend a structural-context block — the callers
  * (dependents) and dependencies of the file paths the delegate task references —
  * so the delegate starts with the structural neighborhood. Opt-in
  * (`delegate_graph_context_enabled`, default off) and FAIL-OPEN (NULL on any
  * miss: flag off, no referenced paths, kb unreachable, or no structural edges).
- * Uses ONLY the deterministic structural graph (kb_client_index_blast_radius via
- * the shared resolver), never the LLM entity graph — the same R1 constraint as
- * the §7 blast-radius advisory. Returns a heap block the caller frees, or NULL. */
+ * Uses ONLY the deterministic structural graph (kb_client_index_blast_radius),
+ * never the LLM entity graph — the same R1 constraint as the §7 blast-radius
+ * advisory. Returns a heap block the caller frees, or NULL. */
 char *delegate_inject_graph_context(const char *prompt, const char *cwd)
 {
    if (!prompt || !prompt[0])
@@ -1560,7 +1586,7 @@ char *delegate_inject_graph_context(const char *prompt, const char *cwd)
          snprintf(abs, sizeof(abs), "%s/%s", cwd, paths[i]);
 
       blast_radius_t br;
-      if (guardrails_blast_radius_for_abs_path(abs, &br) != 0)
+      if (delegate_blast_radius_for_abs_path(abs, &br) != 0)
          continue; /* fail-open: path not indexed / kb down */
       if (br.dependent_count <= 0 && br.dependency_count <= 0)
          continue;

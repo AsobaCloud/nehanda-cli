@@ -43,14 +43,25 @@ static void stub_hits_add(const char *file_path, const char *snippet)
    snprintf(g_stub_hits[i].snippet, sizeof(g_stub_hits[i].snippet), "%s", snippet);
 }
 
-/* ── stub: guardrails_blast_radius_for_abs_path (the §7 structural resolver) ── */
+/* ── stubs: the structural blast-radius resolver's kb_client calls ──────────── */
 
-static int g_br_rc = -1; /* what the resolver returns: 0 = filled, else fail-open */
+static int g_br_rc = -1; /* kb_client_index_blast_radius: 0 = filled, else fail-open */
 static blast_radius_t g_br;
 
-int guardrails_blast_radius_for_abs_path(const char *abs_path, blast_radius_t *out)
+int kb_client_index_list(project_info_t *out, int max)
 {
-   (void)abs_path;
+   if (max < 1 || !out)
+      return 0;
+   memset(&out[0], 0, sizeof(out[0]));
+   snprintf(out[0].name, sizeof(out[0].name), "p");
+   snprintf(out[0].root, sizeof(out[0].root), "/repo"); /* abs paths under /repo match */
+   return 1;
+}
+
+int kb_client_index_blast_radius(const char *project, const char *file_path, blast_radius_t *out)
+{
+   (void)project;
+   (void)file_path;
    if (g_br_rc != 0 || !out)
       return -1;
    *out = g_br;
