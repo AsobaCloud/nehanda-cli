@@ -108,3 +108,9 @@ src/server/openapi_server_data.h
 # Never commit them, even when AIMEE_HOME is set to a repo-adjacent dir.
 agent-keys.json
 .vault/
+
+# §2 tree-sitter: runtime + grammars are fetched at build time (scripts/fetch-treesitter.sh),
+# not committed — they are multi-MB generated parsers. The integration (code_treesitter.c)
+# compiles against them only in the opt-in AIMEE_TREESITTER build.
+src/vendor/tree-sitter/
+src/vendor/tree-sitter-c/
