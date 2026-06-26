@@ -196,8 +196,10 @@ int pgvec_code_exists_by_hash(const char *project, const char *node_key, const c
  * a_keys/b_keys are flat buffers of `max` slots of `key_cap` bytes; cosines[max].
  * A row's node_key is the projection file-node key (db2_entity_node_key_file), so
  * each pair joins the code-projection graph directly. `project` is required (the
- * self-join is project-scoped). Read-only analytics; <0 on error, else pair count. */
-int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, char *a_keys,
-                             char *b_keys, int key_cap, double *cosines, int max);
+ * self-join is project-scoped); `anchor_cap` bounds the outer scan (HNSW probes)
+ * so cost is O(anchor_cap*k) independent of project size. Read-only analytics;
+ * <0 on error, else pair count. */
+int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, int anchor_cap,
+                             char *a_keys, char *b_keys, int key_cap, double *cosines, int max);
 
 #endif /* DEC_DB2_PGVEC_TRANSPORT_H */
