@@ -1476,8 +1476,10 @@ int handle_post_code_scan(const char *body, char *out_buf, int out_cap)
       /* §6 live idempotency: resolve the default-branch SHA (cheap) so a !force scan
        * can skip the expensive git re-walk when the branch hasn't moved since the last
        * index, and so any successful scan (force or not) refreshes the stored SHA. A
-       * future post-merge/fetch hook reuses exactly this gate. */
-      if (git_resolve_default_sha(root_path, sha_now, sizeof(sha_now)) == 0 && !force)
+       * future post-merge/fetch hook reuses exactly this gate. Disabled under the
+       * worktree opt-in, where the index tracks WIP the branch SHA can't see. */
+      if (!code_index_source_is_worktree() &&
+          git_resolve_default_sha(root_path, sha_now, sizeof(sha_now)) == 0 && !force)
       {
          char stored[128] = "";
          snprintf(sha_key, sizeof(sha_key), "code_scan_sha:%s", project);

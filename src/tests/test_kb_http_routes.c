@@ -906,8 +906,8 @@ int db2_demotion_profile_read(const char *memory_class, const char *scope_kind,
    return 0;
 }
 
-/* kb_intel_payload's bandit.sample/close builders call these; this test does not
- * link kb_bandit.o. Stub sample as "disabled" and reward as a no-op success. */
+/* kb_intel_payload's bandit.sample/close builders call these (kb_bandit.o unlinked):
+ * stub sample as "disabled", reward as a no-op success. */
 int kb_bandit_sample(const config_t *cfg, const char *decision_point, const char *context_json,
                      const char (*arm_ids)[KB_BANDIT_MAX_ARM_ID], int n_arms, char *decision_id_out)
 {
@@ -1946,6 +1946,7 @@ int main(void)
    test_code_scan_ok();
    test_code_scan_skips_unchanged_branch();
    test_code_scan_runs_on_branch_move();
+   test_code_scan_worktree_ignores_sha();
    test_code_scan_missing_root_path();
    test_code_scan_pushed_files_ok();
    test_code_scan_pushed_files_rejects_invalid_item();

@@ -42,6 +42,9 @@ int code_collect_files(const char *root, cJSON *files_arr);
  * gate deciding whether a stored vs current SHA warrants a re-index. */
 int git_resolve_default_sha(const char *root, char *out, size_t outlen);
 int code_default_branch_changed(const char *stored_sha, const char *current_sha);
+/* 1 if AIMEE_CODE_INDEX_SOURCE=worktree (the index tracks WIP, so the default-branch
+ * SHA gate must NOT be applied). */
+int code_index_source_is_worktree(void);
 
 /* Discover git repositories under `root` for one-project-per-repo ingest: invoke
  * `cb` once per real checkout (a directory whose `.git` is itself a directory),

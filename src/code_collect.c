@@ -282,6 +282,15 @@ int git_resolve_default_sha(const char *root, char *out, size_t outlen)
    return 0;
 }
 
+/* 1 when AIMEE_CODE_INDEX_SOURCE opts into indexing the working tree (so the index
+ * reflects WIP, not the default branch). The default-branch SHA gate is invalid in
+ * that mode — the branch SHA can't see a worktree edit — so callers skip the gate. */
+int code_index_source_is_worktree(void)
+{
+   const char *mode = getenv("AIMEE_CODE_INDEX_SOURCE");
+   return mode && strcmp(mode, "worktree") == 0;
+}
+
 /* Pure gate: should a project be re-indexed given its last-indexed and current
  * default-branch SHAs? 1 if the current SHA is known AND differs (or there is no
  * stored SHA = never indexed); 0 if the current SHA is unresolvable (don't thrash on
