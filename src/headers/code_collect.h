@@ -37,6 +37,12 @@ int code_collect_files_cb(const char *root, code_collect_file_cb cb, void *ctx);
  * and the tree is known-small. Returns the number of files appended. */
 int code_collect_files(const char *root, cJSON *files_arr);
 
+/* §6 live: resolve the default branch's tree SHA for `root` (0 + 40-hex in `out`,
+ * or -1 if no resolvable default branch). `code_default_branch_changed` is the pure
+ * gate deciding whether a stored vs current SHA warrants a re-index. */
+int git_resolve_default_sha(const char *root, char *out, size_t outlen);
+int code_default_branch_changed(const char *stored_sha, const char *current_sha);
+
 /* Discover git repositories under `root` for one-project-per-repo ingest: invoke
  * `cb` once per real checkout (a directory whose `.git` is itself a directory),
  * with the repo's absolute path. Linked worktrees (`.git` is a regular file) are

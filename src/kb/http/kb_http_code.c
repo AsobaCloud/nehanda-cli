@@ -8,8 +8,10 @@
 #include "db2/memory_query.h"
 #include "db2/code_projection.h"
 #include "db2/pgvec_transport.h"
-#include "db2/entity_edges.h" /* §6 memory-fusion leg: knowledge-graph edges */
-#include "db2/entity_nodes.h" /* db2_entity_node_get -> file_path */
+#include "db2/entity_edges.h"     /* §6 memory-fusion leg: knowledge-graph edges */
+#include "db2/entity_nodes.h"     /* db2_entity_node_get -> file_path */
+#include "code_collect.h"         /* §6 live: git_resolve_default_sha + change gate */
+#include "db2/kb_runtime_state.h" /* stored last-indexed default-branch SHA */
 #include "memory.h"
 #include "kb/kb_rrf.h"
 #include "kb/kb_graph_analytics.h"
@@ -1421,6 +1423,8 @@ int handle_post_code_scan(const char *body, char *out_buf, int out_cap)
    const char *root_path = cJSON_IsString(root_path_j) ? root_path_j->valuestring : "";
    int force = code_scan_bool(root, "force", 0);
    cJSON *files_j = cJSON_GetObjectItemCaseSensitive(root, "files");
+   char sha_now[128] = ""; /* §6: default-branch SHA, tracked across the local-scan path */
+   char sha_key[320] = "";
 
    if (!db2_is_initialized())
    {
@@ -1469,6 +1473,25 @@ int handle_post_code_scan(const char *body, char *out_buf, int out_cap)
          snprintf(out_buf, (size_t)out_cap, "{\"error\":\"missing root_path\"}");
          return 400;
       }
+      /* §6 live idempotency: skip the expensive git re-walk when the default branch
+       * hasn't moved since the last scan (force overrides). The SHA is cheap; the
+       * scan is not. A future post-merge/fetch hook reuses exactly this gate so it
+       * no-ops unless the canonical code actually changed. */
+      if (!force && git_resolve_default_sha(root_path, sha_now, sizeof(sha_now)) == 0)
+      {
+         char stored[128] = "";
+         snprintf(sha_key, sizeof(sha_key), "code_scan_sha:%s", project);
+         db2_kb_runtime_state_get(sha_key, stored, sizeof(stored));
+         if (!code_default_branch_changed(stored, sha_now))
+         {
+            snprintf(out_buf, (size_t)out_cap,
+                     "{\"status\":\"ok\",\"skipped\":true,\"reason\":\"default branch unchanged\","
+                     "\"project\":\"%s\",\"files\":0,\"inspected\":0}",
+                     project);
+            cJSON_Delete(root);
+            return 200;
+         }
+      }
       files = canonical_index_scan_project(project, root_path, force, &inspected);
    }
    if (files < 0)
@@ -1486,6 +1509,14 @@ int handle_post_code_scan(const char *body, char *out_buf, int out_cap)
     * thin client were never queued for curation. The 0.6B embed pass is driven
     * separately by the curator drain. */
    kb_curator_queue_code_units_for_project(project, root_path);
+
+   /* Record the scanned default-branch SHA so the next !force scan can no-op when the
+    * branch hasn't moved (sha_now is set only on the local-scan path that resolved it). */
+   if (sha_now[0])
+   {
+      snprintf(sha_key, sizeof(sha_key), "code_scan_sha:%s", project);
+      db2_kb_runtime_state_set(sha_key, sha_now);
+   }
 
    snprintf(out_buf, (size_t)out_cap,
             "{\"status\":\"ok\",\"skipped\":false,\"project\":\"%s\",\"files\":%d,"

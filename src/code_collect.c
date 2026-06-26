@@ -252,6 +252,42 @@ static int git_resolve_default_ref(const char *root, char *out, size_t outlen)
    return -1;
 }
 
+/* §6 live: the default branch's tree SHA — a content identity for "has the canonical
+ * code moved?". Resolves the default ref (same chain as the collector) then
+ * `git rev-parse <ref>^{tree}`. Returns 0 + the 40-hex SHA in `out`, or -1 if there's
+ * no resolvable default branch (non-git dir, detached, unborn) — the caller then just
+ * scans unconditionally. Cheap (one rev-parse), so it gates the expensive re-walk. */
+int git_resolve_default_sha(const char *root, char *out, size_t outlen)
+{
+   if (!root || !out || outlen == 0)
+      return -1;
+   out[0] = '\0';
+   char ref[256];
+   if (git_resolve_default_ref(root, ref, sizeof(ref)) != 0)
+      return -1;
+   char args[320];
+   snprintf(args, sizeof(args), "rev-parse '%s^{tree}'", ref);
+   if (git_capture_line(root, args, out, outlen) != 0 || !out[0])
+   {
+      out[0] = '\0';
+      return -1;
+   }
+   return 0;
+}
+
+/* Pure gate: should a project be re-indexed given its last-indexed and current
+ * default-branch SHAs? 1 if the current SHA is known AND differs (or there is no
+ * stored SHA = never indexed); 0 if the current SHA is unresolvable (don't thrash on
+ * a transient git failure) or unchanged. */
+int code_default_branch_changed(const char *stored_sha, const char *current_sha)
+{
+   if (!current_sha || !current_sha[0])
+      return 0;
+   if (!stored_sha || !stored_sha[0])
+      return 1;
+   return strcmp(stored_sha, current_sha) != 0;
+}
+
 /* Skip a tracked path whose any component is a VCS/build/vendor/hidden dir, so a
  * checked-in node_modules/vendor tree is filtered exactly like the worktree walk
  * filters it (code_dir_skip). */
