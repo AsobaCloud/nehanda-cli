@@ -601,11 +601,21 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
       }
    }
 
+   /* Per-signal RRF weights + rank constant are config-tunable (§5). */
+   config_t hcfg;
+   double w_code = 1.0, w_graph = 1.0, rrf_k = KB_RRF_DEFAULT_K;
+   if (config_load(&hcfg) == 0)
+   {
+      w_code = hcfg.code_hybrid_weight_code;
+      w_graph = hcfg.code_hybrid_weight_graph;
+      if (hcfg.code_hybrid_rrf_k > 0)
+         rrf_k = hcfg.code_hybrid_rrf_k;
+   }
    kb_rrf_signal_t sigs[2] = {
-       {code_items, nc, 1.0, "code"},
-       {graph_items, ng, 1.0, "graph"},
+       {code_items, nc, w_code, "code"},
+       {graph_items, ng, w_graph, "graph"},
    };
-   int nf = kb_rrf_fuse(sigs, 2, KB_RRF_DEFAULT_K, fused, HYBRID_PER_SIGNAL * 2);
+   int nf = kb_rrf_fuse(sigs, 2, rrf_k, fused, HYBRID_PER_SIGNAL * 2);
    if (nf < 0)
       nf = 0;
    if (nf > max_r)

@@ -1340,5 +1340,20 @@ void config_parse_kb_section2(config_t *cfg, cJSON *root)
          if (cJSON_IsNumber(item) && item->valuedouble > 0)
             cfg->kb_mining_min_poll_s = (int)item->valuedouble;
       }
+
+      /* §5 hybrid retrieval per-signal RRF weights + rank constant. */
+      cJSON *ch = cJSON_GetObjectItemCaseSensitive(kb, "code_hybrid");
+      if (cJSON_IsObject(ch))
+      {
+         item = cJSON_GetObjectItemCaseSensitive(ch, "weight_code");
+         if (cJSON_IsNumber(item))
+            cfg->code_hybrid_weight_code = item->valuedouble;
+         item = cJSON_GetObjectItemCaseSensitive(ch, "weight_graph");
+         if (cJSON_IsNumber(item))
+            cfg->code_hybrid_weight_graph = item->valuedouble;
+         item = cJSON_GetObjectItemCaseSensitive(ch, "rrf_k");
+         if (cJSON_IsNumber(item) && item->valuedouble > 0)
+            cfg->code_hybrid_rrf_k = item->valuedouble;
+      }
    }
 }
