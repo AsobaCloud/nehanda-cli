@@ -1,6 +1,9 @@
 # Proposal: Code-graph intelligence — a living, embedded, reasoning graph over code
 
-- **State:** DRAFT — R1 (roundtable-revised), pre proposal-gate.
+- **State:** IN PROGRESS — §0.5/§1/§3/§4/§5/§7 implemented (on the `testing` branch);
+  remainder (§2 tree-sitter, §5 vector leg, §4 surprising-links, §6 live fusion,
+  §8 webchat viz) still open, as build-/integration-/frontend-tier work. See the
+  "Implementation status" section below.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
   built without a manual step, (b) parsed broadly, (c) ranked by **graph structure
   AND vector similarity AND memory** in one query, and (d) able to *change what the
@@ -191,9 +194,12 @@ contributing `signals`, enriched (snippet / caller), and carries `signal_hits` +
 (`test_code_hybrid_*`: both legs fuse + label + enrich, memory why, no-symbol path,
 missing-query 400). **Agent-callable** via the MCP `index` family — `index({command:
 "hybrid", query, symbol?, project?})` — wired through `kb_client_code_hybrid`
-(verbatim JSON forward). **Remaining:** the **vector** leg (`pgvec_code_search`, needs
-the query embedder — integration-tier) as a third fused signal; config-tunable
-per-signal weights.
+(verbatim JSON forward). **Per-signal weights are config-tunable** (shipped):
+`kb.code_hybrid.{weight_code,weight_graph,rrf_k}` (defaults `1.0/1.0/60` preserve the
+prior behavior; `weight ≤ 0` disables a leg) flow from `config_load` into
+`kb_rrf_fuse`, so an operator can re-balance lexical-vs-structural relevance without a
+rebuild. **Remaining:** the **vector** leg (`pgvec_code_search`, needs the query
+embedder — integration/deploy-tier) as a third fused signal.
 
 ## §6 Live + cross-session memory fusion
 
@@ -253,6 +259,34 @@ agent's hot path.
 - **P2:** §2 tree-sitter + §5 hybrid retrieval (parallel) — coverage + headline.
 - **P3:** §4 analytics + §8 webchat viz.
 - **P4:** §6 live/memory fusion + §7 actuation — compounds the platform.
+
+## Implementation status (as of this revision)
+
+**Shipped to `testing`:**
+- **§0.5** default-branch sourcing (`code_collect.c`, `unit-test-code-collect`).
+- **§1** auto-build of the projection graph on the curator drain, content-addressed +
+  idempotent (`kb_graph_build_project_if_changed`, `unit-test-kb-graph`).
+- **§3** edge provenance (`structural`/`inferred`/`ambiguous`) surfaced in `graph.explain`.
+- **§4** hub/degree-centrality analytics — `GET /v1/code/graph/hubs`
+  (`kb_graph_analytics.c`, `unit-test-kb-graph-analytics`), **agent-callable** via
+  `index({command:"hubs"})`.
+- **§5** RRF fusion core (`kb_rrf.c`, `unit-test-kb-rrf`) + the `GET /v1/code/hybrid`
+  route fusing `code` + `graph` in file-path space with a typed memory `why`,
+  **agent-callable** via `index({command:"hybrid"})`, with **config-tunable per-signal
+  weights** (`kb.code_hybrid.*`).
+- **§7** structural blast-radius **advisory** on the guardrail edit path — advisory,
+  fail-open, structural-only, opt-in (`guardrails_blast_radius.c`,
+  `unit-test-guardrails-blast-radius`); folds in the stale-edge hub note.
+
+**Deferred — needs the embedder / a build-tier dependency / a deployed corpus / a frontend
+(not completable in the agent host):**
+- **§2 tree-sitter** front-end — large build-tier work (vendor ~30 grammars + ABI).
+- **§5 vector leg** (`pgvec_code_search`) — needs the query embedder (integration/deploy-tier).
+- **§4 surprising-links** — needs embeddings + the percentile/LLM-judge confirmation stage.
+- **§6 live/memory fusion** — post-merge/fetch incremental hook + watch.
+- **§8 webchat visualization** — frontend, read-only `/v1/code/graph` paged projection.
+- **§7 graph-informed delegation** — route a delegate task with the relevant subgraph
+  (follow-up to the shipped blast-radius advisory).
 
 ## Non-goals
 
