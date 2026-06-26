@@ -118,28 +118,59 @@ typedef struct
    int structural_weight;
 } test_projection_edge_t;
 
+typedef struct
+{
+   const char *s, *r, *t;
+   int w;
+} test_seed_edge_t;
+
 int db2_code_projection_list_edges(const char *project, void *out, int max)
 {
    assert(out);
-   if (!project || strcmp(project, "proj-alpha") != 0 || max < 4)
+   if (max < 4)
       return 0;
    test_projection_edge_t *e = (test_projection_edge_t *)out;
    /* hub: out=2 (->a,->b), in=1 (c->); a,b,c: degree 1 each. */
-   struct
+   static const test_seed_edge_t alpha[] = {
+       {"hub", "calls", "a", 1}, {"hub", "calls", "b", 1}, {"c", "calls", "hub", 1}};
+   /* A single recursive edge: exercises the source==target==node self-loop path. */
+   static const test_seed_edge_t selfloop[] = {{"rec", "calls", "rec", 1}};
+   const test_seed_edge_t *rows = NULL;
+   int n = 0;
+   if (project && strcmp(project, "proj-alpha") == 0)
    {
-      const char *s, *r, *t;
-      int w;
-   } seed[] = {{"hub", "calls", "a", 1}, {"hub", "calls", "b", 1}, {"c", "calls", "hub", 1}};
-   int n = (int)(sizeof(seed) / sizeof(seed[0]));
+      rows = alpha;
+      n = (int)(sizeof(alpha) / sizeof(alpha[0]));
+   }
+   else if (project && strcmp(project, "proj-selfloop") == 0)
+   {
+      rows = selfloop;
+      n = (int)(sizeof(selfloop) / sizeof(selfloop[0]));
+   }
+   else
+      return 0;
    for (int i = 0; i < n && i < max; i++)
    {
       memset(&e[i], 0, sizeof(e[i]));
-      snprintf(e[i].source, sizeof(e[i].source), "%s", seed[i].s);
-      snprintf(e[i].relation, sizeof(e[i].relation), "%s", seed[i].r);
-      snprintf(e[i].target, sizeof(e[i].target), "%s", seed[i].t);
-      e[i].structural_weight = seed[i].w;
+      snprintf(e[i].source, sizeof(e[i].source), "%s", rows[i].s);
+      snprintf(e[i].relation, sizeof(e[i].relation), "%s", rows[i].r);
+      snprintf(e[i].target, sizeof(e[i].target), "%s", rows[i].t);
+      e[i].structural_weight = rows[i].w;
    }
    return n;
+}
+
+/* Hermetic mirror of the §3 provenance helper (kb_service_graph.c). The real
+ * definition lives in a db2-heavy unit; this fake keeps the route test pure
+ * while preserving the only branch the projection route exercises: a
+ * code_projection edge is always "structural". */
+const char *kb_graph_edge_provenance(const char *edge_origin, int structural_weight)
+{
+   if (structural_weight > 0 || (edge_origin && strcmp(edge_origin, "code_projection") == 0))
+      return "structural";
+   if (edge_origin && strcmp(edge_origin, "session") == 0)
+      return "ambiguous";
+   return "inferred";
 }
 
 static void test_code_structure_ok(void)
@@ -318,6 +349,69 @@ static void test_code_graph_hubs_missing_project(void)
    char buf[256];
    int s =
        kb_http_route_ex("GET", "/v1/code/graph/hubs", "", NULL, NULL, NULL, 0, buf, sizeof(buf));
+   assert(s == 400);
+   assert(strstr(buf, "missing project") != NULL);
+}
+
+/* §8 read-only node-neighborhood projection. Seed edges: hub->a, hub->b, c->hub. */
+static void test_code_graph_node_ok(void)
+{
+   char buf[2048];
+   int s = kb_http_route_ex("GET", "/v1/code/graph", "project=proj-alpha&node=hub&max_results=10",
+                            NULL, NULL, NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"node\":\"hub\"") != NULL);
+   /* hub --calls--> a, b (out); c --calls--> hub (in). */
+   assert(strstr(buf, "\"neighbor\":\"a\"") != NULL);
+   assert(strstr(buf, "\"neighbor\":\"b\"") != NULL);
+   assert(strstr(buf, "\"neighbor\":\"c\"") != NULL);
+   assert(strstr(buf, "\"direction\":\"out\"") != NULL);
+   assert(strstr(buf, "\"direction\":\"in\"") != NULL);
+   assert(strstr(buf, "\"relation\":\"calls\"") != NULL);
+   /* projection edges are AST-derived -> §3 provenance "structural". */
+   assert(strstr(buf, "\"provenance\":\"structural\"") != NULL);
+   assert(strstr(buf, "\"neighbor_count\":3") != NULL);
+   /* all 3 incident edges fit under max_results=10 -> complete neighborhood. */
+   assert(strstr(buf, "\"match_count\":3") != NULL);
+   assert(strstr(buf, "\"truncated\":false") != NULL);
+}
+
+/* The page cap (max_results) must drive `truncated` independently of the DB scan
+ * window: 3 incident edges, max_results=1 -> 1 emitted, truncated=true. */
+static void test_code_graph_node_capped_truncates(void)
+{
+   char buf[2048];
+   int s = kb_http_route_ex("GET", "/v1/code/graph", "project=proj-alpha&node=hub&max_results=1",
+                            NULL, NULL, NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"neighbor_count\":1") != NULL);
+   assert(strstr(buf, "\"match_count\":3") != NULL);
+   assert(strstr(buf, "\"truncated\":true") != NULL);
+}
+
+/* A recursive edge (rec->rec) is emitted once with direction "self". */
+static void test_code_graph_node_self_loop(void)
+{
+   char buf[2048];
+   int s = kb_http_route_ex("GET", "/v1/code/graph", "project=proj-selfloop&node=rec", NULL, NULL,
+                            NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"neighbor\":\"rec\"") != NULL);
+   assert(strstr(buf, "\"direction\":\"self\"") != NULL);
+   assert(strstr(buf, "\"neighbor_count\":1") != NULL);
+   /* exactly one entry: the else-if ladder must not double-emit a self-loop. */
+   assert(strstr(buf, "\"direction\":\"out\"") == NULL);
+   assert(strstr(buf, "\"direction\":\"in\"") == NULL);
+}
+
+static void test_code_graph_node_missing_params(void)
+{
+   char buf[512];
+   int s = kb_http_route_ex("GET", "/v1/code/graph", "project=proj-alpha", NULL, NULL, NULL, 0, buf,
+                            sizeof(buf));
+   assert(s == 400);
+   assert(strstr(buf, "missing node") != NULL);
+   s = kb_http_route_ex("GET", "/v1/code/graph", "node=hub", NULL, NULL, NULL, 0, buf, sizeof(buf));
    assert(s == 400);
    assert(strstr(buf, "missing project") != NULL);
 }
