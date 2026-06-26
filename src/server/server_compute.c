@@ -610,6 +610,25 @@ static cJSON *delegate_build_result_response(
    return resp;
 }
 
+/* Append an owned context `block` to the delegate system prompt, taking ownership
+ * (frees `block` and, on a successful concat, the previous template buffer).
+ * No-op when block is NULL. Shared by the code-context / graph-context / tier
+ * injectors so the ownership dance lives in one place. */
+static void delegate_append_owned_block(const char **system_prompt, char **template_sys_prompt,
+                                        char *block)
+{
+   if (!block)
+      return;
+   char *combined = delegate_prompt_append_block(*system_prompt, block);
+   if (combined)
+   {
+      free(*template_sys_prompt);
+      *template_sys_prompt = combined;
+      *system_prompt = combined;
+   }
+   free(block);
+}
+
 void delegate_worker(void *arg)
 {
    compute_ctx_t *cctx = (compute_ctx_t *)arg;
@@ -1110,38 +1129,20 @@ void delegate_worker(void *arg)
 
    /* Automatic context injection: query the code index for terms in the prompt
     * and append a ## Context block so the delegate starts with relevant snippets
-    * already loaded.  Silently skips if kb is unreachable. */
-   {
-      char *ctx = delegate_inject_code_context(prompt);
-      if (ctx)
-      {
-         char *combined = delegate_prompt_append_block(system_prompt, ctx);
-         if (combined)
-         {
-            free(template_sys_prompt);
-            template_sys_prompt = combined;
-            system_prompt = combined;
-         }
-         free(ctx);
-      }
-   }
+    * already loaded. Silently skips if kb is unreachable. */
+   delegate_append_owned_block(&system_prompt, &template_sys_prompt,
+                               delegate_inject_code_context(prompt));
+
+   /* §7 graph-informed delegation (opt-in, fail-open): prepend the structural
+    * neighborhood (callers/dependencies) of the files the task references so the
+    * delegate sees the blast radius of a shared interface up front. */
+   delegate_append_owned_block(&system_prompt, &template_sys_prompt,
+                               delegate_inject_graph_context(prompt, cwd));
 
    /* Tier orchestration context: for tools-enabled mid-tier delegates, append
     * instructions describing how to fan out sub-tasks to lower-tier agents. */
-   {
-      char *tier_ctx = delegate_build_tier_context(via_name, tier_override, role);
-      if (tier_ctx)
-      {
-         char *combined = delegate_prompt_append_block(system_prompt, tier_ctx);
-         if (combined)
-         {
-            free(template_sys_prompt);
-            template_sys_prompt = combined;
-            system_prompt = combined;
-         }
-         free(tier_ctx);
-      }
-   }
+   delegate_append_owned_block(&system_prompt, &template_sys_prompt,
+                               delegate_build_tier_context(via_name, tier_override, role));
 
    /* Named-file drift guard: extract any repo-relative paths named in the prompt
     * and check pre-flight conditions before running the agent. */
