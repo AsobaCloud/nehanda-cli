@@ -294,12 +294,69 @@ int code_index_source_is_worktree(void)
    return mode && strcmp(mode, "worktree") == 0;
 }
 
-/* §6 live: install a `post-merge` git hook in `project_root` that re-indexes
- * `project_name` after a merge/pull advances the default branch. The hook backgrounds
- * `aimee index scan` (so it never blocks the merge); the §6 SHA gate makes that a cheap
- * no-op unless the canonical code actually moved. Idempotent + non-clobbering: an
- * existing aimee hook is overwritten, a foreign hook is left alone (-2). Returns 0 on
- * success, -1 on error (not a git repo, unwritable), -2 if a non-aimee hook is present. */
+/* Write one reindex git hook (`hook_name`) in `hooks_dir` that backgrounds
+ * `aimee index scan <qname> <qroot>` (already shell-quoted). A post-checkout hook
+ * (`is_checkout`) reindexes only on a branch switch ($3 == 1), not a per-file checkout.
+ * Idempotent + non-clobbering (a foreign hook is left alone), O_NOFOLLOW against a planted
+ * symlink. Returns 0 on success, -1 on error, -2 if a non-aimee hook is present. */
+static int write_reindex_hook(const char *hooks_dir, const char *hook_name, const char *qname,
+                              const char *qroot, int is_checkout)
+{
+   char hook_path[MAX_PATH_LEN];
+   snprintf(hook_path, sizeof(hook_path), "%s/%s", hooks_dir, hook_name);
+
+   struct stat st;
+   if (stat(hook_path, &st) == 0)
+   {
+      FILE *fc = fopen(hook_path, "r");
+      if (fc)
+      {
+         char buf[256];
+         int ours = 0;
+         while (fgets(buf, sizeof(buf), fc))
+            if (strstr(buf, "installed by aimee"))
+            {
+               ours = 1;
+               break;
+            }
+         fclose(fc);
+         if (!ours)
+            return -2; /* a foreign hook — don't clobber it */
+      }
+   }
+
+   /* O_NOFOLLOW: refuse to write THROUGH a symlinked hook (defense-in-depth against a
+    * planted symlink redirecting the write outside the repo). */
+   int fd = open(hook_path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0755);
+   if (fd < 0)
+      return -1;
+   FILE *f = fdopen(fd, "w");
+   if (!f)
+   {
+      close(fd);
+      return -1;
+   }
+   fprintf(f, "#!/bin/sh\n");
+   fprintf(f, "# %s hook -- installed by aimee (live code-graph reindex)\n", hook_name);
+   fprintf(f, "# Re-index this project when the default branch advances; the scan no-ops\n");
+   fprintf(f, "# cheaply when the branch SHA is unchanged. Backgrounded so it never blocks.\n");
+   if (is_checkout)
+      fprintf(f, "[ \"$3\" = \"1\" ] || exit 0\n"); /* post-checkout: branch switch only */
+   fprintf(f, "if command -v aimee >/dev/null 2>&1; then\n");
+   fprintf(f, "    aimee index scan %s %s >/dev/null 2>&1 &\n", qname, qroot);
+   fprintf(f, "fi\n");
+   fclose(f);
+
+   chmod(hook_path, 0755);
+   return 0;
+}
+
+/* §6 live: install `post-merge` + `post-checkout` git hooks in `project_root` that
+ * re-index `project_name` when a merge/pull or branch switch advances the default branch.
+ * Each backgrounds `aimee index scan` (so it never blocks git); the §6 SHA gate makes that
+ * a cheap no-op unless the canonical code actually moved. Idempotent + non-clobbering: an
+ * existing aimee hook is overwritten, a foreign hook is left alone. Returns 0 on success,
+ * -1 on error (not a git repo, unwritable), -2 if a non-aimee hook is present. */
 int code_index_install_branch_hook(const char *project_root, const char *project_name)
 {
    if (!project_root || !project_root[0] || !project_name || !project_name[0])
@@ -322,56 +379,18 @@ int code_index_install_branch_hook(const char *project_root, const char *project
    if (mkdir(hooks_dir, 0755) != 0 && errno != EEXIST)
       return -1;
 
-   char hook_path[MAX_PATH_LEN];
-   snprintf(hook_path, sizeof(hook_path), "%s/post-merge", hooks_dir);
-
-   struct stat st;
-   if (stat(hook_path, &st) == 0)
-   {
-      FILE *fc = fopen(hook_path, "r");
-      if (fc)
-      {
-         char buf[256];
-         int ours = 0;
-         while (fgets(buf, sizeof(buf), fc))
-            if (strstr(buf, "installed by aimee"))
-            {
-               ours = 1;
-               break;
-            }
-         fclose(fc);
-         if (!ours)
-            return -2; /* a foreign post-merge hook — don't clobber it */
-      }
-   }
-
    char qname[1024], qroot[MAX_PATH_LEN + 16];
    if (shquote(project_name, qname, sizeof(qname)) != 0 ||
        shquote(project_root, qroot, sizeof(qroot)) != 0)
       return -1;
 
-   /* O_NOFOLLOW: refuse to write THROUGH a symlinked post-merge (defense-in-depth
-    * against a planted symlink redirecting the write outside the repo). */
-   int fd = open(hook_path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0755);
-   if (fd < 0)
+   int rc_merge = write_reindex_hook(hooks_dir, "post-merge", qname, qroot, 0);
+   int rc_checkout = write_reindex_hook(hooks_dir, "post-checkout", qname, qroot, 1);
+   /* Report a foreign hook (the other may still have installed); else any error. */
+   if (rc_merge == -2 || rc_checkout == -2)
+      return -2;
+   if (rc_merge != 0 || rc_checkout != 0)
       return -1;
-   FILE *f = fdopen(fd, "w");
-   if (!f)
-   {
-      close(fd);
-      return -1;
-   }
-   fprintf(f, "#!/bin/sh\n");
-   fprintf(f, "# post-merge hook -- installed by aimee (live code-graph reindex)\n");
-   fprintf(f, "# Re-index this project after a merge/pull advances the default branch; the\n");
-   fprintf(f, "# scan no-ops cheaply when the branch SHA is unchanged. Backgrounded so it\n");
-   fprintf(f, "# never blocks the merge.\n");
-   fprintf(f, "if command -v aimee >/dev/null 2>&1; then\n");
-   fprintf(f, "    aimee index scan %s %s >/dev/null 2>&1 &\n", qname, qroot);
-   fprintf(f, "fi\n");
-   fclose(f);
-
-   chmod(hook_path, 0755);
    return 0;
 }
 

@@ -14,6 +14,7 @@
 #include "cli_profile.h"
 #include "client_constants.h"
 #include "client_integrations.h"
+#include "code_collect.h" /* code_index_install_branch_hook (index watch) */
 #include "delegate_plan.h"
 #include "cli_tui.h"
 #include "platform.h"
@@ -1445,6 +1446,43 @@ static int cli_claude_proxy(int argc, char **argv)
    return 0;
 }
 
+#ifdef AIMEE_POSIX
+/* `aimee index watch <name> <root>`: a client-LOCAL command (no /v1 route) that installs
+ * git post-merge + post-checkout hooks so the project re-indexes itself when its default
+ * branch advances. The repo + the dev's git live on this host, so the install must happen
+ * client-side; the hooks invoke `aimee index scan` (which does route to the server).
+ * POSIX-only — code_index_install_branch_hook (git hooks) is not built on Windows. */
+static int cli_index_watch(int argc, char **argv, int json_output)
+{
+   if (argc < 2)
+   {
+      fprintf(stderr, "usage: aimee index watch <name> <root>\n"
+                      "  Install post-merge + post-checkout git hooks that re-index the\n"
+                      "  project whenever a merge/pull or branch switch advances the default\n"
+                      "  branch (the scan no-ops cheaply when the branch SHA is unchanged).\n");
+      return 1;
+   }
+   const char *name = argv[0], *root = argv[1];
+   int rc = code_index_install_branch_hook(root, name);
+   if (json_output)
+   {
+      printf("{\"status\":\"%s\"}\n", rc == 0 ? "ok" : "error");
+      return rc == 0 ? 0 : 1;
+   }
+   if (rc == 0)
+      printf("==> Installed git hooks (post-merge, post-checkout) — '%s' re-indexes when %s's "
+             "default branch advances\n",
+             name, root);
+   else if (rc == -2)
+      fprintf(stderr, "aimee: a non-aimee git hook is already present in %s — left untouched\n",
+              root);
+   else
+      fprintf(stderr, "aimee: could not install git hooks in %s (not a git repo or unwritable)\n",
+              root);
+   return rc == 0 ? 0 : 1;
+}
+#endif /* AIMEE_POSIX */
+
 int main(int argc, char **argv)
 {
    /* Ignore SIGPIPE so write() to a dead aimee-server socket returns EPIPE
@@ -1774,6 +1812,13 @@ int main(int argc, char **argv)
     * not a single forwarded /v1 call, so it is driven here rather than via a route. */
    if (strcmp(cmd, "workspace") == 0 && sub_argc >= 1 && strcmp(sub_argv[0], "serve") == 0)
       return cmd_workspace_serve(sub_argc >= 2 ? sub_argv[1] : NULL);
+
+#ifdef AIMEE_POSIX
+   /* `index watch` installs git hooks on the LOCAL repo — a filesystem op with no server
+    * round-trip, so it is handled client-side before the /v1 routing (POSIX-only). */
+   if (strcmp(cmd, "index") == 0 && sub_argc >= 1 && strcmp(sub_argv[0], "watch") == 0)
+      return cli_index_watch(sub_argc - 1, sub_argv + 1, json_output);
+#endif
 
    /* Thin-client workspace push: against a remote (tcp) server the workspace
     * root lives on THIS host, which the server cannot read. Resolve + register +
