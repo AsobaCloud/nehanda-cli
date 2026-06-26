@@ -1275,7 +1275,6 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
       }
       return 200;
    }
-
    if (strcmp(path, "/v1/code/find") == 0)
       return handle_get_code_find_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/code/projects") == 0)
@@ -1302,9 +1301,7 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
       return handle_get_pdf_neighbors_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/pdf/structure") == 0)
       return handle_get_pdf_structure_route(method, query_string, out_buf, out_cap);
-   /* POST /v1/pdf/quarantine — §6 owner action to release/purge a pending restricted PDF.
-    * Owner-only: a scoped bearer cannot transition a document's access state (the auth is
-    * checked here where the verified scope `vr` lives; the handler does body + state work). */
+   /* POST /v1/pdf/quarantine: owner-only release/purge; auth checked here (scope vr lives here). */
    if (strcmp(path, "/v1/pdf/quarantine") == 0)
    {
       if (vr.scope_kind[0])
