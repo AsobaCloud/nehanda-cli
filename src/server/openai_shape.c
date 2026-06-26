@@ -381,8 +381,21 @@ int openai_parse_responses_to_chat(const char *body, char *model, size_t model_n
    }
 
    const cJSON *input = cJSON_GetObjectItemCaseSensitive(root, "input");
+   /* The Responses API allows `input` to be a bare string (shorthand for a single
+    * user message) OR an array of items. cJSON_ArrayForEach below is a no-op on a
+    * string, so without this branch a string `input` yields an empty messages
+    * array and the provider rejects the turn with HTTP 400. Require a non-empty
+    * string (an empty one carries no turn content — leave messages empty as
+    * before). */
+   if (cJSON_IsString(input) && input->valuestring && input->valuestring[0])
+   {
+      cJSON *m = cJSON_CreateObject();
+      cJSON_AddStringToObject(m, "role", "user");
+      cJSON_AddStringToObject(m, "content", input->valuestring);
+      cJSON_AddItemToArray(messages, m);
+   }
    const cJSON *item;
-   cJSON_ArrayForEach(item, input)
+   cJSON_ArrayForEach(item, input) /* no-op when `input` is the string handled above */
    {
       if (cJSON_IsString(item))
       {
