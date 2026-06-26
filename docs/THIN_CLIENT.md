@@ -117,9 +117,15 @@ If an older client left keys in `~/.config/aimee/agent-keys.json`, move them int
 the vault:
 
 ```sh
-aimee agent key import            # vault each leftover key (preview with --dry-run)
-aimee agent key import --scrub     # …and delete each from agent-keys.json once vaulted
+aimee agent key import --dry-run   # preview what would be vaulted; changes nothing
+aimee agent key import             # vault each leftover key AND scrub it from the
+                                   # plaintext agent-keys.json (scrub is the default)
+aimee agent key import --keep      # vault but retain the local plaintext copy
 ```
+
+Keys belong only in the encrypted server vault, so `import` deletes each plaintext
+entry once its vault store is confirmed. Pass `--keep` only if you deliberately want
+an offline plaintext backup.
 
 This is the **only** remaining use of `agent-keys.json`; new keys go straight to
 the vault. Run it on the server host over the Unix socket, or from a connection
