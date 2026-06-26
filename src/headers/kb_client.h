@@ -1092,6 +1092,16 @@ char *kb_client_pdf_open_neighbors(const char *project, long long chunk_id, int 
 char *kb_client_pdf_inspect_structure(const char *project, const char *document_key,
                                       int *status_out);
 
+/* Code-graph retrieval + analytics routes (see kb_client_code_graph.c). Forward
+ * the route's JSON body verbatim (nested fused/ranked shapes the agent consumes
+ * directly); return the malloc'd JSON (caller frees) or NULL, with *status_out
+ * carrying the HTTP status. /v1/code/hybrid fuses code+graph+memory (query
+ * required, symbol/project optional); /v1/code/graph/hubs ranks a project's
+ * most-connected symbols (project required). */
+char *kb_client_code_hybrid(const char *query, const char *symbol, const char *project,
+                            int max_results, int *status_out);
+char *kb_client_code_graph_hubs(const char *project, int max_results, int *status_out);
+
 /* Counts of indexed files / definition-kind terms for one project.
  * Uses /v1 over remote HTTP or local UDS.
  * Returns 0 on success and writes to the out pointers (either may be NULL),
