@@ -182,6 +182,10 @@ int pgvec_code_delete(int64_t point_id);
 int pgvec_code_delete_project(const char *project);
 int pgvec_code_search(const char *project, const float *vec, int dim, int limit, int64_t *ids,
                       double *scores, int max);
+/* Like pgvec_code_search but returns file paths (flat buffer of `max` slots of
+ * `path_cap` bytes) for the §5 hybrid file-path-space fusion. <0 on error. */
+int pgvec_code_search_paths(const char *project, const float *vec, int dim, int limit, char *paths,
+                            int path_cap, double *scores, int max);
 /* Returns 1 if a code_embeddings row with (project, node_key, content_hash,
  * body_hash) exists. body_hash may be blank for legacy callers. */
 int pgvec_code_exists_by_hash(const char *project, const char *node_key, const char *content_hash,

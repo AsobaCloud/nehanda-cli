@@ -71,6 +71,42 @@ int canonical_index_find_callers(const char *project, const char *symbol, void *
    return 1;
 }
 
+/* Vector-leg stubs (§5): the query embedder + pgvec code search. OFF by default
+ * (g_vec_enabled=0 -> memory_embed_text returns 0 -> the leg is skipped), so the
+ * existing hybrid tests are unaffected; test_code_hybrid_vector_ok flips it on. */
+static int g_vec_enabled = 0;
+int memory_embed_text(const char *text, const char *command, float *out, int max_dim)
+{
+   (void)text;
+   (void)command;
+   if (!g_vec_enabled || !out || max_dim <= 0)
+      return 0;
+   int d = 2560; /* the stub embedder's FIXED output dim (independent of the corpus
+                  * dim) so the route's qdim==db2_embedding_dim() gate can mismatch. */
+   if (d > max_dim)
+      return 0;
+   for (int i = 0; i < d; i++)
+      out[i] = 0.01f * (float)(i % 7);
+   return d;
+}
+int pgvec_code_search_paths(const char *project, const float *vec, int dim, int limit, char *paths,
+                            int path_cap, double *scores, int max)
+{
+   (void)project;
+   (void)vec;
+   (void)dim;
+   (void)limit;
+   if (!g_vec_enabled || !paths || path_cap <= 0 || !scores || max < 2)
+      return 0;
+   /* Two hits: src/search.c OVERLAPS the lexical leg (-> 2-signal consensus) and
+    * src/semantic.c is vector-only (a file the lexical+graph legs would miss). */
+   snprintf(paths + 0 * path_cap, (size_t)path_cap, "src/search.c");
+   scores[0] = 0.91;
+   snprintf(paths + 1 * path_cap, (size_t)path_cap, "src/semantic.c");
+   scores[1] = 0.88;
+   return 2;
+}
+
 /* Mirror of code_projection_edge_t (db2/code_projection.h) so the stub writes
  * fields at the offsets the handler reads; cast a void* rather than include the
  * db2 header (same pattern as the canonical_index stubs). */
@@ -208,6 +244,43 @@ static void test_code_hybrid_no_symbol(void)
    assert(strstr(buf, "\"file_path\":\"src/search.c\"") != NULL);
    assert(strstr(buf, "\"file_path\":\"src/caller.c\"") == NULL); /* no graph leg */
    assert(strstr(buf, "why needle exists") != NULL);
+}
+
+/* §5 vector leg: with a dim-matched embedder it fuses as a 3rd signal — a
+ * vector-only file surfaces (labeled "vector" + score) and a file that BOTH the
+ * lexical and vector legs return fuses to a 2-signal consensus row. */
+static void test_code_hybrid_vector_ok(void)
+{
+   g_test_embedding_dim = 2560; /* matches the embed stub's returned dim */
+   g_vec_enabled = 1;
+   char buf[4096];
+   int s = kb_http_route_ex("GET", "/v1/code/hybrid",
+                            "query=needle&symbol=target_fn&project=proj-alpha&max_results=10", NULL,
+                            NULL, NULL, 0, buf, sizeof(buf));
+   g_vec_enabled = 0;
+   g_test_embedding_dim = 1024;
+   assert(s == 200);
+   /* The vector-only file appears, labeled and carrying its vector score. */
+   assert(strstr(buf, "\"file_path\":\"src/semantic.c\"") != NULL);
+   assert(strstr(buf, "\"vector\"") != NULL);
+   assert(strstr(buf, "\"vector_score\"") != NULL);
+   /* src/search.c was returned by BOTH the lexical and vector legs -> consensus. */
+   assert(strstr(buf, "\"signals\":[\"code\",\"vector\"]") != NULL);
+}
+
+/* The dim gate: a wrong-dim embedder (output != corpus dim) disables the leg, so
+ * the vector-only file never appears and the route degrades to code+graph. */
+static void test_code_hybrid_vector_dim_mismatch_skips(void)
+{
+   g_test_embedding_dim = 1024; /* corpus dim != the stub's 2560 output */
+   g_vec_enabled = 1;
+   char buf[4096];
+   int s = kb_http_route_ex("GET", "/v1/code/hybrid", "query=needle&project=proj-alpha", NULL, NULL,
+                            NULL, 0, buf, sizeof(buf));
+   g_vec_enabled = 0;
+   assert(s == 200);
+   assert(strstr(buf, "\"file_path\":\"src/search.c\"") != NULL);    /* lexical still works */
+   assert(strstr(buf, "\"file_path\":\"src/semantic.c\"") == NULL); /* vector leg skipped */
 }
 
 static void test_code_project_stats_missing_project(void)

@@ -35,6 +35,7 @@ Structured options (arrays, nested objects — e.g. `ensemble.reference_models`)
 | `code_hybrid_rrf_k` | float | Reciprocal Rank Fusion rank constant k for /v1/code/hybrid (default 60). |
 | `code_hybrid_weight_code` | float | RRF weight for the lexical-code signal in /v1/code/hybrid (default 1.0; <=0 disables it). |
 | `code_hybrid_weight_graph` | float | RRF weight for the structural call-graph signal in /v1/code/hybrid (default 1.0; <=0 disables it). |
+| `code_hybrid_weight_vector` | float | RRF weight for the embedding-similarity signal in /v1/code/hybrid (default 1.0; <=0 disables it; auto-skips when no dim-matched embedder). |
 | `code_span_max_lines` | int | Max line span the code_span_get recovery resolver returns per call (default 400). |
 | `cost_reward_enabled` | bool | Factor token cost into the reward signal. |
 | `cost_reward_lambda_pct` | int | Cost-penalty weight (percent) in the reward. |
