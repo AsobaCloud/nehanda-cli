@@ -8,6 +8,7 @@
 #include "aimee_home.h"
 #include "cJSON.h"
 #include "guardrails_internal.h"
+#include "guardrails_blast_radius.h"
 #include "headers/git_verify.h"
 #include "kb_client.h"
 #include "log.h"
@@ -471,40 +472,25 @@ classification_t classify_path(const char *file_path)
       return result;
    }
 
-   /* Check blast radius via index */
-
+   /* Check blast radius via the structural code index (shared resolver — also
+    * used by the §7 blast-radius advisory; see guardrails_blast_radius.c). */
    {
       blast_radius_t br;
-      memset(&br, 0, sizeof(br));
-      /* Try to find what project this file belongs to */
-      project_info_t projects[32];
-      int pcount = kb_client_index_list(projects, 32);
-      for (int p = 0; p < pcount; p++)
+      if (guardrails_blast_radius_for_abs_path(file_path, &br) == 0)
       {
-         /* Check if file_path starts with project root (with boundary check) */
-         size_t rlen = strlen(projects[p].root);
-         if (strncmp(file_path, projects[p].root, rlen) == 0 &&
-             (file_path[rlen] == '/' || file_path[rlen] == '\0'))
+         if (br.dependent_count >= 5)
          {
-            const char *rel = file_path + rlen;
-            if (*rel == '/')
-               rel++;
-            kb_client_index_blast_radius(projects[p].name, rel, &br);
-            if (br.dependent_count >= 5)
-            {
-               result.severity = SEV_RED;
-               snprintf(result.reason, sizeof(result.reason), "High blast radius: %d dependents",
-                        br.dependent_count);
-               return result;
-            }
-            if (br.dependent_count >= 1)
-            {
-               result.severity = SEV_YELLOW;
-               snprintf(result.reason, sizeof(result.reason),
-                        "Moderate blast radius: %d dependents", br.dependent_count);
-               return result;
-            }
-            break;
+            result.severity = SEV_RED;
+            snprintf(result.reason, sizeof(result.reason), "High blast radius: %d dependents",
+                     br.dependent_count);
+            return result;
+         }
+         if (br.dependent_count >= 1)
+         {
+            result.severity = SEV_YELLOW;
+            snprintf(result.reason, sizeof(result.reason), "Moderate blast radius: %d dependents",
+                     br.dependent_count);
+            return result;
          }
       }
    }

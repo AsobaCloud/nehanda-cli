@@ -1023,6 +1023,10 @@ typedef struct config
    double guardrails_semantic_prompt_threshold;
    double guardrails_semantic_block_threshold;
    int guardrails_semantic_allow_ml_only_block;
+   /* §7 code-graph actuation: surface a structural blast-radius advisory (the
+    * graph-impacted dependent files) before an edit. Advisory + fail-open;
+    * default off (opt-in). See docs/proposals/pending/code-graph-intelligence.md §7. */
+   int guardrails_blast_radius_advisory_enabled;
 
    /* aimee-kb public HTTP API (kb.api.*).
     * kb_api_http_port: TCP port for the /v1/... REST API (0 = disabled, default).

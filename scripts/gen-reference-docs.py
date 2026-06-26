@@ -132,6 +132,7 @@ CFG_KEY_DESC = {
     "fidelity_check_enabled": "Run the answer-fidelity judge on terminal-text turns "
     "(default off; requires kb_evidence_emit_enabled + ingress_preinject_enabled).",
     "guardrail_mode": "Guardrail enforcement mode (off / warn / block).",
+    "guardrails_blast_radius_advisory_enabled": "Surface a structural blast-radius advisory (graph-impacted files) before an edit (advisory, fail-open).",
     "guardrails_semantic_allow_ml_only_block": "Allow blocking on the ML classifier alone.",
     "guardrails_semantic_block_threshold": "Semantic score threshold to block.",
     "guardrails_semantic_command": "External semantic-guardrail classifier command.",
