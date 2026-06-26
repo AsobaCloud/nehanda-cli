@@ -11,6 +11,7 @@
 #include "memory.h"
 #include "kb/kb_rrf.h"
 #include "kb/kb_graph_analytics.h"
+#include "kb/kb_service_graph.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -909,6 +910,147 @@ int handle_get_code_graph_hubs(const char *query_string, char *out_buf, int out_
    free(gedges);
    free(hubs);
    return status;
+}
+
+/* GET /v1/code/graph?project=<proj>&node=<node>&max_results=N
+ * Read-only node-neighborhood projection (proposal §8): the incident projection
+ * edges of `node` — its callers/callees/containers/etc — each with the relation,
+ * direction (out = node→neighbor, in = neighbor→node, self = recursive edge),
+ * structural-trust weight, and the §3 provenance tag. Backs the webchat graph
+ * view; not on the agent hot path. Reuses db2_code_projection_list_edges (the
+ * published generation's edges, capped at HUBS_MAX_EDGES) and
+ * kb_graph_edge_provenance. Emits `neighbor_count` (rows returned), `match_count`
+ * (total incident, pre-cap), and `truncated` (page cap hit OR scan window full). */
+int handle_get_code_graph(const char *query_string, char *out_buf, int out_cap)
+{
+   char project[256] = "";
+   char node[512] = "";
+   if (!code_qparam(query_string, "project", project, sizeof(project)) || !project[0])
+      return code_scan_write_error(out_buf, out_cap, "missing project");
+   if (!code_qparam(query_string, "node", node, sizeof(node)) || !node[0])
+      return code_scan_write_error(out_buf, out_cap, "missing node");
+
+   int max_r = 50;
+   char mr[16] = "";
+   if (code_qparam(query_string, "max_results", mr, sizeof(mr)))
+      max_r = atoi(mr);
+   if (max_r < 1)
+      max_r = 1;
+   if (max_r > 200)
+      max_r = 200;
+
+   if (!db2_is_initialized())
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"knowledge service not initialized\"}");
+      return 503;
+   }
+
+   code_projection_edge_t *edges = calloc(HUBS_MAX_EDGES, sizeof(*edges));
+   if (!edges)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+
+   int ne = db2_code_projection_list_edges(project, edges, HUBS_MAX_EDGES);
+   if (ne < 0)
+   {
+      free(edges);
+      snprintf(out_buf, (size_t)out_cap,
+               "{\"error\":\"projection graph unavailable (knowledge service not initialized)\"}");
+      return 503;
+   }
+
+   cJSON *resp = cJSON_CreateObject();
+   if (!resp)
+   {
+      free(edges);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+   cJSON_AddStringToObject(resp, "status", "ok");
+   cJSON_AddStringToObject(resp, "project", project);
+   cJSON_AddStringToObject(resp, "node", node);
+   cJSON *arr = cJSON_AddArrayToObject(resp, "neighbors");
+   int emitted = 0; /* edges actually written to the array (after the max_r cap) */
+   int matched = 0; /* edges incident to `node`, counted before the cap */
+   /* Scan the whole edge window so `matched` reflects the node's true incident
+    * count even once `emitted` has hit max_r; that lets `truncated` distinguish a
+    * page cap from a complete neighborhood. */
+   for (int i = 0; i < ne; i++)
+   {
+      const char *dir = NULL, *neighbor = NULL;
+      int is_source = edges[i].source[0] && strcmp(edges[i].source, node) == 0;
+      int is_target = edges[i].target[0] && strcmp(edges[i].target, node) == 0;
+      if (is_source && is_target)
+      {
+         dir = "self"; /* recursive / self-referential edge (e.g. a self-call) */
+         neighbor = node;
+      }
+      else if (is_source)
+      {
+         dir = "out"; /* node --relation--> neighbor */
+         neighbor = edges[i].target;
+      }
+      else if (is_target)
+      {
+         dir = "in"; /* neighbor --relation--> node (e.g. callers) */
+         neighbor = edges[i].source;
+      }
+      if (!dir || !neighbor || !neighbor[0])
+         continue;
+      matched++;
+      if (!arr || emitted >= max_r)
+         continue; /* counted toward `matched`/truncation, but past the page cap */
+      cJSON *n = cJSON_CreateObject();
+      if (!n)
+         continue;
+      cJSON_AddStringToObject(n, "neighbor", neighbor);
+      cJSON_AddStringToObject(n, "relation", edges[i].relation);
+      cJSON_AddStringToObject(n, "direction", dir);
+      cJSON_AddNumberToObject(n, "structural_weight", edges[i].structural_weight);
+      cJSON_AddStringToObject(
+          n, "provenance", kb_graph_edge_provenance("code_projection", edges[i].structural_weight));
+      cJSON_AddItemToArray(arr, n);
+      emitted++;
+   }
+   cJSON_AddNumberToObject(resp, "neighbor_count", emitted);
+   cJSON_AddNumberToObject(resp, "match_count", matched);
+   /* Two independent truncation sources: the per-request page cap (matched > emitted)
+    * and the projection scan window — a full edge buffer (ne >= HUBS_MAX_EDGES) means
+    * the scan covered only a deterministic prefix, so even `matched` may undercount. */
+   cJSON_AddBoolToObject(resp, "truncated", matched > emitted || ne >= HUBS_MAX_EDGES);
+   free(edges);
+
+   char *s = cJSON_PrintUnformatted(resp);
+   int status = 200;
+   if (!s)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      status = 500;
+   }
+   else if (strlen(s) >= (size_t)out_cap)
+   {
+      snprintf(
+          out_buf, (size_t)out_cap,
+          "{\"error\":\"result too large; reduce max_results\",\"code\":\"result_too_large\"}");
+      status = 413;
+   }
+   else
+   {
+      snprintf(out_buf, (size_t)out_cap, "%s", s);
+   }
+   free(s);
+   cJSON_Delete(resp);
+   return status;
+}
+
+int handle_get_code_graph_route(const char *method, const char *query_string, char *out_buf,
+                                int out_cap)
+{
+   if (strcmp(method, "GET") != 0)
+      return code_method_not_allowed(out_buf, out_cap);
+   return handle_get_code_graph(query_string, out_buf, out_cap);
 }
 
 int handle_get_code_graph_hubs_route(const char *method, const char *query_string, char *out_buf,

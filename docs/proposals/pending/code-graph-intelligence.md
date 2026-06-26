@@ -1,9 +1,10 @@
 # Proposal: Code-graph intelligence — a living, embedded, reasoning graph over code
 
-- **State:** IN PROGRESS — §0.5/§1/§3/§4/§5/§7 implemented (on the `testing` branch);
-  including the §5 code+graph+vector hybrid and §7 graph-informed delegation;
-  remainder (§2 tree-sitter, §4 surprising-links, §6 live fusion,
-  §8 webchat viz) still open, as build-/integration-/frontend-tier work. See the
+- **State:** IN PROGRESS — §0.5/§1/§3/§4/§5/§7 implemented (on the `testing` branch),
+  including the §5 code+graph+vector hybrid, §7 graph-informed delegation, the §4
+  surprising-links distance+selection core, and the §8 read-only `/v1/code/graph`
+  backend route; remainder (§2 tree-sitter, §4 surprising-links route, §6 live fusion,
+  §8 webchat frontend) still open, as build-/integration-/frontend-tier work. See the
   "Implementation status" section below.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
   built without a manual step, (b) parsed broadly, (c) ranked by **graph structure
@@ -153,6 +154,17 @@ Computed over `code_projection_edges` + embeddings, served read-only:
     spot-check) and the feature **self-suppresses** if sampled precision drops below a
     floor. Only computable because aimee has vectors.
 
+  **Status — distance + selection core shipped.** Two pure analytics primitives
+  back the precise definition above: `kb_graph_shortest_hops` (undirected BFS over
+  `code_projection_edges`, capped at `KB_GRAPH_BFS_MAX_NODES`, returns hop count /
+  0 / -1-for-disconnected) and `kb_graph_surprising` (a **data-driven** cosine floor
+  at the requested similarity percentile of the supplied pair set, then keeps pairs
+  whose hop distance ≥ `d_min` **or** which are disconnected, in deterministic order)
+  in `src/kb/kb_graph_analytics.c`, unit-tested in `unit-test-kb-graph-analytics`.
+  Still open (needs the embedder + a deployed corpus): the route that gathers
+  candidate pairs from `code_embeddings` via pgvector, maps vector rows back to graph
+  node identity, and runs the LLM-judge/precision-sampling confirmation stage.
+
 ## §5 Hybrid graph+vector+memory retrieval (the headline)
 
 A single ranked query that fuses three signals:
@@ -254,6 +266,17 @@ symbol → callers/callees/neighbors + provenance + the linked "why". Backed by 
 read-only `/v1/code/graph` projection (paged). Human-facing exploration; not on the
 agent's hot path.
 
+**Status — backend route shipped.** `GET /v1/code/graph?project&node&max_results`
+returns a node's incident projection edges — each with `neighbor`, `relation`,
+`direction` (`out` = node→neighbor, `in` = neighbor→node, `self` = recursive edge),
+`structural_weight`, and the §3 `provenance` tag — plus `match_count` (total incident,
+pre-cap) and a `truncated` flag that fires when **either** the page cap (`max_results`,
+1–200) **or** the projection scan window (`HUBS_MAX_EDGES`) bounds the result. Reuses
+`db2_code_projection_list_edges` + `kb_graph_edge_provenance` (`handle_get_code_graph`
+in `src/kb/http/kb_http_code.c`); read-only, off the agent hot path. Shim route tests
+(`test_code_graph_node_*`: out/in neighbors, page-cap truncation, self-loop). The
+webchat **frontend** consumer remains open.
+
 ## Phasing (each independently shippable)
 
 - **P1 (now):** §1 auto-build + §3 provenance. Mostly wiring; makes the graph complete.
@@ -270,7 +293,9 @@ agent's hot path.
 - **§3** edge provenance (`structural`/`inferred`/`ambiguous`) surfaced in `graph.explain`.
 - **§4** hub/degree-centrality analytics — `GET /v1/code/graph/hubs`
   (`kb_graph_analytics.c`, `unit-test-kb-graph-analytics`), **agent-callable** via
-  `index({command:"hubs"})`.
+  `index({command:"hubs"})`; plus the **surprising-links distance + selection core**
+  (`kb_graph_shortest_hops` BFS + data-driven-percentile `kb_graph_surprising`, same
+  unit test).
 - **§5** RRF fusion core (`kb_rrf.c`, `unit-test-kb-rrf`) + the `GET /v1/code/hybrid`
   route fusing `code` + `graph` + **`vector`** (embedding similarity over
   `code_embeddings` via `pgvec_code_search_paths`, gated on a dim-matched embedder,
@@ -283,13 +308,20 @@ agent's hot path.
   (`guardrails_blast_radius.c`, `delegate_inject_graph_context`,
   `unit-test-guardrails-blast-radius`, `test_delegate_dispatch_reliability`); folds in
   the stale-edge hub note.
+- **§8** read-only node-projection route — `GET /v1/code/graph?project&node&max_results`
+  returns a node's incident edges (relation / direction incl. `self` / structural weight /
+  §3 provenance) with `match_count` + a page-or-scan `truncated` flag
+  (`handle_get_code_graph`, `test_code_graph_node_*`). Backs the webchat graph view.
 
 **Deferred — needs the embedder / a build-tier dependency / a deployed corpus / a frontend
 (not completable in the agent host):**
 - **§2 tree-sitter** front-end — large build-tier work (vendor ~30 grammars + ABI).
-- **§4 surprising-links** — needs embeddings + the percentile/LLM-judge confirmation stage.
+- **§4 surprising-links route** — core (BFS distance + percentile selection) shipped;
+  the pgvector pair-gather + node-identity mapping + LLM-judge confirmation stage needs
+  embeddings and a deployed corpus.
 - **§6 live/memory fusion** — post-merge/fetch incremental hook + watch.
-- **§8 webchat visualization** — frontend, read-only `/v1/code/graph` paged projection.
+- **§8 webchat visualization** — the **frontend** consumer; the read-only `/v1/code/graph`
+  backend route is shipped (above).
 
 ## Non-goals
 

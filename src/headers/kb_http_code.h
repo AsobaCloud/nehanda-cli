@@ -30,5 +30,8 @@ int handle_get_code_hybrid_route(const char *method, const char *query_string, c
 int handle_get_code_graph_hubs(const char *query_string, char *out_buf, int out_cap);
 int handle_get_code_graph_hubs_route(const char *method, const char *query_string, char *out_buf,
                                      int out_cap);
+int handle_get_code_graph(const char *query_string, char *out_buf, int out_cap);
+int handle_get_code_graph_route(const char *method, const char *query_string, char *out_buf,
+                                int out_cap);
 
 #endif
