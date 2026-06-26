@@ -1368,6 +1368,10 @@ $(OBJDIR)/code_treesitter.o: C_FLAGS += -DAIMEE_TREESITTER -Ivendor/tree-sitter/
 $(TESTPREFIX)/unit-test-code-treesitter: $(OBJDIR)/tests/test_code_treesitter.o \
                                          $(OBJDIR)/code_treesitter.o \
                                          $(OBJDIR)/vendor/ts_runtime.o $(OBJDIR)/vendor/ts_c.o \
+                                         $(OBJDIR)/vendor/ts_python.o $(OBJDIR)/vendor/ts_python_scan.o \
+                                         $(OBJDIR)/vendor/ts_go.o \
+                                         $(OBJDIR)/vendor/ts_javascript.o $(OBJDIR)/vendor/ts_javascript_scan.o \
+                                         $(OBJDIR)/vendor/ts_rust.o $(OBJDIR)/vendor/ts_rust_scan.o \
                                          $(PLATFORM_BASIC_OBJS)
 	$(TESTLINK) -o $@ $^ $(L_CORE)
 endif
