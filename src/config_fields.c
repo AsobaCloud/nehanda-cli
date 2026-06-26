@@ -132,6 +132,8 @@ const config_field_t config_fields[] = {
     {"code_hybrid_weight_memory", offsetof(config_t, code_hybrid_weight_memory), sizeof(double), 0,
      CFG_FLOAT},
     {"code_hybrid_rrf_k", offsetof(config_t, code_hybrid_rrf_k), sizeof(double), 0, CFG_FLOAT},
+    {"code_surprising_precision_floor", offsetof(config_t, code_surprising_precision_floor),
+     sizeof(double), 0, CFG_FLOAT},
     {"memory_semantic_weight", offsetof(config_t, memory_semantic_weight), sizeof(double), 0,
      CFG_FLOAT},
     {"memory_semantic_floor_scale", offsetof(config_t, memory_semantic_floor_scale), sizeof(double),

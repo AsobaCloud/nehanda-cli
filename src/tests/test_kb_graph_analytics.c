@@ -168,9 +168,30 @@ static void test_surprising_bad_args(void)
    printf("  test_surprising_bad_args: ok\n");
 }
 
+/* §4 precision self-suppress gate: suppress only with enough samples AND a precision
+ * below the (enabled) floor. */
+static void test_precision_suppress(void)
+{
+   /* floor disabled (<=0) -> never suppress. */
+   assert(kb_surprising_precision_suppress(100, 0, 20, 0.0) == 0);
+   assert(kb_surprising_precision_suppress(100, 0, 20, -1.0) == 0);
+   /* too few samples -> not yet. */
+   assert(kb_surprising_precision_suppress(5, 0, 20, 0.1) == 0);
+   /* enough samples + precision below floor -> suppress. */
+   assert(kb_surprising_precision_suppress(100, 5, 20, 0.10) == 1); /* 5% < 10% */
+   /* precision at/above floor -> don't suppress. */
+   assert(kb_surprising_precision_suppress(100, 10, 20, 0.10) == 0); /* exactly 10% */
+   assert(kb_surprising_precision_suppress(100, 50, 20, 0.10) == 0);
+   /* clamps: confirmed>judged or negative don't break it. */
+   assert(kb_surprising_precision_suppress(100, 200, 20, 0.10) == 0); /* clamped to 100% */
+   assert(kb_surprising_precision_suppress(100, -3, 20, 0.10) == 1);  /* clamped to 0% */
+   printf("  test_precision_suppress: ok\n");
+}
+
 int main(void)
 {
    printf("test_kb_graph_analytics:\n");
+   test_precision_suppress();
    test_hub_ranking();
    test_deterministic_tiebreak();
    test_self_loop();
