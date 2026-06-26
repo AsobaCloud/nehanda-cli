@@ -5,8 +5,8 @@
   delegation, the §4 surprising-links route + its LLM-judge relevance gate, and the §8
   read-only `/v1/code/graph` backend route + the §8 webchat Graph view, and the §6
   live updates (memory-fusion leg + default-branch change-detection gate + post-merge
-  reindex hook); remainder (§2 tree-sitter, the §4 precision self-suppress monitor, and
-  an optional §6 fanotify watch) still open, as build-/telemetry-tier work. See the
+  reindex hook) + the §4 precision self-suppress; remainder is **§2 tree-sitter** (the
+  one build-tier item) and an optional §6 fanotify watch. See the
   "Implementation status" section below.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
   built without a manual step, (b) parsed broadly, (c) ranked by **graph structure
@@ -358,7 +358,11 @@ all three are reachable from the frontend over the trusted UDS hop).
   containment hub excluded** (`handle_get_code_graph_surprising`,
   `test_code_graph_surprising_*`), with an opt-in **LLM-judge relevance gate**
   (`judge=true` → shared-symbol cross-check + one batched Tier-B judge,
-  `kb_surprising_judge`, `unit-test-kb-surprising-judge`).
+  `kb_surprising_judge`, `unit-test-kb-surprising-judge`) and a **precision
+  self-suppress**: the judge samples the structural generator's precision
+  (`confirmed`/`judged`, rolling per-project in `kb_runtime_state`), and an unjudged
+  request returns no candidates once that precision falls below the configurable
+  `code_surprising_precision_floor` (`kb_surprising_precision_suppress`).
 - **§5+§6** RRF fusion core (`kb_rrf.c`, `unit-test-kb-rrf`) + the `GET /v1/code/hybrid`
   route fusing `code` + `graph` + **`vector`** (embedding similarity over
   `code_embeddings` via `pgvec_code_search_paths`, gated on a dim-matched embedder,
@@ -389,9 +393,6 @@ all three are reachable from the frontend over the trusted UDS hop).
 **Deferred — needs the embedder / a build-tier dependency / a deployed corpus / a frontend
 (not completable in the agent host):**
 - **§2 tree-sitter** front-end — large build-tier work (vendor ~30 grammars + ABI).
-- **§4 precision self-suppress** — the LLM-judge relevance gate is shipped (opt-in
-  `judge=true`); the precision-sampling monitor that auto-disables the feature below a
-  quality floor needs a deployed corpus + judged-precision telemetry over time.
 - **§6 watch (optional)** — the change-detection gate, the post-merge reindex hook, and
   the memory-fusion leg are all shipped; only an always-on fanotify/inotify watch (for
   non-git trees or freshness without a git event) remains, as an optional follow-up.

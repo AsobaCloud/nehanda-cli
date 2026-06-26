@@ -1130,6 +1130,50 @@ int handle_get_code_graph_route(const char *method, const char *query_string, ch
 #define SURPRISING_MAX_ANCHORS 5000
 /* Cap on links sent to the LLM judge in one batch (bounds the prompt + latency). */
 #define SURPRISING_JUDGE_MAX 12
+/* §4 precision self-suppress: don't act on the judge-sampled precision until this many
+ * candidates have been judged; halve the rolling (judged,confirmed) counters once they
+ * exceed the cap so the metric tracks RECENT precision, not all-time. */
+#define SURPRISING_PRECISION_MIN_SAMPLES 20
+#define SURPRISING_PRECISION_DECAY_CAP   500
+
+/* Read the rolling per-project judge stats (count judged + count confirmed) used to
+ * sample the structural generator's precision. Absent keys -> 0. */
+static void surprising_stats_get(const char *project, int *judged, int *confirmed)
+{
+   char key[320], val[64];
+   *judged = 0;
+   *confirmed = 0;
+   snprintf(key, sizeof(key), "surprising_judged:%s", project);
+   if (db2_kb_runtime_state_get(key, val, sizeof(val)) == 0)
+      *judged = atoi(val);
+   snprintf(key, sizeof(key), "surprising_confirmed:%s", project);
+   if (db2_kb_runtime_state_get(key, val, sizeof(val)) == 0)
+      *confirmed = atoi(val);
+}
+
+/* Accumulate this request's (judged, confirmed) into the rolling stats, decaying when
+ * the sample grows past the cap so older precision fades. Best-effort. */
+static void surprising_stats_add(const char *project, int dj, int dc)
+{
+   if (dj <= 0)
+      return;
+   int judged = 0, confirmed = 0;
+   surprising_stats_get(project, &judged, &confirmed);
+   judged += dj;
+   confirmed += dc;
+   if (judged > SURPRISING_PRECISION_DECAY_CAP)
+   {
+      judged /= 2;
+      confirmed /= 2;
+   }
+   char key[320], val[32];
+   snprintf(key, sizeof(key), "surprising_judged:%s", project);
+   snprintf(val, sizeof(val), "%d", judged);
+   db2_kb_runtime_state_set(key, val);
+   snprintf(key, sizeof(key), "surprising_confirmed:%s", project);
+   snprintf(val, sizeof(val), "%d", confirmed);
+   db2_kb_runtime_state_set(key, val);
+}
 
 int handle_get_code_graph_surprising(const char *query_string, char *out_buf, int out_cap)
 {
@@ -1283,25 +1327,47 @@ int handle_get_code_graph_surprising(const char *query_string, char *out_buf, in
    gedges = NULL;
    pairs = NULL;
 
+   /* §4 precision self-suppress + rolling judge stats. The LLM judge samples the
+    * structural generator's precision (confirmed/judged); when NOT judging, suppress
+    * the unjudged candidates if that sampled precision has fallen below the configured
+    * floor — they'd be mostly false positives. Floor <= 0 (default) disables it. */
+   config_t scfg;
+   int have_cfg = (config_load(&scfg) == 0);
+   double precision_floor = have_cfg ? scfg.code_surprising_precision_floor : 0.0;
+   int stat_judged = 0, stat_confirmed = 0;
+   surprising_stats_get(project, &stat_judged, &stat_confirmed);
+   int suppressed = 0;
+   if (!judge &&
+       kb_surprising_precision_suppress(stat_judged, stat_confirmed,
+                                        SURPRISING_PRECISION_MIN_SAMPLES, precision_floor))
+   {
+      suppressed = 1;
+      ns = 0; /* historically low-precision structural candidates -> show none */
+      links_truncated = 0;
+   }
+
    /* §4 relevance gate (opt-in): confirm the top links with one batched LLM judge.
     * Bounded to SURPRISING_JUDGE_MAX (prompt/latency). Degrades to unconfirmed if no
-    * Tier-B LLM is configured (judged stays 0). */
+    * Tier-B LLM is configured (judged stays 0). The verdicts also feed the precision
+    * sample above for future requests. */
    kb_surprising_verdict_t *verdicts = NULL;
-   int jn = 0, judged_n = 0;
-   if (judge && ns > 0)
+   int jn = 0, judged_n = 0, confirmed_n = 0;
+   if (judge && ns > 0 && have_cfg)
    {
       jn = ns < SURPRISING_JUDGE_MAX ? ns : SURPRISING_JUDGE_MAX;
       verdicts = calloc((size_t)jn, sizeof(*verdicts));
       if (verdicts)
       {
-         config_t jcfg;
          char jerr[256] = "";
-         if (config_load(&jcfg) == 0)
+         int r = kb_surprising_judge(&scfg, scfg.kb_curator_judge_command, project, out, jn,
+                                     verdicts, jerr, sizeof(jerr));
+         if (r > 0)
          {
-            int r = kb_surprising_judge(&jcfg, jcfg.kb_curator_judge_command, project, out, jn,
-                                        verdicts, jerr, sizeof(jerr));
-            if (r > 0)
-               judged_n = r;
+            judged_n = r;
+            for (int i = 0; i < jn; i++)
+               if (verdicts[i].judged && verdicts[i].confirmed)
+                  confirmed_n++;
+            surprising_stats_add(project, judged_n, confirmed_n);
          }
       }
    }
@@ -1358,6 +1424,15 @@ int handle_get_code_graph_surprising(const char *query_string, char *out_buf, in
     * Tier-B LLM configured -> links are unconfirmed structural candidates). */
    if (judge)
       cJSON_AddNumberToObject(resp, "judged", judged_n);
+   /* §4 self-suppress observability: the judge-sampled structural precision and its
+    * sample size; `suppressed` true when an unjudged request returned nothing because
+    * that precision is below the floor. */
+   if (stat_judged > 0)
+      cJSON_AddNumberToObject(resp, "sampled_precision",
+                              (double)stat_confirmed / (double)stat_judged);
+   cJSON_AddNumberToObject(resp, "judged_samples", stat_judged);
+   if (suppressed)
+      cJSON_AddBoolToObject(resp, "suppressed", 1);
    /* Truncated if the page cap bound the links (precise: the +1 probe overflowed),
     * or either input scan filled its window (edges or candidate pairs) so the
     * candidate set was itself a prefix. */
