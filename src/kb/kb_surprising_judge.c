@@ -105,6 +105,7 @@ static int sj_add_pair(cJSON *pairs, const char *project, int idx,
    cJSON_AddNumberToObject(p, "hops", link->hops);
    cJSON_AddItemToArray(pairs, p);
    out->shared_symbols = sj_shared_count(names_a, na, names_b, nb);
+   out->sent = 1;
    return 1;
 }
 
@@ -182,7 +183,9 @@ int kb_surprising_judge(const config_t *cfg, const char *judge_cmd, const char *
          if (!cJSON_IsNumber(ji) || !cJSON_IsBool(js))
             continue;
          int idx = (int)ji->valuedouble;
-         if (idx < 0 || idx >= n)
+         /* Reject verdicts for an index that was never sent (unresolved pair, or a
+          * hallucinated/duplicate echo): only pairs in the request can be judged. */
+         if (idx < 0 || idx >= n || !out[idx].sent || out[idx].judged)
             continue;
          out[idx].judged = 1;
          out[idx].confirmed = cJSON_IsTrue(js) ? 1 : 0;

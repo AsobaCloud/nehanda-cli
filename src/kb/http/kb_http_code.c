@@ -1279,9 +1279,10 @@ int handle_get_code_graph_surprising(const char *query_string, char *out_buf, in
        * unrelated yet semantically close is the strongest surprising signal. */
       cJSON_AddNumberToObject(l, "hops", out[i].hops);
       cJSON_AddBoolToObject(l, "disconnected", out[i].hops < 0);
-      /* §4 confirmation: the cheap shared-symbol cross-check is always attached for
-       * judged links; `confirmed` + `reason` only when the LLM returned a verdict. */
-      if (verdicts && i < jn)
+      /* §4 confirmation: shared_symbols only when the pair was actually sent (else 0
+       * would conflate "computed none" with "not computed"); confirmed + reason only
+       * when the LLM returned a verdict. */
+      if (verdicts && i < jn && verdicts[i].sent)
       {
          cJSON_AddNumberToObject(l, "shared_symbols", verdicts[i].shared_symbols);
          if (verdicts[i].judged)
