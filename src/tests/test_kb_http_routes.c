@@ -850,6 +850,7 @@ int config_load(config_t *cfg)
    cfg->code_hybrid_weight_code = 1.0;
    cfg->code_hybrid_weight_graph = 1.0;
    cfg->code_hybrid_weight_vector = 1.0;
+   cfg->code_hybrid_weight_memory = 1.0;
    cfg->code_hybrid_rrf_k = 60.0;
    return 0;
 }
@@ -1921,6 +1922,7 @@ int main(void)
    test_code_callers_missing_symbol();
    test_code_callers_ok();
    test_code_hybrid_ok();
+   test_code_hybrid_memory_leg();
    test_code_hybrid_missing_query();
    test_code_hybrid_no_symbol();
    test_code_hybrid_vector_ok();
