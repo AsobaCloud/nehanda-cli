@@ -113,8 +113,26 @@ static void test_judge_skips_unresolved(void)
    int r = kb_surprising_judge(NULL, "printf '{\"verdicts\":[{\"i\":0,\"surprising\":true}]}'", "p",
                                links, 1, out, err, sizeof(err));
    assert(r == 0); /* nothing judgeable -> no LLM call */
-   assert(out[0].judged == 0);
+   assert(out[0].sent == 0 && out[0].judged == 0);
    printf("  PASS: unresolved node keys are skipped (no LLM call)\n");
+}
+
+/* A verdict for an index that was NOT sent (here link 1, whose keys don't resolve)
+ * is rejected — the model can't fabricate a confirmation for an unjudged pair. */
+static void test_judge_rejects_unsent_verdict(void)
+{
+   kb_graph_surprising_t links[2] = {mk_link("file:p:x", "file:p:y", 0.93, -1),
+                                     mk_link("file:p:x", "file:p:unknown", 0.80, 5)};
+   kb_surprising_verdict_t out[2];
+   char err[256];
+   /* link 0 is sent; link 1 is skipped (unknown). The model echoes BOTH i=0 and i=1. */
+   const char *cmd = "printf '{\"verdicts\":[{\"i\":0,\"surprising\":true},"
+                     "{\"i\":1,\"surprising\":true,\"reason\":\"fabricated\"}]}'";
+   int judged = kb_surprising_judge(NULL, cmd, "p", links, 2, out, err, sizeof(err));
+   assert(judged == 1); /* only the sent pair is judged */
+   assert(out[0].sent == 1 && out[0].judged == 1 && out[0].confirmed == 1);
+   assert(out[1].sent == 0 && out[1].judged == 0); /* the unsent verdict was rejected */
+   printf("  PASS: verdict for an unsent pair is rejected\n");
 }
 
 int main(void)
@@ -123,6 +141,7 @@ int main(void)
    test_judge_parses_verdicts();
    test_judge_error_paths();
    test_judge_skips_unresolved();
+   test_judge_rejects_unsent_verdict();
    printf("  all tests passed\n");
    return 0;
 }
