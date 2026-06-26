@@ -1077,6 +1077,13 @@ void config_parse_guardrails_section(config_t *cfg, cJSON *root)
          if (cJSON_IsBool(item))
             cfg->guardrails_semantic_allow_ml_only_block = cJSON_IsTrue(item) ? 1 : 0;
       }
+      cJSON *br = cJSON_GetObjectItemCaseSensitive(gr, "blast_radius");
+      if (cJSON_IsObject(br))
+      {
+         item = cJSON_GetObjectItemCaseSensitive(br, "advisory_enabled");
+         if (cJSON_IsBool(item))
+            cfg->guardrails_blast_radius_advisory_enabled = cJSON_IsTrue(item) ? 1 : 0;
+      }
    }
 }
 void config_parse_auxiliary_section(config_t *cfg, cJSON *root)
@@ -1332,6 +1339,30 @@ void config_parse_kb_section2(config_t *cfg, cJSON *root)
          item = cJSON_GetObjectItemCaseSensitive(mining, "min_poll_s");
          if (cJSON_IsNumber(item) && item->valuedouble > 0)
             cfg->kb_mining_min_poll_s = (int)item->valuedouble;
+         item = cJSON_GetObjectItemCaseSensitive(mining, "failure_learning_enabled");
+         if (cJSON_IsBool(item))
+            cfg->kb_mining_failure_learning_enabled = cJSON_IsTrue(item) ? 1 : 0;
+      }
+
+      /* §5 hybrid retrieval per-signal RRF weights + rank constant. */
+      cJSON *ch = cJSON_GetObjectItemCaseSensitive(kb, "code_hybrid");
+      if (cJSON_IsObject(ch))
+      {
+         item = cJSON_GetObjectItemCaseSensitive(ch, "weight_code");
+         if (cJSON_IsNumber(item))
+            cfg->code_hybrid_weight_code = item->valuedouble;
+         item = cJSON_GetObjectItemCaseSensitive(ch, "weight_graph");
+         if (cJSON_IsNumber(item))
+            cfg->code_hybrid_weight_graph = item->valuedouble;
+         item = cJSON_GetObjectItemCaseSensitive(ch, "weight_vector");
+         if (cJSON_IsNumber(item))
+            cfg->code_hybrid_weight_vector = item->valuedouble;
+         item = cJSON_GetObjectItemCaseSensitive(ch, "weight_memory");
+         if (cJSON_IsNumber(item))
+            cfg->code_hybrid_weight_memory = item->valuedouble;
+         item = cJSON_GetObjectItemCaseSensitive(ch, "rrf_k");
+         if (cJSON_IsNumber(item) && item->valuedouble > 0)
+            cfg->code_hybrid_rrf_k = item->valuedouble;
       }
    }
 }

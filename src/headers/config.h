@@ -335,8 +335,31 @@ typedef struct config
     * system prompt so the external agent stops re-exploring the repo. Default
     * off; a per-request `x-aimee-preinject: 0` header also disables it. */
    int ingress_preinject_enabled;
+   /* ingress-compression P5 (§2.3), default off: inject the <aimee-context>
+    * envelope on the Anthropic-native /v1/messages passthrough (otherwise
+    * parity-skipped to preserve the client's cached prefix). Separate from the
+    * OpenAI/Codex seam's ingress_preinject_enabled. */
+   int ingress_preinject_anthropic_enabled;
    int ingress_preinject_assembly_budget;
    int ingress_max_raw_scans;
+   /* ingress-compression P2 (§6.5 B4): max line span the code_span_get recovery
+    * resolver will return in one call. Bounds the per-call recovery cost and a
+    * model-supplied range. */
+   int code_span_max_lines;
+   /* ingress-compression master gate (§6.5 B8), default off. When on, code-search
+    * hits are span-enriched (the matched line is located) and the ingress envelope
+    * folds code entries into recoverable references; off keeps the search query,
+    * cost, and envelope byte-identical. */
+   int ingress_compress_enabled;
+   /* ingress-compression P1b: a code snippet is folded to a `file:line` reference
+    * only when its snippet exceeds this many chars (folding a tiny snippet saves
+    * nothing). Default 80. */
+   int ingress_compress_min_chars;
+   /* ingress-compression P3 (§2 placement invariant), default off. When on, the
+    * volatile <aimee-context> envelope is appended AFTER the stable instructions
+    * prefix (instead of prepended) on the OpenAI/Codex Responses path, so the
+    * provider's automatic prefix cache is not invalidated each turn. */
+   int ingress_cache_placement_enabled;
    /* Session-isolation guard (opt-in): when on, the PreToolUse attention-guard
     * fails closed on a mutating tool whose target is NOT inside an aimee-managed
     * worktree (.aimee/worktrees/...), forcing every mutating session into an
@@ -729,6 +752,10 @@ typedef struct config
     * Anthropic's terms and risk account action. Set to 1 to opt in (see
     * DELEGATES.md). Does not affect API-key/HTTP agents or other CLI agents. */
    int claude_cli_delegate_enabled;
+   /* §7 code-graph actuation: prepend a structural-context block (callers /
+    * dependencies of the file paths a delegate task references) to the delegate's
+    * system prompt. Advisory, fail-open, default off (opt-in). */
+   int delegate_graph_context_enabled;
 
    /* Replayable-evidence roundtable verification (Part A). When 1 (default), a
     * review-mode roundtable runs each captured item through an independent replay
@@ -1023,6 +1050,10 @@ typedef struct config
    double guardrails_semantic_prompt_threshold;
    double guardrails_semantic_block_threshold;
    int guardrails_semantic_allow_ml_only_block;
+   /* §7 code-graph actuation: surface a structural blast-radius advisory (the
+    * graph-impacted dependent files) before an edit. Advisory + fail-open;
+    * default off (opt-in). See docs/proposals/pending/code-graph-intelligence.md §7. */
+   int guardrails_blast_radius_advisory_enabled;
 
    /* aimee-kb public HTTP API (kb.api.*).
     * kb_api_http_port: TCP port for the /v1/... REST API (0 = disabled, default).
@@ -1223,6 +1254,15 @@ typedef struct config
    int kb_bg_ingest_interval_hours;
    int kb_bg_watch_enabled;
    int kb_bg_watch_debounce_secs;
+   /* §5 hybrid code retrieval (/v1/code/hybrid): per-signal RRF weights + the RRF
+    * rank constant k. Tunable so an operator can favor lexical-code vs structural-
+    * graph relevance without a rebuild. Defaults: weights 1.0 (equal), k = 60.
+    * A weight <= 0 disables that signal's contribution. See kb_rrf.c / §5. */
+   double code_hybrid_weight_code;
+   double code_hybrid_weight_graph;
+   double code_hybrid_weight_vector;
+   double code_hybrid_weight_memory;
+   double code_hybrid_rrf_k;
    /* embedder-runtime-fetch-autodim §2c: when 0 (default) a recorded-vs-configured
     * embedding-dim mismatch is REFUSED at startup (refuse-and-instruct). When 1, the
     * attended `aimee kb reembed --confirm` reset path is AVAILABLE (it still never
@@ -1249,6 +1289,11 @@ typedef struct config
     * kb_mining_min_poll_s: minimum seconds between scheduler ticks (default 300). */
    int kb_mining_enabled;
    int kb_mining_min_poll_s;
+   /* kb_mining_failure_learning_enabled (ingress-compression §4, default off):
+    * route the recurrence job's failure clusters through the learning pipeline
+    * (signal -> reviewed proposal -> Gate-Promote -> artifact) instead of writing
+    * a workflow_pattern artifact directly. JSON key kb.mining.failure_learning_enabled. */
+   int kb_mining_failure_learning_enabled;
 
    /* Trigger endpoint (event-triggered-autopilot) */
    char trigger_auth_token[256];
@@ -1304,6 +1349,11 @@ typedef struct config
    /* link_artifacts bridge: 0 = off (default), 1 = link code_units to the
     * entities their domain_concepts name (doc<->code via the entity graph). */
    int kb_curator_link_artifacts_enabled;
+   /* projection_graph build: 1 = on (default) — the drain auto-publishes a fresh
+    * code_projection_edges generation per CHANGED project (content-addressed, so
+    * unchanged projects are skipped), materializing the typed code graph on
+    * `workspace add` with no manual `aimee graph sync-code`. Pure DB2, no sidecar. */
+   int kb_curator_projection_graph_enabled;
    /* synthesize_topic: 0 = off (default), 1 = pick a high-centrality entity and
     * emit a `synthesis` narrative via the synthesize sidecar. Requires a
     * configured kb_curator_synthesize_command. */

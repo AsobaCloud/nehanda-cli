@@ -3,6 +3,7 @@
 #ifndef CODE_PROJECTION_H
 #define CODE_PROJECTION_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -43,6 +44,19 @@ extern "C"
     * Returns -1 on DB error. */
    int64_t db2_code_projection_visible_id(const char *project);
 
+   /* Content fingerprint (hex) of a project's code: md5 over (path, file-hash) of
+    * all files. Identical contents -> identical fingerprint, so the drain can skip
+    * an unchanged project. Returns 0 on success, -1 on error. */
+   int db2_code_projection_project_fingerprint(const char *project, char *out, size_t out_len);
+
+   /* Record the content fingerprint that produced this generation (stored in
+    * code_projection_generations.source_hash). Returns 0 on success, -1 on error. */
+   int db2_code_projection_generation_set_source_hash(int64_t gen_id, const char *source_hash);
+
+   /* Fingerprint stored on the project's currently-visible generation, into out
+    * (empty when there is no visible generation). Returns 0 on success, -1 on error. */
+   int db2_code_projection_visible_source_hash(const char *project, char *out, size_t out_len);
+
    /* Update edge/node counts on a generation.  Returns 0 on success. */
    int db2_code_projection_generation_update_counts(int64_t gen_id, int64_t edge_count,
                                                     int64_t node_count);
@@ -66,6 +80,21 @@ extern "C"
    int db2_code_projection_edge_upsert(int64_t gen_id, const char *project, const char *source,
                                        const char *relation, const char *target, int relation_id,
                                        int subject_kind, int object_kind, int structural_weight);
+
+   /* One edge of a project's visible projection graph (for analytics / read-out).
+    * structural_weight is derived from the relation's structural trust. */
+   typedef struct
+   {
+      char source[512]; /* kept in sync with KB_GRAPH_NODE_MAX so analytics doesn't */
+      char relation[64];
+      char target[512]; /* collapse two long node names under a truncated prefix    */
+      int structural_weight;
+   } code_projection_edge_t;
+
+   /* List the edges of project's currently-visible generation into out[] (up to
+    * max). Returns the count written (0 if no visible generation), or -1 on error.
+    * Used by graph analytics (§4 hub/centrality) — a read-only projection. */
+   int db2_code_projection_list_edges(const char *project, code_projection_edge_t *out, int max);
 
    /* --- Full project sync --- */
 

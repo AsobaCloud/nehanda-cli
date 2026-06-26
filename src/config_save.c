@@ -462,6 +462,15 @@ int config_save(const config_t *cfg)
       cJSON_AddBoolToObject(semantic, "allow_ml_only_block",
                             cfg->guardrails_semantic_allow_ml_only_block ? 1 : 0);
    }
+   if (cfg->guardrails_blast_radius_advisory_enabled)
+   {
+      /* Reuse the guardrails object if the semantic block above created it. */
+      cJSON *guardrails = cJSON_GetObjectItemCaseSensitive(root, "guardrails");
+      if (!guardrails)
+         guardrails = cJSON_AddObjectToObject(root, "guardrails");
+      cJSON *br = cJSON_AddObjectToObject(guardrails, "blast_radius");
+      cJSON_AddBoolToObject(br, "advisory_enabled", 1);
+   }
    if (cfg->memory_maintenance_trigger_inserts > 0 || cfg->memory_maintenance_trigger_secs > 0 ||
        cfg->memory_maintenance_enabled || cfg->memory_maintenance_interval_seconds > 0 ||
        cfg->memory_maintenance_summarize_enabled)
@@ -771,8 +780,18 @@ int config_save(const config_t *cfg)
       cJSON_AddBoolToObject(root, "verify_cross_project", 1);
    if (cfg->claude_cli_delegate_enabled)
       cJSON_AddBoolToObject(root, "claude_cli_delegate_enabled", 1);
+   if (cfg->delegate_graph_context_enabled)
+      cJSON_AddBoolToObject(root, "delegate_graph_context_enabled", 1);
    if (cfg->ingress_preinject_enabled)
       cJSON_AddBoolToObject(root, "ingress_preinject_enabled", 1);
+   if (cfg->ingress_preinject_anthropic_enabled)
+      cJSON_AddBoolToObject(root, "ingress_preinject_anthropic_enabled", 1);
+   if (cfg->ingress_compress_enabled)
+      cJSON_AddBoolToObject(root, "ingress_compress_enabled", 1);
+   if (cfg->ingress_cache_placement_enabled)
+      cJSON_AddBoolToObject(root, "ingress_cache_placement_enabled", 1);
+   if (cfg->ingress_compress_min_chars != 80)
+      cJSON_AddNumberToObject(root, "ingress_compress_min_chars", cfg->ingress_compress_min_chars);
    if (cfg->gateway_prevent_subagents)
       cJSON_AddBoolToObject(root, "gateway_prevent_subagents", 1);
    if (cfg->gateway_pin_model)
@@ -780,6 +799,8 @@ int config_save(const config_t *cfg)
    if (cfg->ingress_preinject_assembly_budget != 6144)
       cJSON_AddNumberToObject(root, "ingress_preinject_assembly_budget",
                               cfg->ingress_preinject_assembly_budget);
+   if (cfg->code_span_max_lines != 400)
+      cJSON_AddNumberToObject(root, "code_span_max_lines", cfg->code_span_max_lines);
    if (cfg->ingress_max_raw_scans != 0)
       cJSON_AddNumberToObject(root, "ingress_max_raw_scans", cfg->ingress_max_raw_scans);
    if (cfg->require_session_worktree)

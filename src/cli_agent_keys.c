@@ -12,7 +12,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
+#include <sys/stat.h> /* chmod */
+#ifndef _WIN32
+#include <unistd.h> /* fsync, fileno */
+#endif
 
 #define AGENT_KEYS_FILE "agent-keys.json"
 
@@ -89,33 +92,71 @@ int cli_agent_key_set(const char *agent_name, const char *api_key)
    cJSON_Delete(root);
    if (!json)
       return -1;
-   FILE *f = fopen(path, "wb");
+
+   /* Atomic write: a partial/failed rewrite must never truncate the keyring and
+    * lose an entry that is NOT yet in the vault (scrub-on-import runs this per
+    * vaulted key). Write a sibling temp file, flush (fsync on POSIX), chmod 0600,
+    * then rename over the target; on any error remove the temp and leave the
+    * original intact. Portable ISO-C stdio so the thin client builds on Windows
+    * too. The caller MUST observe the return value (a failed scrub leaves
+    * plaintext, which is the safe direction, but must be surfaced). */
+   char tmp[1100];
+   if ((size_t)snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= sizeof(tmp))
+   {
+      free(json);
+      return -1;
+   }
+   FILE *f = fopen(tmp, "wb");
    if (!f)
    {
       free(json);
       return -1;
    }
-   fputs(json, f);
-   fclose(f);
-   chmod(path, 0600);
+   size_t len = strlen(json);
+   int ok = (fwrite(json, 1, len, f) == len) && (fflush(f) == 0);
    free(json);
+#ifndef _WIN32
+   if (ok && fsync(fileno(f)) != 0)
+      ok = 0;
+#endif
+   if (fclose(f) != 0)
+      ok = 0;
+   if (ok)
+      chmod(tmp, 0600);
+#ifdef _WIN32
+   /* Windows rename() will not replace an existing file. */
+   if (ok)
+      remove(path);
+#endif
+   if (!ok || rename(tmp, path) != 0)
+   {
+      remove(tmp);
+      return -1;
+   }
    return 0;
 }
 
-/* `aimee agent key import [--scrub]` (P3): migrate client-held agent-keys.json
- * entries into the server vault under the server principal (vault.set_server).
- * Reports per agent; --scrub removes an entry only after a confirmed vault store.
- * Idempotent (re-runnable). Over a plaintext-TCP remote the server refuses
- * (P2a/D2b) and the entry is left intact — provision over an attested
+/* `aimee agent key import [--keep] [--dry-run]` (P3): migrate client-held
+ * agent-keys.json entries into the server vault under the server principal
+ * (vault.set_server). The vault is the single permanent credential store, so the
+ * migration SCRUBS each plaintext entry by default once its vault store is
+ * confirmed — leaving the secret in the local plaintext keyring after vaulting
+ * defeats the purpose and is how stale plaintext keys linger. Pass --keep to
+ * retain the local copy (e.g. a deliberate offline backup); --scrub is still
+ * accepted as a no-op for backward compatibility. Reports per agent; idempotent
+ * (re-runnable). Over a plaintext-TCP remote the server refuses (P2a/D2b) and the
+ * entry is NOT vaulted and NOT scrubbed — provision over an attested
  * (UDS/webchat) connection holding the vault:write:server capability. */
 int cli_agent_key_import(int argc, char **argv, int json_output)
 {
    (void)json_output;
-   int scrub = 0, dry = 0;
+   int scrub = 1, dry = 0; /* scrub-by-default: keys belong only in the vault */
    for (int i = 0; i < argc; i++)
    {
-      if (strcmp(argv[i], "--scrub") == 0)
-         scrub = 1;
+      if (strcmp(argv[i], "--keep") == 0 || strcmp(argv[i], "--no-scrub") == 0)
+         scrub = 0;
+      else if (strcmp(argv[i], "--scrub") == 0)
+         scrub = 1; /* accepted no-op (now the default) */
       else if (strcmp(argv[i], "--dry-run") == 0)
          dry = 1;
    }
@@ -148,9 +189,12 @@ int cli_agent_key_import(int argc, char **argv, int json_output)
       if (ok)
       {
          vaulted++;
-         printf("  %-16s vaulted\n", agent);
-         if (scrub)
-            cli_agent_key_set(agent, NULL);
+         if (scrub && cli_agent_key_set(agent, NULL) != 0)
+            printf("  %-16s vaulted (WARNING: could not scrub plaintext copy — remove it "
+                   "manually)\n",
+                   agent);
+         else
+            printf("  %-16s vaulted%s\n", agent, scrub ? " + scrubbed" : "");
       }
       else
       {
@@ -172,8 +216,13 @@ int cli_agent_key_import(int argc, char **argv, int json_output)
              total == 1 ? "y" : "ies");
       return 0;
    }
+   const char *suffix = "";
+   if (vaulted > 0)
+      suffix = scrub ? "; vaulted entries scrubbed from the local plaintext keyring"
+                     : "; vaulted entries KEPT in the local plaintext keyring (--keep) — still "
+                       "readable on disk";
    printf("agent key import: %d vaulted, %d refused, %d error (of %d)%s\n", vaulted, refused,
-          errors, total, scrub ? "; migrated entries scrubbed from the local keyring" : "");
+          errors, total, suffix);
    if (refused > 0)
       printf("note: server-principal writes need an attested (UDS/webchat) connection holding the "
              "vault:write:server capability — run this on the server host over UDS, or grant the "

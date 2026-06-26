@@ -24,5 +24,17 @@ int handle_get_code_callers_route(const char *method, const char *query_string, 
 int handle_get_code_project_stats(const char *query_string, char *out_buf, int out_cap);
 int handle_get_code_project_stats_route(const char *method, const char *query_string, char *out_buf,
                                         int out_cap);
+int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap);
+int handle_get_code_hybrid_route(const char *method, const char *query_string, char *out_buf,
+                                 int out_cap);
+int handle_get_code_graph_hubs(const char *query_string, char *out_buf, int out_cap);
+int handle_get_code_graph_hubs_route(const char *method, const char *query_string, char *out_buf,
+                                     int out_cap);
+int handle_get_code_graph(const char *query_string, char *out_buf, int out_cap);
+int handle_get_code_graph_route(const char *method, const char *query_string, char *out_buf,
+                                int out_cap);
+int handle_get_code_graph_surprising(const char *query_string, char *out_buf, int out_cap);
+int handle_get_code_graph_surprising_route(const char *method, const char *query_string,
+                                           char *out_buf, int out_cap);
 
 #endif

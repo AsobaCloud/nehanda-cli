@@ -9,7 +9,8 @@
 #include "config.h"
 #include "cJSON.h"
 #include "kb_http.h"
-#include "db2/lifecycle.h" /* §2c: db2_reembed_* / db2_dim_change_reset stub types */
+#include "kb/kb_surprising_judge.h" /* §4 judge stub seam (kb_surprising_verdict_t) */
+#include "db2/lifecycle.h"          /* §2c: db2_reembed_* / db2_dim_change_reset stub types */
 #include "kb_service.h"
 #include "kb_bandit.h"
 #include "kb_service_backend.h"
@@ -280,9 +281,8 @@ int kb_curator_contradictions_json(int limit, char *out, size_t out_cap)
    return 1;
 }
 
-/* §2c: stubs for the new /v1/reembed + /v1/search-guard db2 refs in kb_http.o.
- * g_test_reembed_in_progress lets a test drive the maintenance marker so the
- * /v1/search 503 guard can be exercised deterministically. */
+/* §2c: stubs for the /v1/reembed + /v1/search-guard db2 refs in kb_http.o.
+ * g_test_reembed_in_progress drives the maintenance marker (the /v1/search 503 guard). */
 static int g_test_reembed_in_progress = 0;
 int db2_reembed_in_progress_get(int *target_dim, long *started_epoch)
 {
@@ -298,13 +298,9 @@ int db2_reembed_in_progress_get(int *target_dim, long *started_epoch)
    (void)started_epoch;
    return 0; /* not in progress -> search path proceeds */
 }
-/* structured-PDF search_chunks db2 functions — stubbed (the /v1/pdf/search route is
- * exercised end-to-end against real SQL in test_kb_doc_pdf.c; here we only need the link
- * to resolve so the route table compiles). The struct args are taken as void* to avoid
- * pulling in db2/kb_payload.h (which conflicts with this file's simplified db2 stubs);
- * C links by symbol name, so the pointer type is immaterial. */
-/* structured-PDF db2 stubs — the routes are exercised against real SQL in test_kb_doc_pdf.c;
- * these just resolve the link (build uses -Wno-unused-parameter, so no (void) casts needed). */
+/* structured-PDF search_chunks db2 stubs — the routes are exercised against real SQL
+ * in test_kb_doc_pdf.c; here they only resolve the link (struct args as void* to avoid
+ * db2/kb_payload.h, which conflicts with this file's simplified db2 stubs). */
 int db2_kb_pdf_search_chunks(const char *project, const char *query, int max, void *out)
 {
    return 0;
@@ -367,9 +363,10 @@ int db2_reembed_clear_maintenance(int force, int *was_in_progress, int *recorded
    g_test_reembed_in_progress = 0;
    return 0;
 }
+int g_test_embedding_dim = 1024; /* §5 vector-leg tests flip this; default 1024 */
 int db2_embedding_dim(void)
 {
-   return 1024;
+   return g_test_embedding_dim;
 }
 int db2_probe_embedder_dim(int budget_ms, int *out)
 {
@@ -526,8 +523,7 @@ int canonical_index_project_lang_breakdown(const char *project, char *buf, size_
    return 0;
 }
 
-/* Must mirror code_search_hit_t (index.h) exactly — the handler casts the out
- * buffer to it; a layout mismatch would corrupt the read. */
+/* Must mirror code_search_hit_t (index.h) exactly (handler casts the out buffer to it). */
 typedef struct
 {
    char project[128];
@@ -537,8 +533,10 @@ typedef struct
    char content_hash[80];
 } test_code_search_hit_t;
 
-int canonical_index_code_search(const char *query, const char *project, void *out, int max)
+int canonical_index_code_search(const char *query, const char *project, void *out, int max,
+                                int enrich)
 {
+   (void)enrich;
    assert(query);
    assert(out);
    if (strcmp(query, "needle") != 0 || !project || strcmp(project, "proj-alpha") != 0)
@@ -554,29 +552,7 @@ int canonical_index_code_search(const char *query, const char *project, void *ou
    return 1;
 }
 
-typedef struct
-{
-   char project[128];
-   char file_path[MAX_PATH_LEN];
-   char caller[128];
-   int line;
-} test_caller_hit_t;
-
-int canonical_index_find_callers(const char *project, const char *symbol, void *out, int max)
-{
-   assert(symbol);
-   assert(out);
-   if (strcmp(symbol, "target_fn") != 0 || !project || strcmp(project, "proj-alpha") != 0)
-      return 0;
-   if (max < 1)
-      return 0;
-   test_caller_hit_t *hits = (test_caller_hit_t *)out;
-   snprintf(hits[0].project, sizeof(hits[0].project), "proj-alpha");
-   snprintf(hits[0].file_path, sizeof(hits[0].file_path), "src/caller.c");
-   snprintf(hits[0].caller, sizeof(hits[0].caller), "caller_fn");
-   hits[0].line = 44;
-   return 1;
-}
+/* canonical_index_find_callers stub lives in the _code.inc (line-count limit). */
 
 int memory_get_entity_profile(const char *e, void *out)
 {
@@ -867,6 +843,13 @@ int config_load(config_t *cfg)
    cfg->demotion_half_life_days = 30.0;
    cfg->workspace_count = 1;
    snprintf(cfg->workspaces[0], sizeof(cfg->workspaces[0]), "/workspace");
+   /* §5 hybrid RRF weights: mirror config_set_defaults so /v1/code/hybrid fuses
+    * both signals at equal weight (a 0 weight would disable a signal). */
+   cfg->code_hybrid_weight_code = 1.0;
+   cfg->code_hybrid_weight_graph = 1.0;
+   cfg->code_hybrid_weight_vector = 1.0;
+   cfg->code_hybrid_weight_memory = 1.0;
+   cfg->code_hybrid_rrf_k = 60.0;
    return 0;
 }
 
@@ -922,8 +905,8 @@ int db2_demotion_profile_read(const char *memory_class, const char *scope_kind,
    return 0;
 }
 
-/* kb_intel_payload's bandit.sample/close builders call these; this test does not
- * link kb_bandit.o. Stub sample as "disabled" and reward as a no-op success. */
+/* kb_intel_payload's bandit.sample/close builders call these (kb_bandit.o unlinked):
+ * stub sample as "disabled", reward as a no-op success. */
 int kb_bandit_sample(const config_t *cfg, const char *decision_point, const char *context_json,
                      const char (*arm_ids)[KB_BANDIT_MAX_ARM_ID], int n_arms, char *decision_id_out)
 {
@@ -1936,6 +1919,23 @@ int main(void)
    test_code_search_ok();
    test_code_callers_missing_symbol();
    test_code_callers_ok();
+   test_code_hybrid_ok();
+   test_code_hybrid_memory_leg();
+   test_code_hybrid_missing_query();
+   test_code_hybrid_no_symbol();
+   test_code_hybrid_vector_ok();
+   test_code_hybrid_vector_dim_mismatch_skips();
+   test_code_graph_hubs_ok();
+   test_code_graph_hubs_missing_project();
+   test_code_graph_surprising_ok();
+   test_code_graph_surprising_hub_excluded();
+   test_code_graph_surprising_missing_project();
+   test_code_graph_surprising_vecstore_down();
+   test_code_graph_surprising_judge();
+   test_code_graph_node_ok();
+   test_code_graph_node_capped_truncates();
+   test_code_graph_node_self_loop();
+   test_code_graph_node_missing_params();
    test_code_project_stats_missing_project();
    test_code_project_stats_ok();
    test_code_project_stats_error_is_json();
@@ -1943,6 +1943,9 @@ int main(void)
    test_blast_radius_not_found();
    test_blast_radius_ok();
    test_code_scan_ok();
+   test_code_scan_skips_unchanged_branch();
+   test_code_scan_runs_on_branch_move();
+   test_code_scan_worktree_ignores_sha();
    test_code_scan_missing_root_path();
    test_code_scan_pushed_files_ok();
    test_code_scan_pushed_files_rejects_invalid_item();

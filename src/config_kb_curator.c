@@ -38,6 +38,7 @@ void config_kb_curator_defaults(config_t *cfg)
    cfg->kb_curator_detect_contradictions_enabled = 1;
    cfg->kb_curator_index_code_unit_enabled = 1;
    cfg->kb_curator_link_artifacts_enabled = 1;
+   cfg->kb_curator_projection_graph_enabled = 1;
    cfg->kb_curator_synthesize_enabled = 1;
    cfg->kb_curator_promote_entity_enabled = 1;
    cfg->kb_curator_promote_min_sources = 3;
@@ -203,6 +204,17 @@ int config_parse_kb_curator(config_t *cfg, const cJSON *root)
       const cJSON *enabled = cJSON_GetObjectItemCaseSensitive(link_artifacts, "enabled");
       if (enabled && cJSON_IsBool(enabled))
          cfg->kb_curator_link_artifacts_enabled = cJSON_IsTrue(enabled) ? 1 : 0;
+   }
+
+   const cJSON *projection_graph = cJSON_GetObjectItemCaseSensitive(curator, "projection_graph");
+   if (projection_graph)
+   {
+      if (!cJSON_IsObject(projection_graph))
+         return config_issue("\"kb.curator.projection_graph\" expected object, got %s",
+                             jo_type_name(projection_graph));
+      const cJSON *enabled = cJSON_GetObjectItemCaseSensitive(projection_graph, "enabled");
+      if (enabled && cJSON_IsBool(enabled))
+         cfg->kb_curator_projection_graph_enabled = cJSON_IsTrue(enabled) ? 1 : 0;
    }
 
    const cJSON *synthesize = cJSON_GetObjectItemCaseSensitive(curator, "synthesize");
@@ -376,14 +388,14 @@ void config_save_kb_curator(const config_t *cfg, cJSON *root)
        cfg->kb_curator_resolve_entities_enabled || cfg->kb_curator_index_narrative_enabled ||
        cfg->kb_curator_index_claims_enabled || cfg->kb_curator_detect_contradictions_enabled ||
        cfg->kb_curator_index_code_unit_enabled || cfg->kb_curator_link_artifacts_enabled ||
-       cfg->kb_curator_synthesize_enabled || cfg->kb_curator_promote_entity_enabled ||
-       cfg->kb_curator_extract_command[0] || cfg->kb_curator_judge_command[0] ||
-       cfg->kb_curator_synthesize_command[0] || cfg->kb_curator_extract_max_tokens != 2048 ||
-       cfg->kb_curator_max_attempts != 3 || cfg->kb_curator_synthesize_k != 8 ||
-       cfg->kb_curator_promote_min_sources != 3 || cfg->kb_curator_provider_base_url[0] ||
-       cfg->kb_curator_provider_model[0] || cfg->kb_curator_provider_api_key[0] ||
-       cfg->kb_curator_tier_b_base_url[0] || cfg->kb_curator_tier_b_model[0] ||
-       cfg->kb_curator_tier_b_api_key[0];
+       cfg->kb_curator_projection_graph_enabled || cfg->kb_curator_synthesize_enabled ||
+       cfg->kb_curator_promote_entity_enabled || cfg->kb_curator_extract_command[0] ||
+       cfg->kb_curator_judge_command[0] || cfg->kb_curator_synthesize_command[0] ||
+       cfg->kb_curator_extract_max_tokens != 2048 || cfg->kb_curator_max_attempts != 3 ||
+       cfg->kb_curator_synthesize_k != 8 || cfg->kb_curator_promote_min_sources != 3 ||
+       cfg->kb_curator_provider_base_url[0] || cfg->kb_curator_provider_model[0] ||
+       cfg->kb_curator_provider_api_key[0] || cfg->kb_curator_tier_b_base_url[0] ||
+       cfg->kb_curator_tier_b_model[0] || cfg->kb_curator_tier_b_api_key[0];
    int evidence_any = !cfg->kb_evidence_embed_enabled || cfg->kb_evidence_embed_batch != 32;
    if (!curator_any && !evidence_any)
       return;
@@ -408,6 +420,7 @@ void config_save_kb_curator(const config_t *cfg, cJSON *root)
                               cfg->kb_curator_detect_contradictions_enabled);
          kb_curator_save_gate(cur, "index_code_unit", cfg->kb_curator_index_code_unit_enabled);
          kb_curator_save_gate(cur, "link_artifacts", cfg->kb_curator_link_artifacts_enabled);
+         kb_curator_save_gate(cur, "projection_graph", cfg->kb_curator_projection_graph_enabled);
 
          if (cfg->kb_curator_synthesize_enabled || cfg->kb_curator_synthesize_k != 8)
          {
