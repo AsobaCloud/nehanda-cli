@@ -354,8 +354,9 @@ static int classify_jsts(TSNode node, const char **kind, TSNode *name_root)
           strcmp(vt, "function") != 0 && strcmp(vt, "generator_function") != 0)
          return 0;
       *kind = "function";
-      /* variable_declarator exposes a `name` field (an identifier; a destructuring pattern
-       * has none, so it is skipped); a class field's name is a property_identifier child. */
+      /* variable_declarator's name is an identifier `name` field; a class field's name is a
+       * property_identifier child (no `name` field), which name_node digs out. A destructuring
+       * binding never reaches here — its value is not a function expression. */
       *name_root = name_node(node);
       return 1;
    }
