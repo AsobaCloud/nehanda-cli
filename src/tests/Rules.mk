@@ -1365,6 +1365,9 @@ $(TESTPREFIX)/unit-test-code-collect: $(OBJDIR)/tests/test_code_collect.o \
 ifdef AIMEE_TREESITTER
 TEST_TARGETS += $(TESTPREFIX)/unit-test-code-treesitter
 $(OBJDIR)/code_treesitter.o: C_FLAGS += -DAIMEE_TREESITTER -Ivendor/tree-sitter/lib/include
+# Order-only dep on a fetch target so a cold checkout fetches tree_sitter/api.h before
+# this object (which includes it) is compiled (see the same note in src/Makefile).
+$(OBJDIR)/code_treesitter.o: | vendor/tree-sitter/lib/src/lib.c
 $(TESTPREFIX)/unit-test-code-treesitter: $(OBJDIR)/tests/test_code_treesitter.o \
                                          $(OBJDIR)/code_treesitter.o \
                                          $(TS_VENDOR_OBJS) \
