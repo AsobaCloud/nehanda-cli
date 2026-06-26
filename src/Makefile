@@ -423,51 +423,95 @@ KB_PLATFORM_OBJS = $(PLATFORM_BASIC_OBJS) $(filter %/agent_bridge.o %/cli_client
 # compiled (with -w, since vendored generated code does not pass -Werror), and the KB's
 # code_treesitter.o is built with -DAIMEE_TREESITTER.
 ifdef AIMEE_TREESITTER
-# Runtime + one object per grammar parser.c, plus a scanner object for grammars with an
-# external scanner (Python/JavaScript/Rust; C and Go have none). Add a language by
-# vendoring it (fetch-treesitter.sh), appending its objs here + a compile rule below, and
-# registering it in code_treesitter.c.
+# Runtime + one object per grammar parser.c, plus a scanner object for grammars that ship
+# an external scanner. The language set mirrors the hand-rolled extractors (extractors.c).
+# Add a language by vendoring it (fetch-treesitter.sh), registering it in code_treesitter.c,
+# adding its object(s) to TS_VENDOR_OBJS + its source(s) to the fetch prerequisite list, and
+# a $(call ts_obj,...) below. ts_obj compiles one vendored source with -w (vendored generated
+# code does not pass -Werror) and the grammar's own src dir on the include path.
 TS_VENDOR_OBJS = $(OBJDIR)/vendor/ts_runtime.o \
                  $(OBJDIR)/vendor/ts_c.o \
+                 $(OBJDIR)/vendor/ts_cpp.o $(OBJDIR)/vendor/ts_cpp_scan.o \
+                 $(OBJDIR)/vendor/ts_csharp.o $(OBJDIR)/vendor/ts_csharp_scan.o \
                  $(OBJDIR)/vendor/ts_python.o $(OBJDIR)/vendor/ts_python_scan.o \
                  $(OBJDIR)/vendor/ts_go.o \
                  $(OBJDIR)/vendor/ts_javascript.o $(OBJDIR)/vendor/ts_javascript_scan.o \
-                 $(OBJDIR)/vendor/ts_rust.o $(OBJDIR)/vendor/ts_rust_scan.o
+                 $(OBJDIR)/vendor/ts_typescript.o $(OBJDIR)/vendor/ts_typescript_scan.o \
+                 $(OBJDIR)/vendor/ts_tsx.o $(OBJDIR)/vendor/ts_tsx_scan.o \
+                 $(OBJDIR)/vendor/ts_rust.o $(OBJDIR)/vendor/ts_rust_scan.o \
+                 $(OBJDIR)/vendor/ts_java.o \
+                 $(OBJDIR)/vendor/ts_ruby.o $(OBJDIR)/vendor/ts_ruby_scan.o \
+                 $(OBJDIR)/vendor/ts_php.o $(OBJDIR)/vendor/ts_php_scan.o \
+                 $(OBJDIR)/vendor/ts_lua.o $(OBJDIR)/vendor/ts_lua_scan.o \
+                 $(OBJDIR)/vendor/ts_bash.o $(OBJDIR)/vendor/ts_bash_scan.o \
+                 $(OBJDIR)/vendor/ts_swift.o $(OBJDIR)/vendor/ts_swift_scan.o \
+                 $(OBJDIR)/vendor/ts_kotlin.o $(OBJDIR)/vendor/ts_kotlin_scan.o \
+                 $(OBJDIR)/vendor/ts_dart.o $(OBJDIR)/vendor/ts_dart_scan.o \
+                 $(OBJDIR)/vendor/ts_css.o $(OBJDIR)/vendor/ts_css_scan.o
 $(OBJDIR)/kb/code_treesitter.o: C_FLAGS += -DAIMEE_TREESITTER -Ivendor/tree-sitter/lib/include
+# Any missing vendored source triggers a single fetch of the whole set.
 vendor/tree-sitter/lib/src/lib.c \
 vendor/tree-sitter-c/src/parser.c \
+vendor/tree-sitter-cpp/src/parser.c vendor/tree-sitter-cpp/src/scanner.c \
+vendor/tree-sitter-c-sharp/src/parser.c vendor/tree-sitter-c-sharp/src/scanner.c \
 vendor/tree-sitter-python/src/parser.c vendor/tree-sitter-python/src/scanner.c \
 vendor/tree-sitter-go/src/parser.c \
 vendor/tree-sitter-javascript/src/parser.c vendor/tree-sitter-javascript/src/scanner.c \
-vendor/tree-sitter-rust/src/parser.c vendor/tree-sitter-rust/src/scanner.c:
-	./scripts/fetch-treesitter.sh
+vendor/tree-sitter-typescript/typescript/src/parser.c vendor/tree-sitter-typescript/typescript/src/scanner.c \
+vendor/tree-sitter-typescript/tsx/src/parser.c vendor/tree-sitter-typescript/tsx/src/scanner.c \
+vendor/tree-sitter-rust/src/parser.c vendor/tree-sitter-rust/src/scanner.c \
+vendor/tree-sitter-java/src/parser.c \
+vendor/tree-sitter-ruby/src/parser.c vendor/tree-sitter-ruby/src/scanner.c \
+vendor/tree-sitter-php/php/src/parser.c vendor/tree-sitter-php/php/src/scanner.c \
+vendor/tree-sitter-lua/src/parser.c vendor/tree-sitter-lua/src/scanner.c \
+vendor/tree-sitter-bash/src/parser.c vendor/tree-sitter-bash/src/scanner.c \
+vendor/tree-sitter-swift/src/parser.c vendor/tree-sitter-swift/src/scanner.c \
+vendor/tree-sitter-kotlin/src/parser.c vendor/tree-sitter-kotlin/src/scanner.c \
+vendor/tree-sitter-dart/src/parser.c vendor/tree-sitter-dart/src/scanner.c \
+vendor/tree-sitter-css/src/parser.c vendor/tree-sitter-css/src/scanner.c:
+	../scripts/fetch-treesitter.sh
 $(OBJDIR)/vendor/ts_runtime.o: vendor/tree-sitter/lib/src/lib.c
 	@mkdir -p $(OBJDIR)/vendor
 	$(CC) -c -Os -w -Ivendor/tree-sitter/lib/src -Ivendor/tree-sitter/lib/include -o $@ $<
-$(OBJDIR)/vendor/ts_c.o: vendor/tree-sitter-c/src/parser.c
-	@mkdir -p $(OBJDIR)/vendor
-	$(CC) -c -Os -w -Ivendor/tree-sitter-c/src -o $@ $<
-$(OBJDIR)/vendor/ts_python.o: vendor/tree-sitter-python/src/parser.c
-	@mkdir -p $(OBJDIR)/vendor
-	$(CC) -c -Os -w -Ivendor/tree-sitter-python/src -o $@ $<
-$(OBJDIR)/vendor/ts_python_scan.o: vendor/tree-sitter-python/src/scanner.c
-	@mkdir -p $(OBJDIR)/vendor
-	$(CC) -c -Os -w -Ivendor/tree-sitter-python/src -o $@ $<
-$(OBJDIR)/vendor/ts_go.o: vendor/tree-sitter-go/src/parser.c
-	@mkdir -p $(OBJDIR)/vendor
-	$(CC) -c -Os -w -Ivendor/tree-sitter-go/src -o $@ $<
-$(OBJDIR)/vendor/ts_javascript.o: vendor/tree-sitter-javascript/src/parser.c
-	@mkdir -p $(OBJDIR)/vendor
-	$(CC) -c -Os -w -Ivendor/tree-sitter-javascript/src -o $@ $<
-$(OBJDIR)/vendor/ts_javascript_scan.o: vendor/tree-sitter-javascript/src/scanner.c
-	@mkdir -p $(OBJDIR)/vendor
-	$(CC) -c -Os -w -Ivendor/tree-sitter-javascript/src -o $@ $<
-$(OBJDIR)/vendor/ts_rust.o: vendor/tree-sitter-rust/src/parser.c
-	@mkdir -p $(OBJDIR)/vendor
-	$(CC) -c -Os -w -Ivendor/tree-sitter-rust/src -o $@ $<
-$(OBJDIR)/vendor/ts_rust_scan.o: vendor/tree-sitter-rust/src/scanner.c
-	@mkdir -p $(OBJDIR)/vendor
-	$(CC) -c -Os -w -Ivendor/tree-sitter-rust/src -o $@ $<
+# $(call ts_obj,<obj-suffix>,<grammar-src-dir>,<source-file>)
+define ts_obj
+$$(OBJDIR)/vendor/ts_$(1).o: vendor/$(2)/$(3)
+	@mkdir -p $$(OBJDIR)/vendor
+	$$(CC) -c -Os -w -Ivendor/$(2) -o $$@ $$<
+endef
+$(eval $(call ts_obj,c,tree-sitter-c/src,parser.c))
+$(eval $(call ts_obj,cpp,tree-sitter-cpp/src,parser.c))
+$(eval $(call ts_obj,cpp_scan,tree-sitter-cpp/src,scanner.c))
+$(eval $(call ts_obj,csharp,tree-sitter-c-sharp/src,parser.c))
+$(eval $(call ts_obj,csharp_scan,tree-sitter-c-sharp/src,scanner.c))
+$(eval $(call ts_obj,python,tree-sitter-python/src,parser.c))
+$(eval $(call ts_obj,python_scan,tree-sitter-python/src,scanner.c))
+$(eval $(call ts_obj,go,tree-sitter-go/src,parser.c))
+$(eval $(call ts_obj,javascript,tree-sitter-javascript/src,parser.c))
+$(eval $(call ts_obj,javascript_scan,tree-sitter-javascript/src,scanner.c))
+$(eval $(call ts_obj,typescript,tree-sitter-typescript/typescript/src,parser.c))
+$(eval $(call ts_obj,typescript_scan,tree-sitter-typescript/typescript/src,scanner.c))
+$(eval $(call ts_obj,tsx,tree-sitter-typescript/tsx/src,parser.c))
+$(eval $(call ts_obj,tsx_scan,tree-sitter-typescript/tsx/src,scanner.c))
+$(eval $(call ts_obj,rust,tree-sitter-rust/src,parser.c))
+$(eval $(call ts_obj,rust_scan,tree-sitter-rust/src,scanner.c))
+$(eval $(call ts_obj,java,tree-sitter-java/src,parser.c))
+$(eval $(call ts_obj,ruby,tree-sitter-ruby/src,parser.c))
+$(eval $(call ts_obj,ruby_scan,tree-sitter-ruby/src,scanner.c))
+$(eval $(call ts_obj,php,tree-sitter-php/php/src,parser.c))
+$(eval $(call ts_obj,php_scan,tree-sitter-php/php/src,scanner.c))
+$(eval $(call ts_obj,lua,tree-sitter-lua/src,parser.c))
+$(eval $(call ts_obj,lua_scan,tree-sitter-lua/src,scanner.c))
+$(eval $(call ts_obj,bash,tree-sitter-bash/src,parser.c))
+$(eval $(call ts_obj,bash_scan,tree-sitter-bash/src,scanner.c))
+$(eval $(call ts_obj,swift,tree-sitter-swift/src,parser.c))
+$(eval $(call ts_obj,swift_scan,tree-sitter-swift/src,scanner.c))
+$(eval $(call ts_obj,kotlin,tree-sitter-kotlin/src,parser.c))
+$(eval $(call ts_obj,kotlin_scan,tree-sitter-kotlin/src,scanner.c))
+$(eval $(call ts_obj,dart,tree-sitter-dart/src,parser.c))
+$(eval $(call ts_obj,dart_scan,tree-sitter-dart/src,scanner.c))
+$(eval $(call ts_obj,css,tree-sitter-css/src,parser.c))
+$(eval $(call ts_obj,css_scan,tree-sitter-css/src,scanner.c))
 endif
 
 # --- Gateway ---

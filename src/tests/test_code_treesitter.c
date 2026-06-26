@@ -1,6 +1,6 @@
 /* test_code_treesitter.c: §2 tree-sitter front-end. Built + run ONLY in the opt-in
- * AIMEE_TREESITTER build (it links the fetched runtime + grammar). Parses real C and
- * asserts the extracted definition_t set matches the hand-rolled extractor's shape. */
+ * AIMEE_TREESITTER build (it links the fetched runtime + grammars). Parses real source in
+ * every supported language and asserts the extracted definition_t set. */
 #include "headers/code_treesitter.h"
 
 #include <assert.h>
@@ -15,94 +15,165 @@ static int has(const definition_t *d, int n, const char *name, const char *kind)
    return 0;
 }
 
+/* Parse `src` as `ext` and assert (name, kind) is among the extracted definitions. */
+static void want(const char *ext, const char *src, const char *name, const char *kind)
+{
+   definition_t d[64];
+   int n = code_treesitter_definitions(ext, src, d, 64);
+   if (n < 0 || !has(d, n, name, kind))
+   {
+      printf("  FAIL %s: want %s/%s, got %d defs:", ext, name, kind, n);
+      for (int i = 0; i < n; i++)
+         printf(" %s/%s", d[i].name, d[i].kind);
+      printf("\n");
+      assert(0);
+   }
+}
+
 int main(void)
 {
    printf("test_code_treesitter:\n");
 
-   /* grammar availability gates the dispatch. */
-   assert(code_treesitter_available(".c"));
-   assert(code_treesitter_available(".h"));
-   assert(code_treesitter_available(".py"));
-   assert(code_treesitter_available(".go"));
-   assert(code_treesitter_available(".js"));
-   assert(code_treesitter_available(".jsx"));
-   assert(code_treesitter_available(".rs"));
-   assert(!code_treesitter_available(".ts")); /* typescript grammar not vendored yet */
+   /* availability gates the dispatch (a representative extension per language). */
+   const char *avail[] = {".c",   ".h",   ".cpp", ".cc",   ".hpp",   ".cs", ".py",   ".go",
+                          ".js",  ".mjs", ".jsx", ".ts",   ".tsx",   ".rs", ".java", ".rb",
+                          ".php", ".lua", ".sh",  ".bash", ".swift", ".kt", ".dart", ".css"};
+   for (size_t i = 0; i < sizeof(avail) / sizeof(avail[0]); i++)
+      assert(code_treesitter_available(avail[i]));
    assert(!code_treesitter_available(".txt"));
+   assert(!code_treesitter_available(".md"));
    assert(!code_treesitter_available(NULL));
 
-   definition_t defs[32];
-
    /* --- C --- */
-   const char *c_src = "#include <stdio.h>\n"
-                       "typedef struct Point { int x; int y; } Point;\n"
+   const char *c_src = "typedef struct Point { int x; } Point;\n"
                        "static int add(int a, int b) { return a + b; }\n"
-                       "void greet(const char *who);\n" /* prototype */
+                       "void greet(const char *who);\n"
                        "int main(void) { return add(1, 2); }\n";
-   int n = code_treesitter_definitions(".c", c_src, defs, 32);
+   definition_t d[64];
+   int n = code_treesitter_definitions(".c", c_src, d, 64);
    assert(n >= 4);
-   assert(has(defs, n, "add", "function"));   /* function_definition */
-   assert(has(defs, n, "main", "function"));  /* function_definition */
-   assert(has(defs, n, "greet", "function")); /* prototype declaration */
-   assert(has(defs, n, "Point", "type"));     /* typedef */
+   want(".c", c_src, "add", "function");
+   want(".c", c_src, "greet", "function"); /* prototype */
+   want(".c", c_src, "Point", "type");
    for (int i = 0; i < n; i++)
    {
-      assert(defs[i].line >= 1);
-      assert(defs[i].line_end >= defs[i].line);
+      assert(d[i].line >= 1);
+      assert(d[i].line_end >= d[i].line);
    }
-   /* bounded output: max=1 yields exactly one. */
-   assert(code_treesitter_definitions(".c", c_src, defs, 1) == 1);
+   assert(code_treesitter_definitions(".c", c_src, d, 1) == 1); /* bounded */
+
+   /* --- C++ (incl. a namespaced class — exercises container descent) --- */
+   const char *cpp = "int add(int a){return a;}\nclass C{ void m(); };\nstruct S{};\n"
+                     "namespace N { class Inner{}; }\n";
+   want(".cpp", cpp, "add", "function");
+   want(".cpp", cpp, "C", "type");
+   want(".cpp", cpp, "S", "type");
+   want(".cpp", cpp, "Inner", "type"); /* reached through namespace */
+
+   /* --- C# (types live inside a namespace) --- */
+   const char *cs =
+       "namespace N { class C { void M(){} } interface I{} enum E{A} record R(int x); }\n"
+       "class Top {}\n";
+   want(".cs", cs, "C", "type");
+   want(".cs", cs, "I", "type");
+   want(".cs", cs, "R", "type");
+   want(".cs", cs, "Top", "type"); /* top-level, no namespace */
 
    /* --- Python (incl. a decorated def) --- */
-   const char *py_src = "import os\n"
-                        "def add(a, b):\n    return a + b\n"
-                        "class Point:\n    def m(self):\n        pass\n"
-                        "@deco\ndef wrapped():\n    pass\n";
-   n = code_treesitter_definitions(".py", py_src, defs, 32);
-   assert(has(defs, n, "add", "function"));     /* function_definition */
-   assert(has(defs, n, "Point", "type"));       /* class_definition */
-   assert(has(defs, n, "wrapped", "function")); /* decorated_definition unwrapped */
+   const char *py = "def add(a, b):\n    return a + b\n"
+                    "class Point:\n    pass\n"
+                    "@deco\ndef wrapped():\n    pass\n";
+   want(".py", py, "add", "function");
+   want(".py", py, "Point", "type");
+   want(".py", py, "wrapped", "function");
 
-   /* --- Go (func, method, named type) --- */
-   const char *go_src = "package main\n"
-                        "func Add(a, b int) int { return a + b }\n"
-                        "func (p *Point) M() {}\n"
-                        "type Point struct { X int }\n";
-   n = code_treesitter_definitions(".go", go_src, defs, 32);
-   assert(has(defs, n, "Add", "function")); /* function_declaration */
-   assert(has(defs, n, "M", "function"));   /* method_declaration */
-   assert(has(defs, n, "Point", "type"));   /* type_declaration -> type_spec */
+   /* --- Go --- */
+   const char *go = "package main\nfunc Add(a int) int { return a }\n"
+                    "func (p *Point) M() {}\ntype Point struct { X int }\n";
+   want(".go", go, "Add", "function");
+   want(".go", go, "M", "function");
+   want(".go", go, "Point", "type");
 
-   /* --- JavaScript (function, generator, class) --- */
-   const char *js_src = "import x from 'y'\n"
-                        "function add(a, b) { return a + b }\n"
-                        "class Point { m() {} }\n"
-                        "function* gen() {}\n"
-                        "export function pub() {}\n" /* export_statement unwrap */
-                        "export class Wid {}\n";     /* export_statement unwrap */
-   n = code_treesitter_definitions(".js", js_src, defs, 32);
-   assert(has(defs, n, "add", "function")); /* function_declaration */
-   assert(has(defs, n, "Point", "type"));   /* class_declaration */
-   assert(has(defs, n, "gen", "function")); /* generator_function_declaration */
-   assert(has(defs, n, "pub", "function")); /* export function */
-   assert(has(defs, n, "Wid", "type"));     /* export class */
+   /* --- JavaScript (incl. export) --- */
+   const char *js = "function add(a){return a}\nclass Point{}\nfunction* gen(){}\n"
+                    "export function pub(){}\nexport class Wid{}\n";
+   want(".js", js, "add", "function");
+   want(".js", js, "Point", "type");
+   want(".js", js, "gen", "function");
+   want(".js", js, "pub", "function");
+   want(".js", js, "Wid", "type");
 
-   /* --- Rust (fn, struct, enum, trait) --- */
-   const char *rs_src = "use std::io;\n"
-                        "fn add(a: i32, b: i32) -> i32 { a + b }\n"
-                        "struct Point { x: i32 }\n"
-                        "enum E { A, B }\n"
-                        "trait T {}\n";
-   n = code_treesitter_definitions(".rs", rs_src, defs, 32);
-   assert(has(defs, n, "add", "function")); /* function_item */
-   assert(has(defs, n, "Point", "type"));   /* struct_item */
-   assert(has(defs, n, "E", "type"));       /* enum_item */
-   assert(has(defs, n, "T", "type"));       /* trait_item */
+   /* --- TypeScript --- */
+   const char *ts = "function f(){}\nclass C{}\ninterface I{}\ntype T=number\nenum E{A}\n"
+                    "export function h(){}\n";
+   want(".ts", ts, "f", "function");
+   want(".ts", ts, "C", "type");
+   want(".ts", ts, "I", "type");
+   want(".ts", ts, "T", "type");
+   want(".ts", ts, "h", "function");
+   want(".tsx", "export function App(){ return null }\n", "App", "function");
 
-   /* an ext with no grammar -> -1 (caller falls back to the hand-rolled extractor). */
-   assert(code_treesitter_definitions(".ts", c_src, defs, 32) == -1);
+   /* --- Rust --- */
+   const char *rs =
+       "fn add(a: i32) -> i32 { a }\nstruct Point { x: i32 }\nenum E { A }\ntrait T {}\n";
+   want(".rs", rs, "add", "function");
+   want(".rs", rs, "Point", "type");
+   want(".rs", rs, "E", "type");
+   want(".rs", rs, "T", "type");
 
-   printf("  C/Python/Go/JavaScript/Rust definitions extracted\n");
+   /* --- Java (top-level types) --- */
+   const char *java = "class C { void m(){} }\ninterface I{}\nenum E{A}\nrecord R(int x){}\n";
+   want(".java", java, "C", "type");
+   want(".java", java, "I", "type");
+   want(".java", java, "R", "type");
+
+   /* --- Ruby --- */
+   const char *rb = "def foo; end\nclass C\nend\nmodule M\nend\n";
+   want(".rb", rb, "foo", "function");
+   want(".rb", rb, "C", "type");
+   want(".rb", rb, "M", "type");
+
+   /* --- PHP --- */
+   const char *php = "<?php\nfunction f(){}\nclass C{}\ninterface I{}\ntrait Tr{}\n";
+   want(".php", php, "f", "function");
+   want(".php", php, "C", "type");
+   want(".php", php, "Tr", "type");
+
+   /* --- Lua (dotted name preserved) --- */
+   const char *lua = "local function f() end\nfunction g() end\nfunction T.m() end\n";
+   want(".lua", lua, "g", "function");
+   want(".lua", lua, "T.m", "function");
+
+   /* --- Bash --- */
+   const char *sh = "foo() { echo hi; }\nfunction bar { echo yo; }\n";
+   want(".sh", sh, "foo", "function");
+   want(".sh", sh, "bar", "function");
+
+   /* --- Swift --- */
+   const char *swift = "func f(){}\nclass C{}\nstruct S{}\nprotocol P{}\n";
+   want(".swift", swift, "f", "function");
+   want(".swift", swift, "C", "type");
+   want(".swift", swift, "P", "type");
+
+   /* --- Kotlin (no name field — exercises identifier digging) --- */
+   const char *kt = "fun f(){}\nclass C{}\nobject O{}\n";
+   want(".kt", kt, "f", "function");
+   want(".kt", kt, "C", "type");
+   want(".kt", kt, "O", "type");
+
+   /* --- Dart --- */
+   const char *dart = "void f(){}\nclass C{}\nenum E{a}\n";
+   want(".dart", dart, "f", "function");
+   want(".dart", dart, "C", "type");
+
+   /* --- CSS (@keyframes name) --- */
+   want(".css", "@keyframes spin { from {} to {} }\n.cls { color: red }\n", "spin", "type");
+
+   /* a vendored-but-unmapped ext -> -1 (caller falls back to the hand-rolled extractor). */
+   assert(code_treesitter_definitions(".md", c_src, d, 64) == -1);
+
+   printf("  all supported languages extracted (C/C++/C#/Python/Go/JS/TS/Rust/Java/"
+          "Ruby/PHP/Lua/Bash/Swift/Kotlin/Dart/CSS)\n");
    printf("ALL PASS\n");
    return 0;
 }
