@@ -142,6 +142,19 @@ int db2_code_projection_list_edges(const char *project, void *out, int max)
    return n;
 }
 
+/* Hermetic mirror of the §3 provenance helper (kb_service_graph.c). The real
+ * definition lives in a db2-heavy unit; this fake keeps the route test pure
+ * while preserving the only branch the projection route exercises: a
+ * code_projection edge is always "structural". */
+const char *kb_graph_edge_provenance(const char *edge_origin, int structural_weight)
+{
+   if (structural_weight > 0 || (edge_origin && strcmp(edge_origin, "code_projection") == 0))
+      return "structural";
+   if (edge_origin && strcmp(edge_origin, "session") == 0)
+      return "ambiguous";
+   return "inferred";
+}
+
 static void test_code_structure_ok(void)
 {
    char buf[512];
@@ -318,6 +331,38 @@ static void test_code_graph_hubs_missing_project(void)
    char buf[256];
    int s =
        kb_http_route_ex("GET", "/v1/code/graph/hubs", "", NULL, NULL, NULL, 0, buf, sizeof(buf));
+   assert(s == 400);
+   assert(strstr(buf, "missing project") != NULL);
+}
+
+/* §8 read-only node-neighborhood projection. Seed edges: hub->a, hub->b, c->hub. */
+static void test_code_graph_node_ok(void)
+{
+   char buf[2048];
+   int s = kb_http_route_ex("GET", "/v1/code/graph", "project=proj-alpha&node=hub&max_results=10",
+                            NULL, NULL, NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"node\":\"hub\"") != NULL);
+   /* hub --calls--> a, b (out); c --calls--> hub (in). */
+   assert(strstr(buf, "\"neighbor\":\"a\"") != NULL);
+   assert(strstr(buf, "\"neighbor\":\"b\"") != NULL);
+   assert(strstr(buf, "\"neighbor\":\"c\"") != NULL);
+   assert(strstr(buf, "\"direction\":\"out\"") != NULL);
+   assert(strstr(buf, "\"direction\":\"in\"") != NULL);
+   assert(strstr(buf, "\"relation\":\"calls\"") != NULL);
+   /* projection edges are AST-derived -> §3 provenance "structural". */
+   assert(strstr(buf, "\"provenance\":\"structural\"") != NULL);
+   assert(strstr(buf, "\"neighbor_count\":3") != NULL);
+}
+
+static void test_code_graph_node_missing_params(void)
+{
+   char buf[512];
+   int s = kb_http_route_ex("GET", "/v1/code/graph", "project=proj-alpha", NULL, NULL, NULL, 0, buf,
+                            sizeof(buf));
+   assert(s == 400);
+   assert(strstr(buf, "missing node") != NULL);
+   s = kb_http_route_ex("GET", "/v1/code/graph", "node=hub", NULL, NULL, NULL, 0, buf, sizeof(buf));
    assert(s == 400);
    assert(strstr(buf, "missing project") != NULL);
 }
