@@ -742,6 +742,10 @@ typedef struct config
     * Anthropic's terms and risk account action. Set to 1 to opt in (see
     * DELEGATES.md). Does not affect API-key/HTTP agents or other CLI agents. */
    int claude_cli_delegate_enabled;
+   /* §7 code-graph actuation: prepend a structural-context block (callers /
+    * dependencies of the file paths a delegate task references) to the delegate's
+    * system prompt. Advisory, fail-open, default off (opt-in). */
+   int delegate_graph_context_enabled;
 
    /* Replayable-evidence roundtable verification (Part A). When 1 (default), a
     * review-mode roundtable runs each captured item through an independent replay
