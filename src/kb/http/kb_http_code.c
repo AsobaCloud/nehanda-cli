@@ -7,6 +7,7 @@
 #include "db2/lifecycle.h"
 #include "db2/memory_query.h"
 #include "db2/code_projection.h"
+#include "db2/pgvec_transport.h"
 #include "memory.h"
 #include "kb/kb_rrf.h"
 #include "kb/kb_graph_analytics.h"
@@ -567,14 +568,21 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
    memory_t *mems = calloc(HYBRID_PER_SIGNAL, sizeof(*mems));
    kb_rrf_item_t *code_items = calloc(HYBRID_PER_SIGNAL, sizeof(*code_items));
    kb_rrf_item_t *graph_items = calloc(HYBRID_PER_SIGNAL, sizeof(*graph_items));
-   kb_rrf_result_t *fused = calloc(HYBRID_PER_SIGNAL * 2, sizeof(*fused));
-   if (!chits || !ghits || !mems || !code_items || !graph_items || !fused)
+   kb_rrf_item_t *vector_items = calloc(HYBRID_PER_SIGNAL, sizeof(*vector_items));
+   char(*vpaths)[256] = calloc(HYBRID_PER_SIGNAL, sizeof(*vpaths));
+   double *vscores = calloc(HYBRID_PER_SIGNAL, sizeof(*vscores));
+   kb_rrf_result_t *fused = calloc(HYBRID_PER_SIGNAL * 3, sizeof(*fused));
+   if (!chits || !ghits || !mems || !code_items || !graph_items || !vector_items || !vpaths ||
+       !vscores || !fused)
    {
       free(chits);
       free(ghits);
       free(mems);
       free(code_items);
       free(graph_items);
+      free(vector_items);
+      free(vpaths);
+      free(vscores);
       free(fused);
       snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
       return 500;
@@ -611,19 +619,47 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
 
    /* Per-signal RRF weights + rank constant are config-tunable (§5). */
    config_t hcfg;
-   double w_code = 1.0, w_graph = 1.0, rrf_k = KB_RRF_DEFAULT_K;
+   double w_code = 1.0, w_graph = 1.0, w_vector = 1.0, rrf_k = KB_RRF_DEFAULT_K;
    if (config_load(&hcfg) == 0)
    {
       w_code = hcfg.code_hybrid_weight_code;
       w_graph = hcfg.code_hybrid_weight_graph;
+      w_vector = hcfg.code_hybrid_weight_vector;
       if (hcfg.code_hybrid_rrf_k > 0)
          rrf_k = hcfg.code_hybrid_rrf_k;
    }
-   kb_rrf_signal_t sigs[2] = {
+
+   /* Signal C — vector similarity (key = file_path; §5). Embed the query and
+    * pgvec-search code_embeddings. Gated on a real embedder whose output dim
+    * matches the corpus (db2_embedding_dim): on a dim mismatch (e.g. the 384-dim
+    * builtin vs a 2560-dim corpus) or a down/unconfigured embedder the leg is
+    * simply empty and the route degrades to code+graph. w_vector<=0 disables it. */
+   int nv = 0;
+   if (w_vector > 0.0)
+   {
+      const char *embed_cmd = config_embedding_command(&hcfg, NULL);
+      float qvec[EMBED_MAX_DIM];
+      int qdim = memory_embed_text(query, embed_cmd, qvec, EMBED_MAX_DIM);
+      if (qdim > 0 && qdim == db2_embedding_dim())
+      {
+         nv = pgvec_code_search_paths(proj, qvec, qdim, HYBRID_PER_SIGNAL, (char *)vpaths,
+                                      (int)sizeof(vpaths[0]), vscores, HYBRID_PER_SIGNAL);
+         if (nv < 0)
+            nv = 0;
+         for (int i = 0; i < nv; i++)
+         {
+            snprintf(vector_items[i].id, sizeof(vector_items[i].id), "%s", vpaths[i]);
+            vector_items[i].structural_weight = 0;
+         }
+      }
+   }
+
+   kb_rrf_signal_t sigs[3] = {
        {code_items, nc, w_code, "code"},
        {graph_items, ng, w_graph, "graph"},
+       {vector_items, nv, w_vector, "vector"},
    };
-   int nf = kb_rrf_fuse(sigs, 2, rrf_k, fused, HYBRID_PER_SIGNAL * 2);
+   int nf = kb_rrf_fuse(sigs, 3, rrf_k, fused, HYBRID_PER_SIGNAL * 3);
    if (nf < 0)
       nf = 0;
    if (nf > max_r)
@@ -644,6 +680,9 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
       free(mems);
       free(code_items);
       free(graph_items);
+      free(vector_items);
+      free(vpaths);
+      free(vscores);
       free(fused);
       snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
       return 500;
@@ -685,6 +724,14 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
                cJSON_AddItemToArray(which, cJSON_CreateString("graph"));
             cJSON_AddStringToObject(row, "caller", ghits[j].caller);
             cJSON_AddNumberToObject(row, "caller_line", ghits[j].line);
+            break;
+         }
+      for (int j = 0; j < nv; j++)
+         if (strcmp(vpaths[j], fp) == 0)
+         {
+            if (which)
+               cJSON_AddItemToArray(which, cJSON_CreateString("vector"));
+            cJSON_AddNumberToObject(row, "vector_score", vscores[j]);
             break;
          }
       cJSON_AddItemToArray(results, row);
@@ -730,6 +777,9 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
    free(mems);
    free(code_items);
    free(graph_items);
+   free(vector_items);
+   free(vpaths);
+   free(vscores);
    free(fused);
    return status;
 }
