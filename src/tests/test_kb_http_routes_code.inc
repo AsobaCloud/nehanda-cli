@@ -697,6 +697,80 @@ static void test_blast_radius_ok(void)
    assert(strstr(buf, "\"dependency_count\":1") != NULL);
 }
 
+/* §6 live-idempotency stubs: the scan route gates the git re-walk on the default-
+ * branch SHA. g_branch_sha drives git_resolve_default_sha (empty -> unresolvable, the
+ * gate is skipped); g_stored_sha is the persisted last-indexed SHA. */
+static char g_branch_sha[128] = "";
+static char g_stored_sha[128] = "";
+static char g_runtime_state_set_val[128] = "";
+int git_resolve_default_sha(const char *root, char *out, size_t outlen)
+{
+   (void)root;
+   if (!g_branch_sha[0] || !out || outlen == 0)
+      return -1;
+   snprintf(out, outlen, "%s", g_branch_sha);
+   return 0;
+}
+int db2_kb_runtime_state_get(const char *key, char *out, size_t out_len)
+{
+   (void)key;
+   if (!out || out_len == 0)
+      return -1;
+   snprintf(out, out_len, "%s", g_stored_sha);
+   return g_stored_sha[0] ? 0 : -1;
+}
+int db2_kb_runtime_state_set(const char *key, const char *value)
+{
+   (void)key;
+   snprintf(g_runtime_state_set_val, sizeof(g_runtime_state_set_val), "%s", value ? value : "");
+   return 0;
+}
+/* Faithful mirror of the pure gate (its real logic is unit-tested in test_code_collect). */
+int code_default_branch_changed(const char *stored_sha, const char *current_sha)
+{
+   if (!current_sha || !current_sha[0])
+      return 0;
+   if (!stored_sha || !stored_sha[0])
+      return 1;
+   return strcmp(stored_sha, current_sha) != 0;
+}
+
+/* Unchanged default branch (stored SHA == current) + !force -> skip the re-walk. */
+static void test_code_scan_skips_unchanged_branch(void)
+{
+   char buf[512];
+   g_db_initialized = 1;
+   g_code_scan_rc = 5;
+   snprintf(g_branch_sha, sizeof(g_branch_sha), "tree-aaa");
+   snprintf(g_stored_sha, sizeof(g_stored_sha), "tree-aaa");
+   const char *body = "{\"project\":\"proj-alpha\",\"root_path\":\"/tmp/repo\"}";
+   int s = kb_http_route_ex("POST", "/v1/code/scan", NULL, NULL, NULL, body, (int)strlen(body), buf,
+                            sizeof(buf));
+   g_branch_sha[0] = '\0'; /* reset so later tests see an unresolvable SHA (gate off) */
+   assert(s == 200);
+   assert(strstr(buf, "\"skipped\":true") != NULL);
+   assert(strstr(buf, "default branch unchanged") != NULL);
+}
+
+/* Branch moved (stored != current) -> scan runs and the new SHA is persisted. */
+static void test_code_scan_runs_on_branch_move(void)
+{
+   char buf[512];
+   g_db_initialized = 1;
+   g_code_scan_rc = 5;
+   g_code_scan_inspected = 3;
+   g_runtime_state_set_val[0] = '\0';
+   snprintf(g_branch_sha, sizeof(g_branch_sha), "tree-bbb");
+   snprintf(g_stored_sha, sizeof(g_stored_sha), "tree-aaa");
+   const char *body = "{\"project\":\"proj-alpha\",\"root_path\":\"/tmp/repo\"}";
+   int s = kb_http_route_ex("POST", "/v1/code/scan", NULL, NULL, NULL, body, (int)strlen(body), buf,
+                            sizeof(buf));
+   g_branch_sha[0] = '\0';
+   assert(s == 200);
+   assert(strstr(buf, "\"skipped\":false") != NULL);
+   assert(strcmp(g_runtime_state_set_val, "tree-bbb") == 0); /* persisted for next time */
+}
+
 static void test_code_scan_ok(void)
 {
    char buf[512];

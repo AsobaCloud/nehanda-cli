@@ -202,6 +202,48 @@ static void test_non_git_uses_worktree(void)
    printf("  test_non_git_uses_worktree: ok\n");
 }
 
+/* §6 live: the default-branch tree SHA tracks commits, and the pure change-gate
+ * decides when a re-index is warranted. */
+static void test_default_branch_sha_tracks_commits(void)
+{
+   make_root("sha");
+   git("init -q -b main");
+   git("config user.email t@t");
+   git("config user.name t");
+   write_file("src/a.c", "int a(void){return 1;}");
+   git("add -A");
+   git("commit -qm c1");
+
+   char sha1[128] = "", sha1b[128] = "";
+   assert(git_resolve_default_sha(g_root, sha1, sizeof(sha1)) == 0 && sha1[0]);
+   assert(git_resolve_default_sha(g_root, sha1b, sizeof(sha1b)) == 0);
+   assert(strcmp(sha1, sha1b) == 0); /* stable when nothing moved */
+
+   write_file("src/b.c", "int b(void){return 2;}");
+   git("add -A");
+   git("commit -qm c2");
+   char sha2[128] = "";
+   assert(git_resolve_default_sha(g_root, sha2, sizeof(sha2)) == 0);
+   assert(strcmp(sha1, sha2) != 0); /* a commit moves the tree SHA */
+
+   assert(code_default_branch_changed(sha1, sha2) == 1); /* moved -> reindex */
+   assert(code_default_branch_changed(sha1, sha1) == 0); /* unchanged -> skip */
+   assert(code_default_branch_changed("", sha1) == 1);   /* never indexed -> reindex */
+   assert(code_default_branch_changed(sha1, "") == 0);   /* unresolved -> don't thrash */
+   printf("  test_default_branch_sha_tracks_commits: ok\n");
+}
+
+/* A non-git dir has no default branch SHA; `out` is cleared and -1 returned. */
+static void test_default_branch_sha_non_git(void)
+{
+   make_root("nogit-sha");
+   write_file("a.c", "x");
+   char sha[128] = "preset";
+   assert(git_resolve_default_sha(g_root, sha, sizeof(sha)) == -1);
+   assert(sha[0] == '\0');
+   printf("  test_default_branch_sha_non_git: ok\n");
+}
+
 int main(void)
 {
    printf("test_code_collect:\n");
@@ -216,6 +258,8 @@ int main(void)
    test_clone_resolves_origin_head();
    test_no_default_branch_skips();
    test_non_git_uses_worktree();
+   test_default_branch_sha_tracks_commits();
+   test_default_branch_sha_non_git();
    sh("rm -rf '%s'", g_root);
    printf("ALL PASS\n");
    return 0;
