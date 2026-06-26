@@ -7,7 +7,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
+
+/* Monotonic milliseconds for measuring how long a single attempt actually took
+ * (used to distinguish a budget-consuming stall from a fast-fail before retry). */
+static int64_t retry_now_ms(void)
+{
+   struct timespec ts = {0, 0};
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+   return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
 
 /* Thread-local progress callback (see http_retry.h). Each connection/turn runs on
  * its own worker thread, so a thread-local matches the delegate run's lifetime. */
@@ -127,8 +137,10 @@ int http_retry_post_context(const char *url, const char *auth_header, const char
                 effective_max_attempts, url ? url : "?", provider ? provider : "?",
                 model ? model : "?", timeout_ms);
 
+      int64_t attempt_start_ms = retry_now_ms();
       http_status =
           agent_http_post(url, auth_header, body, response_buf, timeout_ms, extra_headers);
+      int64_t attempt_ms = retry_now_ms() - attempt_start_ms;
 
       aimee_log(LOG_INFO, "http_retry", "attempt %d/%d: HTTP %d (provider=%s model=%s)",
                 attempt + 1, effective_max_attempts, http_status, provider ? provider : "?",
@@ -170,6 +182,29 @@ int http_retry_post_context(const char *url, const char *auth_header, const char
                       "provider '%s' rate limited; extending retry budget to %d attempts "
                       "(base=%dms, max=%dms)",
                       provider ? provider : "unknown", effective_max_attempts, base_ms, max_ms);
+      }
+
+      /* Bound retries after a budget-consuming STALL. A failed attempt
+       * (http_status < 0 -> FAILOVER_TIMEOUT) that ran for at least half its
+       * timeout_ms already spent the full budget waiting on a stalled provider;
+       * retrying with the same budget usually just re-times-out, wasting another
+       * full timeout. In a deadline-bounded context (e.g. a roundtable panel) that
+       * drags the whole panel to its deadline and abandons/leaks the worker. Allow
+       * at most ONE more attempt (recovers a one-off mid-read drop) instead of the
+       * full budget, capping a stall at ~2x timeout, not Nx. A FAST failure
+       * (connect-refused in ms) is NOT capped — it is cheap to retry — and 429/503
+       * keep their full/extended budget. */
+      /* attempt_ms*2 >= timeout_ms avoids integer truncation (timeout_ms/2 == 0 at
+       * tiny timeouts would miscap a fast failure). */
+      if (http_status < 0 && timeout_ms > 0 && attempt_ms * 2 >= (int64_t)timeout_ms &&
+          effective_max_attempts > attempt + 2)
+      {
+         effective_max_attempts = attempt + 2;
+         aimee_log(LOG_INFO, "http_retry",
+                   "stall on attempt %d (provider=%s, %lldms of %dms budget); capping to %d "
+                   "attempts to bound wall-clock",
+                   attempt + 1, provider ? provider : "unknown", (long long)attempt_ms, timeout_ms,
+                   effective_max_attempts);
       }
 
       /* Success or non-retryable error: return immediately */
