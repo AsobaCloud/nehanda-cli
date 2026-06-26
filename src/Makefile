@@ -423,9 +423,23 @@ KB_PLATFORM_OBJS = $(PLATFORM_BASIC_OBJS) $(filter %/agent_bridge.o %/cli_client
 # compiled (with -w, since vendored generated code does not pass -Werror), and the KB's
 # code_treesitter.o is built with -DAIMEE_TREESITTER.
 ifdef AIMEE_TREESITTER
-TS_VENDOR_OBJS = $(OBJDIR)/vendor/ts_runtime.o $(OBJDIR)/vendor/ts_c.o
+# Runtime + one object per grammar parser.c, plus a scanner object for grammars with an
+# external scanner (Python/JavaScript/Rust; C and Go have none). Add a language by
+# vendoring it (fetch-treesitter.sh), appending its objs here + a compile rule below, and
+# registering it in code_treesitter.c.
+TS_VENDOR_OBJS = $(OBJDIR)/vendor/ts_runtime.o \
+                 $(OBJDIR)/vendor/ts_c.o \
+                 $(OBJDIR)/vendor/ts_python.o $(OBJDIR)/vendor/ts_python_scan.o \
+                 $(OBJDIR)/vendor/ts_go.o \
+                 $(OBJDIR)/vendor/ts_javascript.o $(OBJDIR)/vendor/ts_javascript_scan.o \
+                 $(OBJDIR)/vendor/ts_rust.o $(OBJDIR)/vendor/ts_rust_scan.o
 $(OBJDIR)/kb/code_treesitter.o: C_FLAGS += -DAIMEE_TREESITTER -Ivendor/tree-sitter/lib/include
-vendor/tree-sitter/lib/src/lib.c vendor/tree-sitter-c/src/parser.c:
+vendor/tree-sitter/lib/src/lib.c \
+vendor/tree-sitter-c/src/parser.c \
+vendor/tree-sitter-python/src/parser.c vendor/tree-sitter-python/src/scanner.c \
+vendor/tree-sitter-go/src/parser.c \
+vendor/tree-sitter-javascript/src/parser.c vendor/tree-sitter-javascript/src/scanner.c \
+vendor/tree-sitter-rust/src/parser.c vendor/tree-sitter-rust/src/scanner.c:
 	./scripts/fetch-treesitter.sh
 $(OBJDIR)/vendor/ts_runtime.o: vendor/tree-sitter/lib/src/lib.c
 	@mkdir -p $(OBJDIR)/vendor
@@ -433,6 +447,27 @@ $(OBJDIR)/vendor/ts_runtime.o: vendor/tree-sitter/lib/src/lib.c
 $(OBJDIR)/vendor/ts_c.o: vendor/tree-sitter-c/src/parser.c
 	@mkdir -p $(OBJDIR)/vendor
 	$(CC) -c -Os -w -Ivendor/tree-sitter-c/src -o $@ $<
+$(OBJDIR)/vendor/ts_python.o: vendor/tree-sitter-python/src/parser.c
+	@mkdir -p $(OBJDIR)/vendor
+	$(CC) -c -Os -w -Ivendor/tree-sitter-python/src -o $@ $<
+$(OBJDIR)/vendor/ts_python_scan.o: vendor/tree-sitter-python/src/scanner.c
+	@mkdir -p $(OBJDIR)/vendor
+	$(CC) -c -Os -w -Ivendor/tree-sitter-python/src -o $@ $<
+$(OBJDIR)/vendor/ts_go.o: vendor/tree-sitter-go/src/parser.c
+	@mkdir -p $(OBJDIR)/vendor
+	$(CC) -c -Os -w -Ivendor/tree-sitter-go/src -o $@ $<
+$(OBJDIR)/vendor/ts_javascript.o: vendor/tree-sitter-javascript/src/parser.c
+	@mkdir -p $(OBJDIR)/vendor
+	$(CC) -c -Os -w -Ivendor/tree-sitter-javascript/src -o $@ $<
+$(OBJDIR)/vendor/ts_javascript_scan.o: vendor/tree-sitter-javascript/src/scanner.c
+	@mkdir -p $(OBJDIR)/vendor
+	$(CC) -c -Os -w -Ivendor/tree-sitter-javascript/src -o $@ $<
+$(OBJDIR)/vendor/ts_rust.o: vendor/tree-sitter-rust/src/parser.c
+	@mkdir -p $(OBJDIR)/vendor
+	$(CC) -c -Os -w -Ivendor/tree-sitter-rust/src -o $@ $<
+$(OBJDIR)/vendor/ts_rust_scan.o: vendor/tree-sitter-rust/src/scanner.c
+	@mkdir -p $(OBJDIR)/vendor
+	$(CC) -c -Os -w -Ivendor/tree-sitter-rust/src -o $@ $<
 endif
 
 # --- Gateway ---
