@@ -16,9 +16,10 @@
 
 typedef struct
 {
+   int sent;           /* 1 if the pair was actually sent to the LLM (paths resolved) */
    int judged;         /* 1 if the LLM returned a verdict for this pair, else 0 */
    int confirmed;      /* LLM verdict: a genuine surprising link (only if judged) */
-   int shared_symbols; /* cheap cross-check: # symbol names the two files share */
+   int shared_symbols; /* cheap cross-check: # shared symbol names (valid only if sent) */
    char reason[200];   /* short LLM rationale (only if judged) */
 } kb_surprising_verdict_t;
 

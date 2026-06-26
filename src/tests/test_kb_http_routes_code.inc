@@ -414,6 +414,7 @@ int kb_surprising_judge(const config_t *cfg, const char *judge_cmd, const char *
       return -1;
    for (int i = 0; i < n; i++)
       memset(&out[i], 0, sizeof(out[i]));
+   out[0].sent = 1;
    out[0].judged = 1;
    out[0].confirmed = 1;
    out[0].shared_symbols = 2;
