@@ -131,13 +131,14 @@ pinned commits, gitignored) and compiled only in the opt-in `AIMEE_TREESITTER` b
 without it. Ships grammars for **all 16 hand-rolled supported languages** — C, C++, C#,
 Python, Go, JavaScript, TypeScript, Rust, Java, Ruby, PHP, Lua, Bash, Swift, Kotlin,
 Dart, CSS — each with a per-language `classify_*` mapping its definition node types to
-`function`/`type`; organizational wrappers (namespaces) are descended through so types
-nested under them (C#/C++) are surfaced. `unit-test-code-treesitter` parses real source
-in every language and asserts the extracted defs. Adding a grammar is mechanical — vendor
-its `parser.c`(+`scanner.c`), register its `TSLanguage` + extensions in
-`ts_language_for_ext`, and add a `classify_*`. Remaining increments: recursive
-descent for nested members (class/impl methods), more languages, and call-edge
-extraction (`code_calls`) over the parse tree.
+`function`/`type`. The walk descends through organizational wrappers (namespaces,
+`export`/decorator wrappers) and the member bodies of types, so **nested members
+(class/impl/trait methods) are surfaced** across every OO language — while it never
+descends a function body (so locals stay out). `unit-test-code-treesitter` parses real
+source in every language and asserts the extracted defs (top-level + nested). Adding a
+grammar is mechanical — vendor its `parser.c`(+`scanner.c`), register its `TSLanguage` +
+extensions in `ts_language_for_ext`, and add a `classify_*`. Remaining increments: more
+languages, and call-edge extraction (`code_calls`) over the parse tree.
 
 ## §3 Edge provenance + confidence
 

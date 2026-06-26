@@ -180,6 +180,32 @@ int main(void)
    /* --- CSS (@keyframes name) --- */
    want(".css", "@keyframes spin { from {} to {} }\n.cls { color: red }\n", "spin", "type");
 
+   /* --- nested members: methods inside a type body are surfaced (the walk descends type
+    * bodies but never function bodies), across the OO languages. --- */
+   want(".cpp", "class C { void m(){} };\n", "m", "function");
+   want(".cs", "namespace N { class C { void M(){} } }\n", "M", "function");
+   want(".java", "class C { void m(){} }\n", "m", "function");
+   want(".ts", "class C { greet(){} }\n", "greet", "function");
+   want(".ts", "export class W { go(){} }\n", "go", "function"); /* exported class's method */
+   want(".py", "class C:\n    def m(self):\n        pass\n", "m", "function");
+   want(".rs", "impl C { fn m(&self){} }\n", "m", "function"); /* impl method */
+   want(".rs", "trait T { fn t(&self); }\n", "t", "function"); /* trait method sig */
+   want(".rb", "class C\n  def m; end\nend\n", "m", "function");
+   want(".php", "<?php\nclass C { function m(){} }\n", "m", "function");
+   want(".swift", "class C { func m(){} }\n", "m", "function");
+   want(".dart", "class C { void m(){} }\n", "m", "function");
+
+   /* descending a type body must not double-emit the type or a typedef's struct tag. */
+   {
+      definition_t e[64];
+      int m = code_treesitter_definitions(".c", "typedef struct Point { int x; } Point;\n", e, 64);
+      int seen = 0;
+      for (int i = 0; i < m; i++)
+         if (strcmp(e[i].name, "Point") == 0)
+            seen++;
+      assert(seen == 1); /* not double-emitted via the struct tag */
+   }
+
    /* a vendored-but-unmapped ext -> -1 (caller falls back to the hand-rolled extractor). */
    assert(code_treesitter_definitions(".md", c_src, d, 64) == -1);
 

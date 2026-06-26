@@ -284,17 +284,11 @@ static int classify_cpp(TSNode node, const char **kind, TSNode *name_root)
    return 0;
 }
 
-/* Python: function/class definitions, including those wrapped by a decorator. */
+/* Python: function/class definitions. A decorated_definition is descended through (see
+ * is_descendable), so the inner def is classified here directly. */
 static int classify_py(TSNode node, const char **kind, TSNode *name_root)
 {
    const char *t = ts_node_type(node);
-   if (strcmp(t, "decorated_definition") == 0)
-   {
-      TSNode inner = ts_node_child_by_field_name(node, "definition", 10);
-      if (ts_node_is_null(inner))
-         return 0;
-      return classify_py(inner, kind, name_root); /* inner is a function/class def */
-   }
    if (strcmp(t, "function_definition") == 0)
       *kind = "function";
    else if (strcmp(t, "class_definition") == 0)
@@ -338,31 +332,25 @@ static int classify_go(TSNode node, const char **kind, TSNode *name_root)
    return 0;
 }
 
-/* JavaScript / TypeScript: function (incl. generator) and class/interface/type/enum
- * declarations, including those behind an `export`/`export default`. */
+/* JavaScript / TypeScript: function (incl. generator), class methods, and
+ * class/interface/type/enum declarations. `export`/`export default` and class bodies are
+ * descended through (see is_descendable), so this fires on the declaration itself. */
 static int classify_jsts(TSNode node, const char **kind, TSNode *name_root)
 {
-   const char *t = ts_node_type(node);
-   if (strcmp(t, "export_statement") == 0)
-   {
-      TSNode inner = ts_node_child_by_field_name(node, "declaration", 11);
-      if (ts_node_is_null(inner))
-         return 0; /* re-export / `export const x = ...` — no named declaration */
-      return classify_jsts(inner, kind, name_root);
-   }
-   static const char *const F[] = {"function_declaration", "generator_function_declaration", NULL};
+   static const char *const F[] = {"function_declaration", "generator_function_declaration",
+                                   "method_definition", NULL};
    static const char *const T[] = {"class_declaration", "interface_declaration",
                                    "type_alias_declaration", "enum_declaration", NULL};
-   if (!kind_lookup(t, F, T, kind))
+   if (!kind_lookup(ts_node_type(node), F, T, kind))
       return 0;
    *name_root = name_node(node);
    return 1;
 }
 
-/* Rust: functions and the named type-like items. */
+/* Rust: functions (incl. trait method signatures) and the named type-like items. */
 static int classify_rust(TSNode node, const char **kind, TSNode *name_root)
 {
-   static const char *const F[] = {"function_item", NULL};
+   static const char *const F[] = {"function_item", "function_signature_item", NULL};
    static const char *const T[] = {"struct_item", "enum_item",  "trait_item",
                                    "type_item",   "union_item", NULL};
    if (!kind_lookup(ts_node_type(node), F, T, kind))
@@ -472,10 +460,12 @@ static int classify_kotlin(TSNode node, const char **kind, TSNode *name_root)
    return 1;
 }
 
-/* Dart: function/method signatures and class-like types. */
+/* Dart: function signatures and class-like types. A class method is a method_signature
+ * wrapping a function_signature; method_signature is descended through (see is_descendable)
+ * so the function_signature inside carries the name. */
 static int classify_dart(TSNode node, const char **kind, TSNode *name_root)
 {
-   static const char *const F[] = {"function_signature", "method_signature", NULL};
+   static const char *const F[] = {"function_signature", NULL};
    static const char *const T[] = {"class_definition", "enum_declaration", "mixin_declaration",
                                    "extension_declaration", NULL};
    if (!kind_lookup(ts_node_type(node), F, T, kind))
@@ -539,18 +529,37 @@ static int classify(ts_lang_t lang, TSNode node, const char **kind, TSNode *name
    return 0;
 }
 
-/* Organizational wrappers we descend THROUGH to reach the definitions inside (namespaces,
- * their declaration lists, C++ templates/extern blocks). We do NOT descend function or
- * class bodies, so nested members (methods) are not surfaced — a follow-up. */
-static int is_container(const char *t)
+/* Node types we descend THROUGH to reach the definitions inside: organizational wrappers
+ * (namespaces, export/decorator wrappers, C++ templates/extern blocks) and the member
+ * bodies of types (class/struct/interface/trait/impl/enum bodies). We do NOT list function
+ * bodies, type aliases, or typedefs — descending a typedef would re-emit its inner struct
+ * tag, and descending a function body would surface locals. Because the walk also stops at
+ * any matched FUNCTION (see visit), method bodies are never descended either. */
+static int is_descendable(const char *t)
 {
-   return strcmp(t, "namespace_declaration") == 0 ||
-          strcmp(t, "file_scoped_namespace_declaration") == 0 ||
-          strcmp(t, "namespace_definition") == 0 || strcmp(t, "declaration_list") == 0 ||
-          strcmp(t, "template_declaration") == 0 || strcmp(t, "linkage_specification") == 0;
+   static const char *const set[] = {
+       /* organizational wrappers */
+       "namespace_declaration", "file_scoped_namespace_declaration", "namespace_definition",
+       "declaration_list", "template_declaration", "linkage_specification", "decorated_definition",
+       "export_statement",
+       /* member bodies */
+       "class_body", "field_declaration_list", "body_statement", "enum_body",
+       "enum_body_declarations", "interface_body", "block", "method_signature",
+       /* member-containing type nodes (descended to reach their bodies; also emitted by
+        * classify where they are named) */
+       "class_declaration", "class_specifier", "struct_specifier", "union_specifier",
+       "class_definition", "class", "interface_declaration", "trait_item", "impl_item", "mod_item",
+       "trait_declaration", "object_declaration", "protocol_declaration", "struct_declaration",
+       "record_declaration", "mixin_declaration", "extension_declaration", "enum_declaration",
+       "enum_specifier", "enum_item", NULL};
+   for (int i = 0; set[i]; i++)
+      if (strcmp(t, set[i]) == 0)
+         return 1;
+   return 0;
 }
 
-/* Emit `node` if it is a definition, then descend into it if it is a container. */
+/* Emit `node` if it is a definition, then descend into it to surface nested definitions
+ * (members of a type, types in a namespace) — but never into a function body. */
 static void visit(ts_lang_t lang, TSNode node, const char *content, definition_t *out, int max,
                   int *count)
 {
@@ -558,7 +567,8 @@ static void visit(ts_lang_t lang, TSNode node, const char *content, definition_t
       return;
    const char *kind = NULL;
    TSNode name_root;
-   if (classify(lang, node, &kind, &name_root) && !ts_node_is_null(name_root))
+   int matched = classify(lang, node, &kind, &name_root);
+   if (matched && !ts_node_is_null(name_root))
    {
       node_text(name_root, content, out[*count].name, (int)sizeof(out[*count].name));
       if (out[*count].name[0])
@@ -567,11 +577,11 @@ static void visit(ts_lang_t lang, TSNode node, const char *content, definition_t
          out[*count].line = (int)ts_node_start_point(node).row + 1;
          out[*count].line_end = (int)ts_node_end_point(node).row + 1;
          (*count)++;
-         if (*count >= max)
-            return;
       }
    }
-   if (is_container(ts_node_type(node)))
+   if (matched && strcmp(kind, "function") == 0)
+      return; /* a function: emit it but never descend into its body */
+   if (is_descendable(ts_node_type(node)))
    {
       uint32_t n = ts_node_named_child_count(node);
       for (uint32_t i = 0; i < n && *count < max; i++)
