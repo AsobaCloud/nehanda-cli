@@ -1594,13 +1594,15 @@ int pgvec_code_search_paths(const char *project, const float *vec, int dim, int 
    return (rc == AIMEE_PG_ERR) ? -1 : n;
 }
 
-int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, char *a_keys,
-                             char *b_keys, int key_cap, double *cosines, int max)
+int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, int anchor_cap,
+                             char *a_keys, char *b_keys, int key_cap, double *cosines, int max)
 {
    if (!project || !*project || !a_keys || !b_keys || key_cap <= 0 || !cosines || max <= 0)
       return -1;
    if (k <= 0)
       k = 5;
+   if (anchor_cap <= 0)
+      anchor_cap = 5000;
    void *pg = db2_conn();
    if (!pg)
       return -1;
@@ -1609,18 +1611,22 @@ int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, char
     * rides the HNSW index per anchor row), cosine-floored, ordered closest first.
     * Pairs are deduped to a canonical (a<b) form in C rather than in SQL: kNN is
     * asymmetric (b can be in a's neighborhood without a being in b's), so filtering
-    * `ak < bk` in SQL would silently drop one-directional pairs. */
+    * `ak < bk` in SQL would silently drop one-directional pairs.
+    * The anchor relation is bounded by :acap so worst-case work is O(acap*k) HNSW
+    * probes regardless of project size — the final LIMIT can't push into the outer
+    * scan (the ORDER BY cosine is global), so without the bound an N-file project
+    * would fan out into N probes. */
    const char *sql = "SELECT ak, bk, cosine FROM ("
                      "  SELECT a.node_key AS ak, b.node_key AS bk,"
                      "         1.0 - (a.embedding <=> b.embedding) AS cosine"
-                     "  FROM code_embeddings a"
+                     "  FROM (SELECT node_key, embedding, point_id, project FROM code_embeddings"
+                     "        WHERE project = :project AND node_key <> '' LIMIT :acap) a"
                      "  CROSS JOIN LATERAL ("
                      "     SELECT x.node_key, x.embedding FROM code_embeddings x"
                      "     WHERE x.project = a.project AND x.point_id <> a.point_id"
                      "       AND x.node_key <> ''"
                      "     ORDER BY x.embedding <=> a.embedding LIMIT :k"
                      "  ) b"
-                     "  WHERE a.project = :project AND a.node_key <> ''"
                      ") p WHERE cosine >= :minc ORDER BY cosine DESC LIMIT :lim";
 
    char errbuf[256];
@@ -1629,14 +1635,15 @@ int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, char
       return 0;
    /* Over-fetch: an unordered pair can surface from both endpoints, so the raw row
     * set is up to ~2x the distinct pairs; 8x (capped) lets the C dedup fill `max`. */
-   int row_lim = max <= 512 ? max * 8 : 4096;
-   if (row_lim > 4096)
-      row_lim = 4096;
+   int row_lim = max <= 1024 ? max * 8 : max * 2;
+   if (row_lim > 8192)
+      row_lim = 8192;
    if (row_lim < max)
       row_lim = max;
    aimee_pg_bind_int(stmt, "k", k);
    aimee_pg_bind_text(stmt, "project", project);
    aimee_pg_bind_double(stmt, "minc", min_cosine);
+   aimee_pg_bind_int(stmt, "acap", anchor_cap);
    aimee_pg_bind_int(stmt, "lim", row_lim);
 
    int64_t t0 = monotonic_us();
