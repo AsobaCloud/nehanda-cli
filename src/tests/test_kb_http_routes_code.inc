@@ -107,6 +107,26 @@ int pgvec_code_search_paths(const char *project, const float *vec, int dim, int 
    return 2;
 }
 
+/* §4 surprising-links candidate gather. Returns two high-cosine pairs for
+ * proj-alpha: (file:x,file:y) are ABSENT from the projection edges (hub/a/b/c) so
+ * they're disconnected -> surprising; (hub,a) is 1 hop -> filtered by d_min. */
+int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, char *a_keys,
+                             char *b_keys, int key_cap, double *cosines, int max)
+{
+   (void)k;
+   (void)min_cosine;
+   if (!project || strcmp(project, "proj-alpha") != 0 || !a_keys || !b_keys || key_cap <= 0 ||
+       !cosines || max < 2)
+      return 0;
+   snprintf(a_keys + 0 * key_cap, (size_t)key_cap, "file:x");
+   snprintf(b_keys + 0 * key_cap, (size_t)key_cap, "file:y");
+   cosines[0] = 0.95;
+   snprintf(a_keys + 1 * key_cap, (size_t)key_cap, "hub");
+   snprintf(b_keys + 1 * key_cap, (size_t)key_cap, "a");
+   cosines[1] = 0.90;
+   return 2;
+}
+
 /* Mirror of code_projection_edge_t (db2/code_projection.h) so the stub writes
  * fields at the offsets the handler reads; cast a void* rather than include the
  * db2 header (same pattern as the canonical_index stubs). */
@@ -402,6 +422,34 @@ static void test_code_graph_node_self_loop(void)
    /* exactly one entry: the else-if ladder must not double-emit a self-loop. */
    assert(strstr(buf, "\"direction\":\"out\"") == NULL);
    assert(strstr(buf, "\"direction\":\"in\"") == NULL);
+}
+
+/* §4 surprising links: high-cosine + graph-distant pairs. With d_min=2 the (hub,a)
+ * 1-hop pair is filtered and only the disconnected (file:x,file:y) pair surfaces. */
+static void test_code_graph_surprising_ok(void)
+{
+   char buf[4096];
+   int s = kb_http_route_ex("GET", "/v1/code/graph/surprising",
+                            "project=proj-alpha&percentile=0&d_min=2&max_results=10", NULL, NULL,
+                            NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"candidate_count\":2") != NULL); /* both pairs gathered */
+   /* the disconnected pair is surprising; the 1-hop (hub,a) pair is not. */
+   assert(strstr(buf, "\"a\":\"file:x\"") != NULL);
+   assert(strstr(buf, "\"b\":\"file:y\"") != NULL);
+   assert(strstr(buf, "\"disconnected\":true") != NULL);
+   assert(strstr(buf, "\"link_count\":1") != NULL);
+   /* hub/a are graph-adjacent (1 hop < d_min=2) -> excluded from the links. */
+   assert(strstr(buf, "\"a\":\"hub\"") == NULL);
+}
+
+static void test_code_graph_surprising_missing_project(void)
+{
+   char buf[256];
+   int s = kb_http_route_ex("GET", "/v1/code/graph/surprising", "", NULL, NULL, NULL, 0, buf,
+                            sizeof(buf));
+   assert(s == 400);
+   assert(strstr(buf, "missing project") != NULL);
 }
 
 static void test_code_graph_node_missing_params(void)
