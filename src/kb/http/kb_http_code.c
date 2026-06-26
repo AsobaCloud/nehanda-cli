@@ -915,10 +915,12 @@ int handle_get_code_graph_hubs(const char *query_string, char *out_buf, int out_
 /* GET /v1/code/graph?project=<proj>&node=<node>&max_results=N
  * Read-only node-neighborhood projection (proposal §8): the incident projection
  * edges of `node` — its callers/callees/containers/etc — each with the relation,
- * direction (out = node→neighbor, in = neighbor→node), structural-trust weight,
- * and the §3 provenance tag. Backs the webchat graph view; not on the agent hot
- * path. Reuses db2_code_projection_list_edges (the published generation's edges,
- * capped at HUBS_MAX_EDGES) and kb_graph_edge_provenance. */
+ * direction (out = node→neighbor, in = neighbor→node, self = recursive edge),
+ * structural-trust weight, and the §3 provenance tag. Backs the webchat graph
+ * view; not on the agent hot path. Reuses db2_code_projection_list_edges (the
+ * published generation's edges, capped at HUBS_MAX_EDGES) and
+ * kb_graph_edge_provenance. Emits `neighbor_count` (rows returned), `match_count`
+ * (total incident, pre-cap), and `truncated` (page cap hit OR scan window full). */
 int handle_get_code_graph(const char *query_string, char *out_buf, int out_cap)
 {
    char project[256] = "";
@@ -970,22 +972,36 @@ int handle_get_code_graph(const char *query_string, char *out_buf, int out_cap)
    cJSON_AddStringToObject(resp, "project", project);
    cJSON_AddStringToObject(resp, "node", node);
    cJSON *arr = cJSON_AddArrayToObject(resp, "neighbors");
-   int emitted = 0;
-   for (int i = 0; arr && i < ne && emitted < max_r; i++)
+   int emitted = 0; /* edges actually written to the array (after the max_r cap) */
+   int matched = 0; /* edges incident to `node`, counted before the cap */
+   /* Scan the whole edge window so `matched` reflects the node's true incident
+    * count even once `emitted` has hit max_r; that lets `truncated` distinguish a
+    * page cap from a complete neighborhood. */
+   for (int i = 0; i < ne; i++)
    {
       const char *dir = NULL, *neighbor = NULL;
-      if (edges[i].source[0] && strcmp(edges[i].source, node) == 0)
+      int is_source = edges[i].source[0] && strcmp(edges[i].source, node) == 0;
+      int is_target = edges[i].target[0] && strcmp(edges[i].target, node) == 0;
+      if (is_source && is_target)
+      {
+         dir = "self"; /* recursive / self-referential edge (e.g. a self-call) */
+         neighbor = node;
+      }
+      else if (is_source)
       {
          dir = "out"; /* node --relation--> neighbor */
          neighbor = edges[i].target;
       }
-      else if (edges[i].target[0] && strcmp(edges[i].target, node) == 0)
+      else if (is_target)
       {
          dir = "in"; /* neighbor --relation--> node (e.g. callers) */
          neighbor = edges[i].source;
       }
       if (!dir || !neighbor || !neighbor[0])
          continue;
+      matched++;
+      if (!arr || emitted >= max_r)
+         continue; /* counted toward `matched`/truncation, but past the page cap */
       cJSON *n = cJSON_CreateObject();
       if (!n)
          continue;
@@ -999,9 +1015,11 @@ int handle_get_code_graph(const char *query_string, char *out_buf, int out_cap)
       emitted++;
    }
    cJSON_AddNumberToObject(resp, "neighbor_count", emitted);
-   /* A full edge buffer means the scan was over a deterministic prefix of a larger
-    * graph, so a node's neighborhood may be incomplete. */
-   cJSON_AddBoolToObject(resp, "truncated", ne >= HUBS_MAX_EDGES);
+   cJSON_AddNumberToObject(resp, "match_count", matched);
+   /* Two independent truncation sources: the per-request page cap (matched > emitted)
+    * and the projection scan window — a full edge buffer (ne >= HUBS_MAX_EDGES) means
+    * the scan covered only a deterministic prefix, so even `matched` may undercount. */
+   cJSON_AddBoolToObject(resp, "truncated", matched > emitted || ne >= HUBS_MAX_EDGES);
    free(edges);
 
    char *s = cJSON_PrintUnformatted(resp);
