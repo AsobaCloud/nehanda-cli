@@ -1102,8 +1102,9 @@ char *kb_client_code_hybrid(const char *query, const char *symbol, const char *p
                             int max_results, int *status_out);
 char *kb_client_code_graph_hubs(const char *project, int max_results, int *status_out);
 /* /v1/code/graph/surprising: file pairs that are semantically close yet
- * structurally far (project required). */
-char *kb_client_code_graph_surprising(const char *project, int max_results, int *status_out);
+ * structurally far (project required). `judge` opts into the LLM confirmation. */
+char *kb_client_code_graph_surprising(const char *project, int max_results, int judge,
+                                      int *status_out);
 
 /* Counts of indexed files / definition-kind terms for one project.
  * Uses /v1 over remote HTTP or local UDS.
