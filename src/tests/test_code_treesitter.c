@@ -34,10 +34,10 @@ int main(void)
    int n = code_treesitter_definitions(".c", src, defs, 32);
    assert(n >= 4);
 
-   assert(has(defs, n, "add", "function"));    /* function_definition */
-   assert(has(defs, n, "main", "function"));   /* function_definition */
-   assert(has(defs, n, "greet", "function"));  /* prototype declaration */
-   assert(has(defs, n, "Point", "type"));      /* typedef */
+   assert(has(defs, n, "add", "function"));   /* function_definition */
+   assert(has(defs, n, "main", "function"));  /* function_definition */
+   assert(has(defs, n, "greet", "function")); /* prototype declaration */
+   assert(has(defs, n, "Point", "type"));     /* typedef */
 
    /* line numbers are 1-based and plausible. */
    for (int i = 0; i < n; i++)
