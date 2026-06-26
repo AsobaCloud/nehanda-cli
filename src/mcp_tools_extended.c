@@ -87,6 +87,26 @@ void mcp_add_extended_tools(cJSON *tools)
    ext_prop(t, "project", "string", "Project the file belongs to (optional).");
    ext_require(t, "file_path");
 
+   t = ext_tool(tools, "index_hybrid",
+                "Hybrid code retrieval: fuse lexical code search with the structural call graph "
+                "(callers of a symbol) into one ranking, plus the recorded reasoning ('why') from "
+                "memory. Prefer this over plain search when you have a seed symbol — it surfaces "
+                "files that are both textually relevant AND structurally connected.");
+   ext_prop(t, "query", "string", "Free-text query for the lexical-code and memory legs.");
+   ext_prop(t, "symbol", "string",
+            "Seed symbol whose callers form the graph leg (optional; omit for code+memory only).");
+   ext_prop(t, "project", "string", "Restrict to a project (optional; omit to search all).");
+   ext_prop(t, "max_results", "integer", "Max fused results (default 20, max 100).");
+   ext_require(t, "query");
+
+   t = ext_tool(tools, "index_graph_hubs",
+                "Rank a project's most-connected symbols by degree centrality over the code "
+                "projection graph — a refactor-risk signal ('editing this touches a lot'). Returns "
+                "in/out/weighted degree per hub.");
+   ext_prop(t, "project", "string", "Project to analyze.");
+   ext_prop(t, "max_results", "integer", "Max hubs to return (default 20, max 200).");
+   ext_require(t, "project");
+
    /* ── Memory grounding: explain a retrieval + provenance/history ───────────── */
    t = ext_tool(tools, "memory_explain_match",
                 "Explain WHY a memory matches a query: the per-signal score breakdown "
@@ -225,11 +245,13 @@ static const struct fam_def MCP_FAMILIES[] = {
       {NULL, NULL}}},
     {"index",
      "command",
-     "Code-index navigation. Set 'command'.",
+     "Code-index navigation, hybrid retrieval, and graph analytics. Set 'command'.",
      {{"find_callers", "index_find_callers"},
       {"structure", "index_structure"},
       {"blast_radius", "index_blast_radius"},
       {"preview", "preview_blast_radius"},
+      {"hybrid", "index_hybrid"},
+      {"hubs", "index_graph_hubs"},
       {NULL, NULL}}},
     {"note",
      "command",

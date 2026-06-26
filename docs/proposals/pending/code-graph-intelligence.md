@@ -132,8 +132,9 @@ Computed over `code_projection_edges` + embeddings, served read-only:
   10k edges; beyond it the ranking is over a deterministic source/target-ordered
   prefix). Unit tested (`unit-test-kb-graph-analytics`: aggregation, tie-break
   determinism under input permutation, self-loops, truncation, empty endpoints) +
-  shim route test (`test_code_graph_hubs_*`). Weighted/betweenness/PageRank
-  centrality and community detection are follow-ups.
+  shim route test (`test_code_graph_hubs_*`). **Agent-callable** via the MCP `index`
+  family — `index({command:"hubs", project})` — through `kb_client_code_graph_hubs`.
+  Weighted/betweenness/PageRank centrality and community detection are follow-ups.
 - **Surprising links** — pairs `(a,b)` with **high embedding similarity AND high
   graph distance**, made precise + gated (R1):
   - *similarity*: cosine(emb a, emb b) at/above the **top percentile** of the
@@ -188,9 +189,11 @@ example "+ the decision that explains X"). Each result is labeled with its
 contributing `signals`, enriched (snippet / caller), and carries `signal_hits` +
 `structural_weight`. Shim-tested end-to-end in `unit-test-kb-http-routes`
 (`test_code_hybrid_*`: both legs fuse + label + enrich, memory why, no-symbol path,
-missing-query 400). **Remaining:** the **vector** leg (`pgvec_code_search`, needs the
-query embedder — integration-tier) as a third fused signal; the MCP tool + client
-bridge so the agent calls it before grepping; config-tunable per-signal weights.
+missing-query 400). **Agent-callable** via the MCP `index` family — `index({command:
+"hybrid", query, symbol?, project?})` — wired through `kb_client_code_hybrid`
+(verbatim JSON forward). **Remaining:** the **vector** leg (`pgvec_code_search`, needs
+the query embedder — integration-tier) as a third fused signal; config-tunable
+per-signal weights.
 
 ## §6 Live + cross-session memory fusion
 

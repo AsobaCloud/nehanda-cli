@@ -1001,6 +1001,58 @@ static int pdf_arg_pos_int(cJSON *args, const char *key, double max, long long *
    return 1;
 }
 
+/* ── Code-graph retrieval + analytics ─────────────────────────────────────────
+ * /v1/code/hybrid and /v1/code/graph/hubs return purpose-built fused/ranked JSON
+ * the agent consumes directly, so we forward the route body verbatim (see
+ * kb_client_code_graph.c). Shares pdf_arg_pos_int for the bounded max_results. */
+static cJSON *code_graph_passthrough(char *json, int status, const char *tool)
+{
+   if (json)
+   {
+      cJSON *content = text_content(json); /* copies json into the text node */
+      free(json);
+      return content;
+   }
+   char msg[160];
+   if (status == 413)
+      snprintf(msg, sizeof(msg), "error: %s result too large (413) — reduce max_results", tool);
+   else if (status == 403)
+      snprintf(msg, sizeof(msg), "error: %s access denied (403) for that project", tool);
+   else if (status == 400)
+      snprintf(msg, sizeof(msg), "error: %s bad request (400) — check the arguments", tool);
+   else
+      snprintf(msg, sizeof(msg), "error: %s request failed (status %d)", tool, status);
+   return text_content(msg);
+}
+
+static cJSON *mcph_index_hybrid(struct mcp_call *c)
+{
+   cJSON *jq = cJSON_GetObjectItemCaseSensitive(c->jargs, "query");
+   if (!cJSON_IsString(jq) || !jq->valuestring[0])
+      return text_content("error: index_hybrid requires 'query'");
+   cJSON *js = cJSON_GetObjectItemCaseSensitive(c->jargs, "symbol");
+   cJSON *jp = cJSON_GetObjectItemCaseSensitive(c->jargs, "project");
+   const char *symbol = cJSON_IsString(js) ? js->valuestring : NULL;
+   const char *project = cJSON_IsString(jp) ? jp->valuestring : NULL;
+   long long mr = 0;
+   int max_results = pdf_arg_pos_int(c->jargs, "max_results", 100.0, &mr) ? (int)mr : 20;
+   int status = -1;
+   char *json = kb_client_code_hybrid(jq->valuestring, symbol, project, max_results, &status);
+   return code_graph_passthrough(json, status, "index_hybrid");
+}
+
+static cJSON *mcph_index_graph_hubs(struct mcp_call *c)
+{
+   cJSON *jp = cJSON_GetObjectItemCaseSensitive(c->jargs, "project");
+   if (!cJSON_IsString(jp) || !jp->valuestring[0])
+      return text_content("error: index_graph_hubs requires 'project'");
+   long long mr = 0;
+   int max_results = pdf_arg_pos_int(c->jargs, "max_results", 200.0, &mr) ? (int)mr : 20;
+   int status = -1;
+   char *json = kb_client_code_graph_hubs(jp->valuestring, max_results, &status);
+   return code_graph_passthrough(json, status, "index_graph_hubs");
+}
+
 static cJSON *mcph_pdf_search_chunks(struct mcp_call *c)
 {
    cJSON *jq = cJSON_GetObjectItemCaseSensitive(c->jargs, "query");
@@ -1128,6 +1180,8 @@ static const struct
     {"task_list", mcph_task_list},
     {"index_find_callers", mcph_index_find_callers},
     {"index_structure", mcph_index_structure},
+    {"index_hybrid", mcph_index_hybrid},
+    {"index_graph_hubs", mcph_index_graph_hubs},
     {"memory_explain_match", mcph_memory_explain_match},
     /* P3b */
     {"index_blast_radius", mcph_index_blast_radius},
