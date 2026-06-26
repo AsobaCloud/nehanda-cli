@@ -1931,6 +1931,8 @@ int main(void)
    test_code_graph_hubs_ok();
    test_code_graph_hubs_missing_project();
    test_code_graph_node_ok();
+   test_code_graph_node_capped_truncates();
+   test_code_graph_node_self_loop();
    test_code_graph_node_missing_params();
    test_code_project_stats_missing_project();
    test_code_project_stats_ok();
