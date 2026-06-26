@@ -107,6 +107,41 @@ int pgvec_code_search_paths(const char *project, const float *vec, int dim, int 
    return 2;
 }
 
+/* §4 surprising-links candidate gather. Returns two high-cosine pairs for
+ * proj-alpha: (file:x,file:y) are ABSENT from the projection edges (hub/a/b/c) so
+ * they're disconnected -> surprising; (hub,a) is 1 hop -> filtered by d_min. */
+int pgvec_code_similar_pairs(const char *project, int k, double min_cosine, int anchor_cap,
+                             char *a_keys, char *b_keys, int key_cap, double *cosines, int max)
+{
+   (void)k;
+   (void)min_cosine;
+   (void)anchor_cap;
+   if (!a_keys || !b_keys || key_cap <= 0 || !cosines || max < 2 || !project)
+      return 0;
+   if (strcmp(project, "proj-vecdown") == 0)
+      return -1; /* simulate a vector-store outage (no connection / query error) */
+   if (strcmp(project, "proj-alpha") == 0)
+   {
+      snprintf(a_keys + 0 * key_cap, (size_t)key_cap, "file:x");
+      snprintf(b_keys + 0 * key_cap, (size_t)key_cap, "file:y");
+      cosines[0] = 0.95;
+      snprintf(a_keys + 1 * key_cap, (size_t)key_cap, "hub");
+      snprintf(b_keys + 1 * key_cap, (size_t)key_cap, "a");
+      cosines[1] = 0.90;
+      return 2;
+   }
+   if (strcmp(project, "proj-hub") == 0)
+   {
+      /* The two files are similar; their only projection edges are to the project
+       * hub, so the route must EXCLUDE those and report them disconnected. */
+      snprintf(a_keys + 0 * key_cap, (size_t)key_cap, "file:f1");
+      snprintf(b_keys + 0 * key_cap, (size_t)key_cap, "file:f2");
+      cosines[0] = 0.97;
+      return 1;
+   }
+   return 0;
+}
+
 /* Mirror of code_projection_edge_t (db2/code_projection.h) so the stub writes
  * fields at the offsets the handler reads; cast a void* rather than include the
  * db2 header (same pattern as the canonical_index stubs). */
@@ -135,6 +170,10 @@ int db2_code_projection_list_edges(const char *project, void *out, int max)
        {"hub", "calls", "a", 1}, {"hub", "calls", "b", 1}, {"c", "calls", "hub", 1}};
    /* A single recursive edge: exercises the source==target==node self-loop path. */
    static const test_seed_edge_t selfloop[] = {{"rec", "calls", "rec", 1}};
+   /* Two files linked ONLY through the project containment hub: the surprising
+    * route must drop these `project:` edges before computing hop distance. */
+   static const test_seed_edge_t hubonly[] = {{"project:proj-hub", "contains", "file:f1", 1},
+                                              {"project:proj-hub", "contains", "file:f2", 1}};
    const test_seed_edge_t *rows = NULL;
    int n = 0;
    if (project && strcmp(project, "proj-alpha") == 0)
@@ -146,6 +185,11 @@ int db2_code_projection_list_edges(const char *project, void *out, int max)
    {
       rows = selfloop;
       n = (int)(sizeof(selfloop) / sizeof(selfloop[0]));
+   }
+   else if (project && strcmp(project, "proj-hub") == 0)
+   {
+      rows = hubonly;
+      n = (int)(sizeof(hubonly) / sizeof(hubonly[0]));
    }
    else
       return 0;
@@ -402,6 +446,62 @@ static void test_code_graph_node_self_loop(void)
    /* exactly one entry: the else-if ladder must not double-emit a self-loop. */
    assert(strstr(buf, "\"direction\":\"out\"") == NULL);
    assert(strstr(buf, "\"direction\":\"in\"") == NULL);
+}
+
+/* §4 surprising links: high-cosine + graph-distant pairs. With d_min=2 the (hub,a)
+ * 1-hop pair is filtered and only the disconnected (file:x,file:y) pair surfaces. */
+static void test_code_graph_surprising_ok(void)
+{
+   char buf[4096];
+   int s = kb_http_route_ex("GET", "/v1/code/graph/surprising",
+                            "project=proj-alpha&percentile=0&d_min=2&max_results=10", NULL, NULL,
+                            NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"candidate_count\":2") != NULL); /* both pairs gathered */
+   /* the disconnected pair is surprising; the 1-hop (hub,a) pair is not. */
+   assert(strstr(buf, "\"a\":\"file:x\"") != NULL);
+   assert(strstr(buf, "\"b\":\"file:y\"") != NULL);
+   assert(strstr(buf, "\"disconnected\":true") != NULL);
+   assert(strstr(buf, "\"link_count\":1") != NULL);
+   /* hub/a are graph-adjacent (1 hop < d_min=2) -> excluded from the links. */
+   assert(strstr(buf, "\"a\":\"hub\"") == NULL);
+}
+
+/* Project-hub exclusion: two files whose ONLY edges are to the project containment
+ * node. With those dropped the coupling graph is empty, so the pair is disconnected
+ * and surfaces even at d_min=3 (without exclusion they'd be 2 hops via the hub and
+ * be filtered). edge_count==0 proves the hub edges were excluded. */
+static void test_code_graph_surprising_hub_excluded(void)
+{
+   char buf[2048];
+   int s = kb_http_route_ex("GET", "/v1/code/graph/surprising",
+                            "project=proj-hub&percentile=0&d_min=3&max_results=10", NULL, NULL, NULL,
+                            0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"edge_count\":0") != NULL); /* both edges were project-incident */
+   assert(strstr(buf, "\"a\":\"file:f1\"") != NULL);
+   assert(strstr(buf, "\"disconnected\":true") != NULL);
+   assert(strstr(buf, "\"link_count\":1") != NULL);
+}
+
+static void test_code_graph_surprising_missing_project(void)
+{
+   char buf[256];
+   int s = kb_http_route_ex("GET", "/v1/code/graph/surprising", "", NULL, NULL, NULL, 0, buf,
+                            sizeof(buf));
+   assert(s == 400);
+   assert(strstr(buf, "missing project") != NULL);
+}
+
+/* A vector-store failure (pgvec gather returns <0) is surfaced as 503, not a silent
+ * empty 200 — an outage must be distinguishable from "no surprising links". */
+static void test_code_graph_surprising_vecstore_down(void)
+{
+   char buf[512];
+   int s = kb_http_route_ex("GET", "/v1/code/graph/surprising", "project=proj-vecdown", NULL, NULL,
+                            NULL, 0, buf, sizeof(buf));
+   assert(s == 503);
+   assert(strstr(buf, "vector store unavailable") != NULL);
 }
 
 static void test_code_graph_node_missing_params(void)
