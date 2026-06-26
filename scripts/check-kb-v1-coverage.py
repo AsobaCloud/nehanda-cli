@@ -132,6 +132,7 @@ ALLOWED_INTERNAL_CLIENT_HEADER_USERS = {
     "server/kb_client_docs.c",
     "server/kb_client_index.c",
     "server/kb_client_pdf.c",
+    "server/kb_client_code_graph.c",
     "server/kb_client_ws.c",
     "tests/test_kb_client_docs.c",
     "tests/test_kb_client_search.c",

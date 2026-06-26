@@ -395,7 +395,7 @@ SERVER_CMD_OBJS = $(OBJDIR)/server/cmd_session_lifecycle.o \
 # kb_client objects — request-side glue from the daemon to the
 # aimee-kb sidecar. The daemon needs these so server_state /
 # server_mcp_learning can route DB2-bound work over the kb socket.
-KB_CLIENT_OBJS = $(OBJDIR)/server/kb_client.o $(OBJDIR)/server/kb_client_cache.o $(OBJDIR)/server/kb_client_ws.o $(OBJDIR)/server/kb_client_docs.o $(OBJDIR)/kb/kb_doc_hash.o $(OBJDIR)/server/kb_client_index.o $(OBJDIR)/server/kb_client_index_parse.o $(OBJDIR)/server/kb_client_pdf.o $(OBJDIR)/server/kb_client_code_embed.o $(OBJDIR)/server/kb_client_memory.o $(OBJDIR)/server/kb_client_memory_mutations.o $(OBJDIR)/server/kb_client_agent.o $(OBJDIR)/server/kb_client_dashboard.o \
+KB_CLIENT_OBJS = $(OBJDIR)/server/kb_client.o $(OBJDIR)/server/kb_client_cache.o $(OBJDIR)/server/kb_client_ws.o $(OBJDIR)/server/kb_client_docs.o $(OBJDIR)/kb/kb_doc_hash.o $(OBJDIR)/server/kb_client_index.o $(OBJDIR)/server/kb_client_index_parse.o $(OBJDIR)/server/kb_client_pdf.o $(OBJDIR)/server/kb_client_code_graph.o $(OBJDIR)/server/kb_client_code_embed.o $(OBJDIR)/server/kb_client_memory.o $(OBJDIR)/server/kb_client_memory_mutations.o $(OBJDIR)/server/kb_client_agent.o $(OBJDIR)/server/kb_client_dashboard.o \
                  $(OBJDIR)/server/kb_client_tasks.o $(OBJDIR)/server/kb_client_data.o \
                  $(OBJDIR)/server/kb_client_tool_registry.o $(OBJDIR)/server/kb_client_prospective.o \
                  $(OBJDIR)/server/kb_client_roadmap.o \
