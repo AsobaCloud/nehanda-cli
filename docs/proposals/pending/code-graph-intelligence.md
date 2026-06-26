@@ -135,10 +135,13 @@ Dart, CSS — each with a per-language `classify_*` mapping its definition node 
 `export`/decorator wrappers) and the member bodies of types, so **nested members
 (class/impl/trait methods) are surfaced** across every OO language — while it never
 descends a function body (so locals stay out). `unit-test-code-treesitter` parses real
-source in every language and asserts the extracted defs (top-level + nested). Adding a
-grammar is mechanical — vendor its `parser.c`(+`scanner.c`), register its `TSLanguage` +
-extensions in `ts_language_for_ext`, and add a `classify_*`. Remaining increments: more
-languages, and call-edge extraction (`code_calls`) over the parse tree.
+source in every language and asserts the extracted defs (top-level + nested). It also
+extracts **call edges** (`code_treesitter_calls` → `call_ref_t` caller→callee, wired into
+`extract_calls`): a caller-tracking walk attributes every call to its enclosing function
+and resolves the callee to the last identifier of the callee expression (`obj.m()` → `m`,
+`a::b()` → `b`); Bash/CSS defer to the hand-rolled path. Adding a grammar is mechanical —
+vendor its `parser.c`(+`scanner.c`), register its `TSLanguage` + extensions in
+`ts_language_for_ext`, and add a `classify_*`. Remaining increment: more languages.
 
 ## §3 Edge provenance + confidence
 

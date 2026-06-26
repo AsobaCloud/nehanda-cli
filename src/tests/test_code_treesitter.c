@@ -30,6 +30,25 @@ static void want(const char *ext, const char *src, const char *name, const char 
    }
 }
 
+/* Parse `src` as `ext` and assert a (caller -> callee) call edge was extracted. */
+static void wantcall(const char *ext, const char *src, const char *caller, const char *callee)
+{
+   call_ref_t c[128];
+   int n = code_treesitter_calls(ext, src, c, 128);
+   int found = 0;
+   for (int i = 0; i < n; i++)
+      if (strcmp(c[i].caller, caller) == 0 && strcmp(c[i].callee, callee) == 0)
+         found = 1;
+   if (n < 0 || !found)
+   {
+      printf("  FAIL %s: want [%s->%s], got %d:", ext, caller, callee, n);
+      for (int i = 0; i < n; i++)
+         printf(" [%s->%s]", c[i].caller, c[i].callee);
+      printf("\n");
+      assert(0);
+   }
+}
+
 int main(void)
 {
    printf("test_code_treesitter:\n");
@@ -222,6 +241,34 @@ int main(void)
 
    /* a vendored-but-unmapped ext -> -1 (caller falls back to the hand-rolled extractor). */
    assert(code_treesitter_definitions(".md", c_src, d, 64) == -1);
+
+   /* === call edges (caller -> callee), tracking the enclosing function. The callee is
+    * the last identifier of the callee expression (`obj.m()` -> m, `a::b()` -> b). === */
+   wantcall(".c", "void f(){ g(); obj->m(); }\n", "f", "g");
+   wantcall(".c", "void f(){ obj->m(); }\n", "f", "m"); /* method call -> last id */
+   wantcall(".py", "def f():\n    g()\n    obj.m()\n", "f", "g");
+   wantcall(".py", "def f():\n    obj.m()\n", "f", "m");
+   wantcall(".js", "function f(){ g(); a.b.c(); }\n", "f", "g");
+   wantcall(".js", "function f(){ a.b.c(); }\n", "f", "c"); /* chained -> last id */
+   wantcall(".ts", "function f(){ svc.run(); }\n", "f", "run");
+   wantcall(".go", "func f(){ g(); pkg.H() }\n", "f", "H"); /* selector -> field */
+   wantcall(".rs", "fn f(){ g(); h::k(); }\n", "f", "k");   /* scoped -> last */
+   wantcall(".java", "class C{ void f(){ g(); obj.m(); } }\n", "f", "m");
+   wantcall(".cs", "class C{ void F(){ G(); o.M(); } }\n", "F", "M");
+   wantcall(".php", "<?php\nfunction f(){ g(); $o->m(); }\n", "f", "m");
+   wantcall(".rb", "def f\n  g()\n  obj.m\nend\n", "f", "m"); /* g() w/ parens + obj.m */
+   wantcall(".swift", "func f(){ g(); obj.m() }\n", "f", "g");
+   wantcall(".lua", "function f() g() end\n", "f", "g");
+   wantcall(".py", "top()\n", "", "top"); /* file-scope: empty caller */
+   /* caller tracking follows the enclosing function. */
+   wantcall(".c", "void outer(){ x(); }\nvoid inner(){ deep(); }\n", "inner", "deep");
+   /* Bash/CSS have no useful call extraction -> -1 (caller falls back). */
+   {
+      call_ref_t cc[8];
+      assert(code_treesitter_calls(".css", "a{color:red}\n", cc, 8) == -1);
+      assert(code_treesitter_calls(".sh", "f(){ g; }\n", cc, 8) == -1);
+      assert(code_treesitter_calls(".md", c_src, cc, 8) == -1); /* unmapped ext */
+   }
 
    printf("  all supported languages extracted (C/C++/C#/Python/Go/JS/TS/Rust/Java/"
           "Ruby/PHP/Lua/Bash/Swift/Kotlin/Dart/CSS)\n");
