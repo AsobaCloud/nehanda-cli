@@ -933,6 +933,16 @@ int extract_definitions(const char *ext, const char *content, definition_t *out,
 
 int extract_calls(const char *ext, const char *content, call_ref_t *out, int max)
 {
+   /* Prefer the tree-sitter front-end where it is compiled in and handles this language;
+    * fall back to the hand-rolled per-line extractors otherwise (and in the default
+    * build, where code_treesitter_* is a stub). */
+   if (code_treesitter_available(ext))
+   {
+      int n = code_treesitter_calls(ext, content, out, max);
+      if (n >= 0)
+         return n;
+   }
+
    lang_t lang = detect_lang(ext);
    call_ctx_t ctx;
    memset(&ctx, 0, sizeof(ctx));
