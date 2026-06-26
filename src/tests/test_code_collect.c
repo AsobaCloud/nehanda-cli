@@ -255,6 +255,20 @@ static void test_default_branch_sha_quote_in_ref(void)
    printf("  test_default_branch_sha_quote_in_ref: ok\n");
 }
 
+/* The worktree-source predicate reflects AIMEE_CODE_INDEX_SOURCE (gates off the
+ * default-branch SHA optimization when the index tracks WIP). */
+static void test_index_source_is_worktree(void)
+{
+   unsetenv("AIMEE_CODE_INDEX_SOURCE");
+   assert(code_index_source_is_worktree() == 0);
+   setenv("AIMEE_CODE_INDEX_SOURCE", "default", 1);
+   assert(code_index_source_is_worktree() == 0);
+   setenv("AIMEE_CODE_INDEX_SOURCE", "worktree", 1);
+   assert(code_index_source_is_worktree() == 1);
+   unsetenv("AIMEE_CODE_INDEX_SOURCE");
+   printf("  test_index_source_is_worktree: ok\n");
+}
+
 /* A non-git dir has no default branch SHA; `out` is cleared and -1 returned. */
 static void test_default_branch_sha_non_git(void)
 {
@@ -282,6 +296,7 @@ int main(void)
    test_non_git_uses_worktree();
    test_default_branch_sha_tracks_commits();
    test_default_branch_sha_quote_in_ref();
+   test_index_source_is_worktree();
    test_default_branch_sha_non_git();
    sh("rm -rf '%s'", g_root);
    printf("ALL PASS\n");
