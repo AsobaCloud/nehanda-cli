@@ -712,6 +712,34 @@ this proposal.
   non-lossy there or not flip. Latency from recovery round-trips counts against the
   same gate. The attribution comes from §1.1 per-entry compression/resolver
   telemetry, not only aggregate provider usage.
+
+  > **Empirical status (2026-06-26, measured on .254 with a live model).** The
+  > resident-saving arm is confirmed: on a code-heavy **chat** turn the fold cut
+  > the prompt by ~48% (678 → 355 prompt tokens; the envelope code block shrank
+  > ~78%). For **non-agentic chat ingress** there is no tool loop, so recovery
+  > rate is zero and the fold is a pure win — that ingress is the justified first
+  > flip candidate. For **agentic coding ingress** (Codex/Claude-Code, the
+  > dominant traffic) the agent re-opens the code it was pointed at, so the
+  > recovery rate is expected to be high and a single recovery round-trip
+  > (~80–130 tok) costs more than the fold saved (~40 tok) — the net is likely
+  > **negative**, exactly the risk this gate guards. Making the fold net-positive
+  > for the agentic case (e.g. recovery-rate-aware folding, or folding only spans
+  > the agent is statistically unlikely to re-open) is a **deferred future
+  > improvement**, tracked here and out of scope for the initial non-agentic
+  > flip. Measuring the live agentic recovery rate was unblocked on the client
+  > side by the Codex TLS-ALPN fix below; the remaining dependency is a
+  > recovery-rate capture in `bench/ingress_token_bench.py`.
+  >
+  > **Codex connectivity prerequisite (fixed).** Pointing the Codex CLI at a
+  > TLS Aimee failed at the transport layer: Aimee's server set **no ALPN**, and
+  > Codex's reqwest/hyper model client then attempts HTTP/2 and the request dies
+  > before reaching the server (Aimee is HTTP/1.1-only — `server_http.c`). The
+  > cert was never the cause (`CODEX_CA_CERTIFICATE` loads and verifies the
+  > IP-SAN). Fix: Aimee's TLS context now advertises `http/1.1` over ALPN
+  > (`SSL_CTX_set_alpn_select_cb` in `server_tls.c`), so ALPN-strict clients
+  > settle on HTTP/1.1 instead of a doomed HTTP/2 attempt. Validated: a Codex turn
+  > then connects and starts (`thread.started`/`turn.started`) where it previously
+  > errored instantly.
 - **Realized cache** — provider `cache_read` / `cache_creation` tokens, read from
   the cost-accounting proposal's **ledger fields** (not re-derived), under both
   placements (§2.2).
