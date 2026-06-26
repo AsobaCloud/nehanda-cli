@@ -3,6 +3,10 @@
  * unit under the 2000-line hard limit. Included (with
  * test_kb_http_routes_endpoints.inc) just before main(); all helpers and
  * fixtures live in test_kb_http_routes.c above the include point. */
+/* §4 surprising self-suppress: rolling judge stats the runtime_state stub serves for
+ * the surprising_judged:/surprising_confirmed: keys (-1 = key absent). */
+static int g_sj_judged = -1;
+static int g_sj_confirmed = -1;
 /* Full memory_t layout (mirrors headers/memory.h) so the stub writes each field
  * at the offset the handler — compiled against the real struct — reads. The main
  * file keeps a truncated local memory_t for other stubs, so we cast a void* here
@@ -613,6 +617,36 @@ static void test_code_graph_surprising_judge(void)
    assert(strstr(buf, "\"judged\":1") != NULL);
 }
 
+/* §4 self-suppress: with the floor enabled and the rolling judge-sampled precision
+ * below it (2/100 = 2% < 10%), an UNJUDGED request returns no links + suppressed:true. */
+static void test_code_graph_surprising_self_suppress(void)
+{
+   char buf[4096];
+   g_precision_floor = 0.10;
+   g_sj_judged = 100;
+   g_sj_confirmed = 2;
+   int s = kb_http_route_ex("GET", "/v1/code/graph/surprising",
+                            "project=proj-alpha&percentile=0&d_min=2&max_results=10", NULL, NULL,
+                            NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"suppressed\":true") != NULL);
+   assert(strstr(buf, "\"link_count\":0") != NULL);
+   assert(strstr(buf, "\"sampled_precision\":0.02") != NULL);
+
+   /* precision at/above the floor -> NOT suppressed, links shown. */
+   g_sj_confirmed = 50; /* 50% */
+   s = kb_http_route_ex("GET", "/v1/code/graph/surprising",
+                        "project=proj-alpha&percentile=0&d_min=2&max_results=10", NULL, NULL, NULL, 0,
+                        buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"suppressed\":true") == NULL);
+   assert(strstr(buf, "\"link_count\":1") != NULL); /* the disconnected pair surfaces */
+
+   g_precision_floor = 0.0; /* reset for other tests */
+   g_sj_judged = -1;
+   g_sj_confirmed = -1;
+}
+
 /* A vector-store failure (pgvec gather returns <0) is surfaced as 503, not a silent
  * empty 200 — an outage must be distinguishable from "no surprising links". */
 static void test_code_graph_surprising_vecstore_down(void)
@@ -713,9 +747,22 @@ int git_resolve_default_sha(const char *root, char *out, size_t outlen)
 }
 int db2_kb_runtime_state_get(const char *key, char *out, size_t out_len)
 {
-   (void)key;
    if (!out || out_len == 0)
       return -1;
+   if (key && strncmp(key, "surprising_judged:", 18) == 0)
+   {
+      if (g_sj_judged < 0)
+         return -1;
+      snprintf(out, out_len, "%d", g_sj_judged);
+      return 0;
+   }
+   if (key && strncmp(key, "surprising_confirmed:", 21) == 0)
+   {
+      if (g_sj_confirmed < 0)
+         return -1;
+      snprintf(out, out_len, "%d", g_sj_confirmed);
+      return 0;
+   }
    snprintf(out, out_len, "%s", g_stored_sha);
    return g_stored_sha[0] ? 0 : -1;
 }
