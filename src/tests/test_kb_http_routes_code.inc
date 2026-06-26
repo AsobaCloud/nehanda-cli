@@ -300,6 +300,20 @@ static void test_code_hybrid_ok(void)
    assert(strstr(buf, "why needle exists") != NULL);
 }
 
+/* §6 cross-session memory fusion: the knowledge graph connects the seed symbol to a
+ * memory-extracted entity that resolves to a file the code/graph/vector legs never
+ * see, fused in as a ranked "memory" signal (not just a why annotation). */
+static void test_code_hybrid_memory_leg(void)
+{
+   char buf[2048];
+   int s = kb_http_route_ex("GET", "/v1/code/hybrid",
+                            "query=needle&symbol=target_fn&project=proj-alpha&max_results=10", NULL,
+                            NULL, NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"file_path\":\"src/design_notes.c\"") != NULL);
+   assert(strstr(buf, "\"signals\":[\"memory\"]") != NULL);
+}
+
 static void test_code_hybrid_missing_query(void)
 {
    char buf[256];
@@ -395,6 +409,72 @@ static void test_code_graph_hubs_missing_project(void)
        kb_http_route_ex("GET", "/v1/code/graph/hubs", "", NULL, NULL, NULL, 0, buf, sizeof(buf));
    assert(s == 400);
    assert(strstr(buf, "missing project") != NULL);
+}
+
+/* §6 memory-fusion leg stubs. The real db2_entity_edge_explain_t / db2_entity_node_t
+ * (db2/entity_*.h) pull in memory.h's edge_t, which conflicts with this file's
+ * simplified memory_t; so mirror the layouts and take void* (same pattern as the
+ * code-projection stub). A symbol seed -> one knowledge-graph edge to a memory-
+ * extracted entity that resolves to a file the code/graph/vector legs never see. */
+typedef struct
+{
+   int64_t id;
+   char source[512];
+   char relation[64];
+   char target[512];
+   int weight;
+   int structural_weight;
+   double utility_score;
+   char edge_origin[32];
+} test_entity_edge_explain_t;
+typedef struct
+{
+   char node_key[512];
+   int node_kind;
+   char project[256];
+   char display_name[256];
+   char full_key[512];
+   char file_path[512];
+   char symbol[256];
+   char node_origin[32];
+   int64_t last_seen_generation_id;
+} test_entity_node_t;
+
+int db2_entity_node_key_symbol(const char *project, const char *name, char *out, size_t cap)
+{
+   (void)project;
+   if (!name || !out || cap == 0)
+      return -1;
+   snprintf(out, cap, "symbol:proj:%s", name);
+   return 0;
+}
+int db2_entity_edge_explain_by_entity(const char *entity, void *out, int max)
+{
+   if (!entity || !out || max < 1)
+      return 0;
+   if (strcmp(entity, "symbol:proj:target_fn") != 0)
+      return 0;
+   test_entity_edge_explain_t *e = (test_entity_edge_explain_t *)out;
+   memset(&e[0], 0, sizeof(e[0]));
+   snprintf(e[0].source, sizeof(e[0].source), "%s", entity);
+   snprintf(e[0].relation, sizeof(e[0].relation), "relates_to");
+   snprintf(e[0].target, sizeof(e[0].target), "mement:proj:design");
+   e[0].weight = 80;
+   e[0].structural_weight = 0;
+   return 1;
+}
+int db2_entity_node_get(const char *node_key, void *out)
+{
+   if (!node_key || !out)
+      return -1;
+   if (strcmp(node_key, "mement:proj:design") != 0)
+      return -1;
+   test_entity_node_t *n = (test_entity_node_t *)out;
+   memset(n, 0, sizeof(*n));
+   snprintf(n->node_key, sizeof(n->node_key), "%s", node_key);
+   snprintf(n->file_path, sizeof(n->file_path), "src/design_notes.c");
+   snprintf(n->node_origin, sizeof(n->node_origin), "memory_extraction");
+   return 0;
 }
 
 /* §4 judge stub: confirm the first link (the disconnected file:x/file:y pair) with a
