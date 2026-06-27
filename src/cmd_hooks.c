@@ -5,6 +5,7 @@
 #include "aimee.h"
 #include "db1.h"
 #include "headers/cmd_hooks_scope.h"
+#include "memory_redirect.h"
 #include "headers/plugin.h"
 #include "platform_process.h"
 #include "agent_config.h"
@@ -226,6 +227,28 @@ void cmd_hooks(app_ctx_t *ctx, int argc, char **argv)
          {
             fputs(cwd, fp);
             fclose(fp);
+         }
+      }
+
+      /* Memory interception: redirect an agent's local memory-file write into
+       * the central store, reusing the deny-with-message channel. */
+      {
+         cJSON *ti = (tool_input && tool_input[0]) ? cJSON_Parse(tool_input) : NULL;
+         if (ti)
+         {
+            char mr_msg[1024] = "";
+            int mr = memory_redirect_check(tool_name, ti, cwd, mr_msg, sizeof(mr_msg));
+            cJSON_Delete(ti);
+            if (mr == 2)
+            {
+               if (hook_client_uses_pretool_json())
+               {
+                  emit_pretool_deny_json(mr_msg);
+                  exit(0);
+               }
+               fprintf(stderr, "aimee: %s\n", mr_msg);
+               exit(2);
+            }
          }
       }
 

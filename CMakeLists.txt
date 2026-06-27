@@ -712,6 +712,7 @@ set(CMD_SRCS
     ${AIMEE_SRC_DIR}/cmd_diagnose.c
     ${AIMEE_SRC_DIR}/cmd_hooks.c
     ${AIMEE_SRC_DIR}/cmd_hooks_scope.c
+    ${AIMEE_SRC_DIR}/memory_redirect.c
     ${AIMEE_SRC_DIR}/cmd_agent.c
     ${AIMEE_SRC_DIR}/cmd_agent_setup.c
     ${AIMEE_SRC_DIR}/cmd_agent_trace.c
