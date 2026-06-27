@@ -1,10 +1,10 @@
 /* memory_redirect.c — see memory_redirect.h.
  *
- * v1 scope: the Claude Code file-memory surface (paths under
- * ~/.claude/projects/<slug>/memory/<name>.md). A Write of such a file is stored
- * centrally and re-materialized by aimee; an Edit/MultiEdit or a MEMORY.md write
- * is rejected with guidance. Other clients and other memory surfaces are a
- * documented v1 limitation (the config-driven registry generalizes this later).
+ * v1 scope: the Claude Code file-memory surface — paths HOME-anchored under
+ * ~/.claude/projects/<slug>/memory/<name>.md. A Write of such a file is stored
+ * centrally and re-materialized by aimee (confined to the real memory dir); an
+ * Edit/MultiEdit or a MEMORY.md write is rejected with guidance. Other clients
+ * and memory surfaces are a documented v1 limitation.
  */
 
 #include "memory_redirect.h"
@@ -12,9 +12,11 @@
 #include "harness_memory_common.h"
 #include "kb_client_internal.h" /* kb_client_v1_post_json */
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h> /* strcasecmp */
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -25,35 +27,53 @@
 #define PATH_MAX 4096
 #endif
 
-static int is_edit_tool_name(const char *t)
+static int is_write_family(const char *t)
 {
    return t && (strcmp(t, "Write") == 0 || strcmp(t, "Edit") == 0 || strcmp(t, "MultiEdit") == 0);
 }
 
+/* Does abspath start with "<home>/.claude/projects/"? */
+static int under_claude_projects(const char *abspath, const char *home)
+{
+   char prefix[PATH_MAX];
+   int n = snprintf(prefix, sizeof(prefix), "%s/.claude/projects/", home);
+   if (n < 0 || (size_t)n >= sizeof(prefix) || !abspath)
+      return 0;
+   return strncmp(abspath, prefix, (size_t)n) == 0;
+}
+
+static int ends_md_ci(const char *path, size_t plen)
+{
+   return plen >= 3 && path[plen - 3] == '.' && tolower((unsigned char)path[plen - 2]) == 'm' &&
+          tolower((unsigned char)path[plen - 1]) == 'd';
+}
+
 mr_verdict_t memory_redirect_classify(const char *client, const char *tool, const char *path,
-                                      char *out_name, size_t name_cap, const char **out_reason)
+                                      const char *home, char *out_name, size_t name_cap,
+                                      const char **out_reason)
 {
    if (out_reason)
       *out_reason = NULL;
    const char *c = (client && client[0]) ? client : "claude";
    if (strcmp(c, "claude") != 0) /* v1: Claude file-memory only */
       return MR_ALLOW;
-   if (!is_edit_tool_name(tool) || !path)
+   if (!is_write_family(tool) || !path || !home || !home[0])
       return MR_ALLOW;
 
-   /* Memory-surface membership: under ~/.claude/projects/<slug>/memory/ + ".md" */
-   if (!strstr(path, "/.claude/projects/"))
+   /* HOME-anchored: the path must literally begin under ~/.claude/projects/ —
+    * an unanchored substring would false-positive on repo paths. */
+   if (!under_claude_projects(path, home))
       return MR_ALLOW;
    const char *mem = strstr(path, "/memory/");
    if (!mem)
       return MR_ALLOW;
    size_t plen = strlen(path);
-   if (plen < 3 || strcmp(path + plen - 3, ".md") != 0)
+   if (!ends_md_ci(path, plen))
       return MR_ALLOW;
 
    const char *base = strrchr(path, '/');
    base = base ? base + 1 : path;
-   if (strcmp(base, "MEMORY.md") == 0)
+   if (strcasecmp(base, "MEMORY.md") == 0)
    {
       if (out_reason)
          *out_reason = "MEMORY.md is auto-rendered from your memory entries; to add or change "
@@ -70,8 +90,15 @@ mr_verdict_t memory_redirect_classify(const char *client, const char *tool, cons
 
    const char *after = mem + strlen("/memory/");
    size_t alen = strlen(after);
-   if (alen <= 3) /* just ".md" or shorter — nothing to name */
+   if (alen <= 3 || after[0] == '/') /* just ".md", or an odd leading slash */
       return MR_ALLOW;
+   /* Reject traversal in the derived name before it reaches the store. */
+   if (strstr(after, "../") || strstr(after, "/.."))
+   {
+      if (out_reason)
+         *out_reason = "Invalid memory path (no '..' segments).";
+      return MR_REJECT;
+   }
    snprintf(out_name, name_cap, "%.*s", (int)(alen - 3), after); /* strip ".md" */
    return MR_REDIRECT;
 }
@@ -82,35 +109,45 @@ static const char *json_str(cJSON *o, const char *key)
    return (i && cJSON_IsString(i)) ? i->valuestring : NULL;
 }
 
-/* Re-materialize the file with aimee's own I/O (never an agent tool — so this
- * cannot re-enter the PreToolUse hook). Atomic on POSIX (temp + rename). */
-static int rematerialize(const char *path, const char *content)
+/* Re-materialize the file with aimee's own I/O (never an agent tool — so it
+ * cannot re-enter the PreToolUse hook). The parent dir is realpath-resolved and
+ * confined under ~/.claude/projects/, so a symlinked component can't redirect
+ * the write outside the memory tree. Atomic (temp + rename) on POSIX. */
+static int rematerialize(const char *path, const char *content, const char *home)
 {
+   const char *base = strrchr(path, '/');
+   if (!base)
+      return -1;
+   base++;
    char dir[PATH_MAX];
-   snprintf(dir, sizeof(dir), "%s", path);
-   char *slash = strrchr(dir, '/');
-   if (slash)
-      *slash = '\0';
-   else
-      snprintf(dir, sizeof(dir), ".");
+   int dn = (int)(base - 1 - path);
+   snprintf(dir, sizeof(dir), "%.*s", dn, path);
    size_t len = strlen(content);
 
 #ifndef _WIN32
-   char tmpl[PATH_MAX];
-   snprintf(tmpl, sizeof(tmpl), "%s/.hmem_tmp_XXXXXX", dir);
+   char rp[PATH_MAX];
+   if (!realpath(dir, rp)) /* parent must exist + resolve */
+      return -1;
+   if (!under_claude_projects(rp, home)) /* symlink escape — refuse */
+      return -1;
+   char target[PATH_MAX], tmpl[PATH_MAX];
+   if ((size_t)snprintf(target, sizeof(target), "%s/%s", rp, base) >= sizeof(target) ||
+       (size_t)snprintf(tmpl, sizeof(tmpl), "%s/.hmem_tmp_XXXXXX", rp) >= sizeof(tmpl))
+      return -1;
    int fd = mkstemp(tmpl);
    if (fd < 0)
       return -1;
    ssize_t w = write(fd, content, len);
    fsync(fd);
    close(fd);
-   if (w < 0 || (size_t)w != len || rename(tmpl, path) != 0)
+   if (w < 0 || (size_t)w != len || rename(tmpl, target) != 0)
    {
       unlink(tmpl);
       return -1;
    }
    return 0;
 #else
+   (void)home;
    FILE *f = fopen(path, "wb");
    if (!f)
       return -1;
@@ -125,15 +162,16 @@ int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *
    if (!root)
       return 0;
    const char *client = getenv("AIMEE_HOOK_CLIENT");
+   const char *home = getenv("HOME");
    const char *path = json_str(root, "file_path");
    if (!path)
       path = json_str(root, "path");
-   if (!path)
+   if (!path || !home)
       return 0;
 
    char name[512];
    const char *reason = NULL;
-   mr_verdict_t v = memory_redirect_classify(client, tool, path, name, sizeof(name), &reason);
+   mr_verdict_t v = memory_redirect_classify(client, tool, path, home, name, sizeof(name), &reason);
    if (v == MR_ALLOW)
       return 0;
    if (v == MR_REJECT)
@@ -142,10 +180,14 @@ int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *
       return 2;
    }
 
-   /* MR_REDIRECT: store centrally, then re-materialize. */
+   /* MR_REDIRECT. A Write with no string `content` is invalid input — never
+    * upsert an empty body over an existing entry; reject it. */
    const char *content = json_str(root, "content");
    if (!content)
-      content = "";
+   {
+      snprintf(msg, msg_len, "Memory Write needs a string 'content' field.");
+      return 2;
+   }
    char project[256], rootdir[PATH_MAX];
    if (hmem_resolve_project(cwd, project, sizeof(project), rootdir, sizeof(rootdir)) != 0)
       return 0; /* can't identify the project — fail open */
@@ -160,13 +202,13 @@ int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *
    char *resp = kb_client_v1_post_json("/v1/harness_memory/upsert", body, 5000, &status);
    cJSON_Delete(body);
 
-   if (!resp || status != 200)
+   if (!resp || status < 200 || status >= 300)
    {
       /* Fail-open: let the agent write its own file this once; session-start
        * reconcile imports it. Never block the agent on our outage. */
       free(resp);
       fprintf(stderr,
-              "aimee: harness-memory store unreachable (status %d); allowing local "
+              "aimee: harness-memory store unavailable (status %d); allowing local "
               "write — will reconcile at next session start\n",
               status);
       return 0;
@@ -183,7 +225,7 @@ int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *
    }
    free(resp);
 
-   rematerialize(path, content);
+   rematerialize(path, content, home);
    snprintf(msg, msg_len,
             "Saved to aimee memory (id=%ld). The file now reflects your content — do not "
             "re-write it.",
