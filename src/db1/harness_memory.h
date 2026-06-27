@@ -51,7 +51,10 @@ extern "C"
    int hmem_upsert(const hmem_row_t *in, int64_t *out_id);
 
    /* Fetch a live row. Returns 0 (out owns heap fields — free with
-    * hmem_row_free_fields) or -1 if absent/tombstoned. */
+    * hmem_row_free_fields) or -1 if absent/tombstoned. NOTE: on success `out`
+    * is overwritten wholesale; the caller must hmem_row_free_fields() (or zero)
+    * any previously-populated row before reusing it here, else its heap fields
+    * leak. `out` need not be zeroed on a first call. */
    int hmem_get(const char *project, const char *name, hmem_row_t *out);
 
    /* List rows for a project (live only unless include_deleted). Allocates

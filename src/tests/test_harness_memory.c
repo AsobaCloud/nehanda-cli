@@ -9,6 +9,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void test_sha(void)
+{
+   /* FIPS 180-4 known-answer vectors, incl. length-mod-64 boundaries. */
+   char h[65];
+   hmem_sha256_hex("", 0, h);
+   assert(strcmp(h, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") == 0);
+   hmem_sha256_hex("abc", 3, h);
+   assert(strcmp(h, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") == 0);
+   char a[120];
+   memset(a, 'a', sizeof(a));
+   hmem_sha256_hex(a, 55, h); /* rem==55 (one pad block) */
+   assert(strcmp(h, "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318") == 0);
+   hmem_sha256_hex(a, 56, h); /* rem==56 (forces a second pad block) */
+   assert(strcmp(h, "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a") == 0);
+   hmem_sha256_hex(a, 64, h); /* exact block boundary */
+   assert(strcmp(h, "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb") == 0);
+   hmem_sha256_hex(a, 119, h); /* multi-block */
+   assert(strcmp(h, "31eba51c313a5c08226adf18d4a359cfdfd8d2e816b13f4af952f7ea6584dcfb") == 0);
+}
+
 static void test_hash(void)
 {
    char a[65], b[65], c[65];
@@ -61,6 +81,7 @@ static void test_resolve(void)
 
 int main(void)
 {
+   test_sha();
    test_hash();
    test_resolve();
    assert(db1_init(":memory:") == 0);
@@ -136,6 +157,16 @@ int main(void)
    assert(hmem_get("proj", "topics/auth", &got) == -1);
    assert(hmem_get("proj", "notes/x", &got) == 0);
    hmem_row_free_fields(&got);
+
+   /* prefix match is wildcard-free: '_' in dir must not over-match a sibling */
+   hmem_row_t w1 = mkrow("proj", "a_b/foo", "fact", "1");
+   hmem_row_t w2 = mkrow("proj", "axb/foo", "fact", "2");
+   assert(hmem_upsert(&w1, NULL) == 0);
+   assert(hmem_upsert(&w2, NULL) == 0);
+   assert(hmem_tombstone_prefix("proj", "a_b") == 1);
+   assert(hmem_get("proj", "axb/foo", &got) == 0); /* sibling untouched */
+   hmem_row_free_fields(&got);
+   assert(hmem_get("proj", "a_b/foo", &got) == -1); /* tombstoned */
 
    db1_shutdown();
    printf("test_harness_memory: OK\n");
