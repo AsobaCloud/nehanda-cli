@@ -939,7 +939,7 @@ static void kb_process_one_file(kb_build_file_ctx_t *c, int fi)
        0)
       LOG_WARN("kb_build", "project=%s path=%s: minhash signature save failed",
                c->project ? c->project : "?", c->files[fi].rel_path);
-   db2_kb_file_index_upsert(c->project, c->files[fi].rel_path, hash, NULL);
+   kb_file_index_store_from_path(c->project, c->files[fi].rel_path, hash, c->files[fi].path);
    c->stats->files_indexed++;
 }
 
