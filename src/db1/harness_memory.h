@@ -29,9 +29,14 @@ extern "C"
       char project[HMEM_PROJECT_LEN];
       char name[HMEM_NAME_LEN];
       char type[HMEM_TYPE_LEN];
-      char *description; /* heap; may be NULL on input, "" after load */
-      char *body;        /* heap; never NULL after load */
-      char *meta_json;   /* heap; "{}" default after load */
+      /* On INPUT to hmem_upsert these three may be caller-BORROWED (e.g.
+       * cJSON-owned) and need only be valid for the duration of the call —
+       * upsert binds them SQLITE_TRANSIENT and never retains the struct. On rows
+       * returned by get/list/search they are heap-owned (free via
+       * hmem_row_free_fields); description="" not NULL after a load. */
+      char *description;
+      char *body;
+      char *meta_json;
       char content_hash[HMEM_HASH_LEN];
       char last_client[HMEM_CLIENT_LEN];
       char source_session[HMEM_SESSION_LEN];

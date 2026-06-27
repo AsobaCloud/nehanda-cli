@@ -17,6 +17,13 @@ static int send_and_free(server_conn_t *conn, cJSON *resp)
    return server_send_ok(conn, resp);
 }
 
+/* Copy src into a fixed field, returning 0 on silent truncation (1 = fit). */
+static int copy_field(char *dst, size_t cap, const char *src)
+{
+   int n = snprintf(dst, cap, "%s", src ? src : "");
+   return (n >= 0 && (size_t)n < cap);
+}
+
 static cJSON *hmem_row_json(const hmem_row_t *r)
 {
    cJSON *o = cJSON_CreateObject();
@@ -45,13 +52,16 @@ int handle_hmem_upsert(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 
    hmem_row_t in;
    memset(&in, 0, sizeof(in));
-   snprintf(in.project, sizeof(in.project), "%s", project);
-   snprintf(in.name, sizeof(in.name), "%s", name);
-   snprintf(in.type, sizeof(in.type), "%s", jo_str(req, "type", "fact"));
+   /* Reject silent truncation — a truncated project/name would alias distinct
+    * memories and bypass P3's path-safety (which sees the original string). */
+   if (!copy_field(in.project, sizeof(in.project), project) ||
+       !copy_field(in.name, sizeof(in.name), name) ||
+       !copy_field(in.type, sizeof(in.type), jo_str(req, "type", "fact")) ||
+       !copy_field(in.last_client, sizeof(in.last_client), jo_str(req, "client", "")) ||
+       !copy_field(in.source_session, sizeof(in.source_session), jo_str(req, "session_id", "")))
+      return server_send_error(conn, "field too long", NULL);
    if (!hmem_type_valid(in.type))
       return server_send_error(conn, "invalid type", NULL);
-   snprintf(in.last_client, sizeof(in.last_client), "%s", jo_str(req, "client", ""));
-   snprintf(in.source_session, sizeof(in.source_session), "%s", jo_str(req, "session_id", ""));
    /* borrowed pointers — hmem_upsert only reads them */
    in.description = (char *)jo_str(req, "description", "");
    in.body = (char *)jo_str(req, "body", "");
@@ -145,6 +155,11 @@ int handle_hmem_tombstone_prefix(server_ctx_t *ctx, server_conn_t *conn, cJSON *
    if (jo_need_str(req, "project", &project) < 0)
       return server_send_error(conn, "missing project", NULL);
    const char *dir = jo_str(req, "dir", "");
+   /* Empty dir tombstones the WHOLE project — never the default for a missing
+    * key; require an explicit tombstone_all:true to wipe everything. */
+   if (!dir[0] && !jo_int(req, "tombstone_all", 0))
+      return server_send_error(conn, "missing dir (set tombstone_all:true to wipe the project)",
+                               NULL);
    int rc = hmem_tombstone_prefix(project, dir);
    cJSON *resp = cJSON_CreateObject();
    cJSON_AddStringToObject(resp, "status", rc >= 0 ? "ok" : "error");
