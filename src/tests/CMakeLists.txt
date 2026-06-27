@@ -56,6 +56,7 @@ aimee_add_test(test_memory_provider test_memory_provider.c)
 aimee_add_test(test_harness_memory test_harness_memory.c)
 aimee_add_test(test_memory_redirect test_memory_redirect.c)
 aimee_add_test(test_harness_memory_hydrate test_harness_memory_hydrate.c)
+aimee_add_test(test_harness_memory_scope test_harness_memory_scope.c)
 aimee_add_test(test_plugin_c_hook test_plugin_c_hook.c)
 add_executable(test_context_engine test_context_engine.c)
 target_include_directories(test_context_engine PRIVATE
