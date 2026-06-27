@@ -10,8 +10,10 @@
 #include "memory_redirect.h"
 
 #include "cli_client.h" /* cli_http_request, cli_v1_client_endpoint/bearer */
+#include "harness_memory_audit.h"
 #include "harness_memory_common.h"
 #include "harness_memory_scope.h"
+#include "harness_memory_spill.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -188,6 +190,7 @@ int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *
    if (v == MR_REJECT)
    {
       snprintf(msg, msg_len, "%s", reason ? reason : "memory write rejected");
+      hmem_audit("reject", NULL, NULL, reason);
       return 2;
    }
 
@@ -225,14 +228,15 @@ int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *
 
    if (!resp || status < 200 || status >= 300)
    {
-      /* Fail-open: let the agent write its own file this once; session-start
-       * reconcile imports it. Never block the agent on our outage. */
+      /* Fail-open: spill the intended content so the next session-start reconcile
+       * replays it into the store, and let the agent write its own file this once.
+       * Never block the agent on our outage. */
       if (resp)
          cJSON_Delete(resp);
-      fprintf(stderr,
-              "aimee: harness-memory store unavailable (status %d); allowing local "
-              "write — will reconcile at next session start\n",
-              status);
+      int sp = hmem_spill_write(project, name, "fact", content);
+      hmem_audit(sp == 0 ? "spill" : "spill-failed", project, name, "store unreachable");
+      fprintf(stderr, "aimee: harness-memory store unavailable (status %d); %s\n", status,
+              sp == 0 ? "spilled for reconcile" : "spill FAILED — allowing local write");
       return 0;
    }
 
@@ -242,6 +246,7 @@ int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *
 
    const hmem_scope_t *scope = hmem_scope_for_client(client); /* non-NULL: classify redirected */
    rematerialize(path, content, home, scope ? scope->projects_root : ".claude/projects");
+   hmem_audit("redirect", project, name, NULL);
    snprintf(msg, msg_len,
             "Saved to aimee memory (id=%ld). The file now reflects your content — do not "
             "re-write it.",
