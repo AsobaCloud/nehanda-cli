@@ -23,12 +23,14 @@ extern "C"
    } mr_verdict_t;
 
    /* PURE classification (no I/O) — testable. Given the hook client (NULL/""
-    * => "claude"), the canonical tool name ("Write"/"Edit"/...), and the target
-    * file path, decide the verdict. On MR_REDIRECT, out_name receives the memory
-    * entry name (relpath under the memory dir, no ".md"). out_reason (optional)
-    * receives a static human message for MR_REJECT. */
+    * => "claude"), the canonical tool name ("Write"/"Edit"/...), the target file
+    * path, and the HOME dir (the path is anchored under <home>/.claude/projects/),
+    * decide the verdict. On MR_REDIRECT, out_name receives the memory entry name
+    * (relpath under the memory dir, no ".md", no ".." segments). out_reason
+    * (optional) receives a static human message for MR_REJECT. */
    mr_verdict_t memory_redirect_classify(const char *client, const char *tool, const char *path,
-                                         char *out_name, size_t name_cap, const char **out_reason);
+                                         const char *home, char *out_name, size_t name_cap,
+                                         const char **out_reason);
 
    /* Full interception stage for pre_tool_check. Inspects a parsed tool-input
     * object for a memory write/edit; on a memory op performs the redirect (POST
