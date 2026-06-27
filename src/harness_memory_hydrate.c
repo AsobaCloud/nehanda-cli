@@ -4,9 +4,12 @@
 
 #include "cJSON.h"
 #include "cli_client.h" /* cli_http_request, cli_v1_client_endpoint/bearer */
+#include "harness_memory_audit.h"
 #include "harness_memory_common.h"
 #include "harness_memory_scope.h"
+#include "harness_memory_spill.h"
 
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -126,6 +129,88 @@ static int write_file(const char *path, const char *content)
 #endif
 }
 
+static char *read_whole(const char *path)
+{
+   FILE *f = fopen(path, "rb");
+   if (!f)
+      return NULL;
+   fseek(f, 0, SEEK_END);
+   long sz = ftell(f);
+   fseek(f, 0, SEEK_SET);
+   if (sz < 0 || sz > 16 * 1024 * 1024)
+   {
+      fclose(f);
+      return NULL;
+   }
+   char *buf = malloc((size_t)sz + 1);
+   if (!buf)
+   {
+      fclose(f);
+      return NULL;
+   }
+   size_t r = fread(buf, 1, (size_t)sz, f);
+   fclose(f);
+   buf[r] = '\0';
+   return buf;
+}
+
+/* Replay any spilled writes (from a server-down fail-open) into the store, then
+ * delete each consumed spill. Returns count consumed. */
+static int consume_spills(const char *project, const char *endpoint, const char *bearer)
+{
+   char dir[PATH_MAX];
+   if (hmem_spill_dir(project, dir, sizeof(dir)) != 0)
+      return 0;
+   DIR *d = opendir(dir);
+   if (!d)
+      return 0;
+   int n = 0;
+   struct dirent *e;
+   while ((e = readdir(d)))
+   {
+      if (e->d_name[0] == '.') /* skips ., .., and .spill_ in-progress temps */
+         continue;
+      char fp[PATH_MAX];
+      if ((size_t)snprintf(fp, sizeof(fp), "%s/%s", dir, e->d_name) >= sizeof(fp))
+         continue;
+      char *txt = read_whole(fp);
+      if (!txt)
+         continue;
+      cJSON *env = cJSON_Parse(txt);
+      free(txt);
+      if (!env) /* corrupt/partial spill — leave it for inspection, don't replay */
+         continue;
+      const char *p = jstr(env, "project"), *nm = jstr(env, "name"), *ty = jstr(env, "type"),
+                 *bd = jstr(env, "body");
+      if (p && nm)
+      {
+         cJSON *body = cJSON_CreateObject();
+         cJSON_AddStringToObject(body, "project", p);
+         cJSON_AddStringToObject(body, "name", nm);
+         cJSON_AddStringToObject(body, "type", (ty && ty[0]) ? ty : "fact");
+         cJSON_AddStringToObject(body, "body", bd ? bd : "");
+         char *bs = cJSON_PrintUnformatted(body);
+         cJSON_Delete(body);
+         int st = 0;
+         cJSON *r = bs ? cli_http_request(endpoint, "POST", "/v1/harness_memory/upsert", bs, bearer,
+                                          5000, &st)
+                       : NULL;
+         free(bs);
+         if (r && st >= 200 && st < 300)
+         {
+            unlink(fp);
+            hmem_audit("spill-consumed", p, nm, NULL);
+            n++;
+         }
+         if (r)
+            cJSON_Delete(r);
+      }
+      cJSON_Delete(env);
+   }
+   closedir(d);
+   return n;
+}
+
 int harness_memory_hydrate(const char *cwd)
 {
    const char *home = getenv("HOME");
@@ -153,6 +238,11 @@ int harness_memory_hydrate(const char *cwd)
    if (!endpoint)
       return -1;
    char *bearer = cli_v1_client_bearer();
+
+   /* Replay any spilled (server-down) writes into the store first, so the list
+    * below reflects them. */
+   int consumed = consume_spills(project, endpoint, bearer);
+
    cJSON *body = cJSON_CreateObject();
    cJSON_AddStringToObject(body, "project", project);
    char *body_s = cJSON_PrintUnformatted(body);
@@ -169,7 +259,7 @@ int harness_memory_hydrate(const char *cwd)
    {
       if (resp)
          cJSON_Delete(resp);
-      return -1;
+      return (consumed > 0) ? consumed : -1;
    }
 
    /* Ensure the memory dir exists and resolve it, so we can confine every write
@@ -199,5 +289,12 @@ int harness_memory_hydrate(const char *cwd)
          n++;
    }
    cJSON_Delete(resp);
+
+   if (n > 0 || consumed > 0)
+   {
+      char detail[96];
+      snprintf(detail, sizeof(detail), "hydrated=%d spills_consumed=%d", n, consumed);
+      hmem_audit("reconcile", project, NULL, detail);
+   }
    return n;
 }
