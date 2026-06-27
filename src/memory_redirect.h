@@ -1,0 +1,46 @@
+/* memory_redirect.h: intercept an agent's local memory-file writes and redirect
+ * them into the central aimee-server store (P3 of central agent-memory
+ * interception). Called as a stage in pre_tool_check after tool-name
+ * canonicalization. See docs/proposals/pending/central-agent-memory-interception.md.
+ */
+#ifndef DEC_MEMORY_REDIRECT_H
+#define DEC_MEMORY_REDIRECT_H 1
+
+#include <stddef.h>
+
+#include "cJSON.h"
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+   typedef enum
+   {
+      MR_ALLOW = 0,    /* not a memory operation — let it proceed */
+      MR_REDIRECT = 1, /* memory write: store centrally, deny the raw tool */
+      MR_REJECT = 2    /* MEMORY.md / unsupported: deny, change nothing */
+   } mr_verdict_t;
+
+   /* PURE classification (no I/O) — testable. Given the hook client (NULL/""
+    * => "claude"), the canonical tool name ("Write"/"Edit"/...), and the target
+    * file path, decide the verdict. On MR_REDIRECT, out_name receives the memory
+    * entry name (relpath under the memory dir, no ".md"). out_reason (optional)
+    * receives a static human message for MR_REJECT. */
+   mr_verdict_t memory_redirect_classify(const char *client, const char *tool, const char *path,
+                                         char *out_name, size_t name_cap, const char **out_reason);
+
+   /* Full interception stage for pre_tool_check. Inspects a parsed tool-input
+    * object for a memory write/edit; on a memory op performs the redirect (POST
+    * to /v1/harness_memory/upsert + re-materialize the file) and returns a
+    * pre_tool_check verdict: 0 = allow, 2 = deny (msg holds the agent-facing
+    * reason). Fail-open: if the store is unreachable it returns 0 (allow) so the
+    * agent is never blocked by our outage. */
+   int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *msg,
+                             size_t msg_len);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* DEC_MEMORY_REDIRECT_H */

@@ -13,6 +13,7 @@
 #include "guardrails_internal.h"
 #include "guardrails_semantic.h"
 #include "guardrails_blast_radius.h"
+#include "memory_redirect.h"
 #include "workspace_provider.h" /* skip worktree enforcement for a detached (client) workspace */
 #include "headers/config.h"
 #include "headers/git_verify.h"
@@ -1240,6 +1241,19 @@ int pre_tool_check(const char *tool_name, const char *input_json, session_state_
    cJSON *fp = tool_path_item(root);
    cJSON *cmd = guardrails_command_item(root);
    const char *effective_cwd = tool_effective_cwd(root, cwd);
+
+   /* Memory-interception stage: redirect an agent's local memory-file writes
+    * into the central aimee-server store. Only fires for the registered memory
+    * surface (under ~/.claude/.../memory/), which is not a repo path, so it
+    * never bypasses the repo guardrails below. 2 = deny-as-redirect, 0 = pass. */
+   {
+      int mrc = memory_redirect_check(tool_name, root, effective_cwd, msg_buf, msg_len);
+      if (mrc != 0)
+      {
+         cJSON_Delete(root);
+         return mrc;
+      }
+   }
    int command_targets_worktree = shell_command_targets_worktree(tool_name, cmd, effective_cwd);
    int target_is_worktree = path_tool_targets_worktree(tool_name, fp, effective_cwd);
    if (is_shell_tool(tool_name) && cmd && cJSON_IsString(cmd) &&
