@@ -14,7 +14,9 @@
 #include "cli_profile.h"
 #include "client_constants.h"
 #include "client_integrations.h"
-#include "code_collect.h" /* code_index_install_branch_hook (index watch) */
+#include "code_collect.h"          /* code_index_install_branch_hook (index watch) */
+#include "harness_memory_audit.h"  /* hmem_audit (diagnostic when project unresolved) */
+#include "harness_memory_common.h" /* hmem_resolve_project (client-side project key) */
 #include "delegate_plan.h"
 #include "cli_tui.h"
 #include "platform.h"
@@ -705,6 +707,23 @@ static int handle_hooks(int argc, char **argv, int json_output)
    cJSON_AddStringToObject(req, "cwd", cwd);
    if (sid && sid[0])
       cJSON_AddStringToObject(req, "session_id", sid);
+
+   /* Resolve the harness-memory project key HERE, on the client, against the real
+    * cwd / git repo / AIMEE_PROJECT_ID, and forward it: a remote server's
+    * filesystem has none of those, so it could not resolve the key itself. Only
+    * the pre phase intercepts memory writes, so skip the git fork on post. */
+   if (strcmp(phase, "pre") == 0 && cwd[0])
+   {
+      char hproject[256], hroot[4096];
+      if (hmem_resolve_project(cwd, hproject, sizeof(hproject), hroot, sizeof(hroot)) == 0 &&
+          hproject[0])
+         cJSON_AddStringToObject(req, "harness_project", hproject);
+      else
+         /* Couldn't resolve client-side: the server falls back to cwd resolution,
+          * which fails on a remote server (memory interception then no-ops). Audit
+          * so this is observable rather than a silent miss. */
+         hmem_audit("project-unresolved", NULL, NULL, "hooks pre");
+   }
 
    cJSON *resp = cli_v1_dispatch_local(req, 5000);
    cJSON_Delete(req);
