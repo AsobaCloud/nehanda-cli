@@ -11,7 +11,11 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+
+#ifndef _WIN32
+#include <fcntl.h>
 #include <unistd.h>
+#endif
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -53,7 +57,6 @@ int hmem_spill_write(const char *project, const char *name, const char *type, co
    if (hmem_spill_dir(project, dir, sizeof(dir)) != 0)
       return -1;
 
-   static unsigned long counter = 0;
    char ts[32];
    time_t t = time(NULL);
    struct tm tm_buf;
@@ -74,11 +77,11 @@ int hmem_spill_write(const char *project, const char *name, const char *type, co
    cJSON_Delete(o);
    if (!s)
       return -1;
+   size_t len = strlen(s);
 
-   char tmpl[PATH_MAX], target[PATH_MAX];
-   if ((size_t)snprintf(tmpl, sizeof(tmpl), "%s/.spill_XXXXXX", dir) >= sizeof(tmpl) ||
-       (size_t)snprintf(target, sizeof(target), "%s/%d-%lu.json", dir, (int)getpid(), counter++) >=
-           sizeof(target))
+#ifndef _WIN32
+   char tmpl[PATH_MAX];
+   if ((size_t)snprintf(tmpl, sizeof(tmpl), "%s/.spill_XXXXXX", dir) >= sizeof(tmpl))
    {
       free(s);
       return -1;
@@ -89,7 +92,18 @@ int hmem_spill_write(const char *project, const char *name, const char *type, co
       free(s);
       return -1;
    }
-   size_t len = strlen(s);
+   /* Commit under a collision-resistant name reusing mkstemp's unique suffix —
+    * a deterministic pid/counter name could overwrite an unconsumed spill. */
+   const char *rnd = strrchr(tmpl, '_');
+   rnd = rnd ? rnd + 1 : tmpl;
+   char target[PATH_MAX];
+   if ((size_t)snprintf(target, sizeof(target), "%s/spill-%s.json", dir, rnd) >= sizeof(target))
+   {
+      close(fd);
+      unlink(tmpl);
+      free(s);
+      return -1;
+   }
    ssize_t w = write(fd, s, len);
    fsync(fd);
    close(fd);
@@ -99,5 +113,32 @@ int hmem_spill_write(const char *project, const char *name, const char *type, co
       unlink(tmpl);
       return -1;
    }
+   /* fsync the directory so the rename survives power loss (otherwise it can
+    * revert to the dotfile temp name, which the consumer skips → silent loss). */
+   int dfd = open(dir, O_RDONLY | O_DIRECTORY);
+   if (dfd >= 0)
+   {
+      fsync(dfd);
+      close(dfd);
+   }
    return 0;
+#else
+   char target[PATH_MAX];
+   if ((size_t)snprintf(target, sizeof(target), "%s/spill-%lu-%lu.json", dir, (unsigned long)t,
+                        (unsigned long)len) >= sizeof(target))
+   {
+      free(s);
+      return -1;
+   }
+   FILE *f = fopen(target, "wb");
+   if (!f)
+   {
+      free(s);
+      return -1;
+   }
+   size_t wr = fwrite(s, 1, len, f);
+   fclose(f);
+   free(s);
+   return (wr == len) ? 0 : -1;
+#endif
 }

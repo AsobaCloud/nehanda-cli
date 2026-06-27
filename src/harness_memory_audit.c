@@ -11,6 +11,11 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
@@ -62,13 +67,34 @@ void hmem_audit(const char *action, const char *project, const char *name, const
    if (!line)
       return;
 
-   FILE *f = fopen(logpath, "a");
-   if (f)
+   /* Create 0600 atomically — no world-readable window on this sensitive log. */
+#ifndef _WIN32
+   int flags = O_CREAT | O_WRONLY | O_APPEND | O_CLOEXEC;
+#ifdef O_NOFOLLOW
+   flags |= O_NOFOLLOW;
+#endif
+   int fd = open(logpath, flags, 0600);
+   if (fd < 0)
    {
-      /* tighten perms best-effort (fopen "a" may have created it) */
-      chmod(logpath, 0600);
-      fprintf(f, "%s\n", line);
-      fclose(f);
+      free(line);
+      return;
    }
+   FILE *f = fdopen(fd, "a");
+   if (!f)
+   {
+      close(fd);
+      free(line);
+      return;
+   }
+#else
+   FILE *f = fopen(logpath, "a");
+   if (!f)
+   {
+      free(line);
+      return;
+   }
+#endif
+   fprintf(f, "%s\n", line);
+   fclose(f);
    free(line);
 }
