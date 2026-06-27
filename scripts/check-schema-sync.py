@@ -135,6 +135,8 @@ DB1_ONLY_TABLES = {
     "webchat_claude_sessions",
     # live in-flight webchat turn mirror the browser polls (per-session, DB1-owned)
     "webchat_live",
+    # intercepted agent harness-memory, canonical store (per-project, DB1-owned)
+    "harness_memory",
 }
 
 # Sole DB1-owned lexical index. Lives only in db1/schema.sql.
