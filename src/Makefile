@@ -295,7 +295,7 @@ CORE_SRCS = db1/db.c db1/db_schema.c config.c config_sections.c config_database.
             model_registry.c models_dev.c models_dev_cache.c lsp_client.c lsp_manager.c plugin.c \
             plugin_ctx.c plugin_loader.c memory_provider.c plugin_c_hook.c config_plugin.c code_collect.c codex_auth.c \
             workflow/wfe_iface.c workflow/wfe_def.c workflow/wfe_validate.c workflow/wfe_canonical.c workflow/wfe_custom.c \
-            harness_memory_common.c memory_redirect.c
+            harness_memory_common.c
 CORE_OBJS = $(CORE_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/cJSON.o
 
 # --- Layer 0b: DB1 (user-local tier) ---
@@ -341,7 +341,7 @@ AGENT_OBJS = $(AGENT_SRCS:%.c=$(OBJDIR)/%.o) $(PLATFORM_AGENT_OBJS)
 # --- Layer 3: Commands + UI (cmd_*, webchat, dashboard) ---
 CMD_SRCS = prompts.c persona.c hardware_probe.c curator_profile.c server/delegate_source_authority.c \
            cmd_core.c cmd_init.c cmd_data.c cmd_infra.c cmd_session_history.c cmd_memory.c cmd_memory_core.c cmd_memory_curiosity.c cmd_memory_embed.c cmd_memory_op.c cmd_memory_pack.c cmd_memory_lint.c cmd_wiki.c cmd_memory_vector.c cmd_index.c cmd_graph.c cmd_rules.c cmd_roadmap.c cmd_auto.c cmd_learning.c cmd_review.c cmd_dogfood.c cmd_identity.c cmd_onboard.c cmd_diagnose.c \
-           cmd_hooks.c cmd_hooks_scope.c cmd_capabilities.c cmd_session_lifecycle.c cmd_agent.c cmd_agent_setup.c cmd_agent_trace.c cmd_agent_delegate.c cmd_agent_delegate_status.c server/delegate_checkout.c server/delegate_prompt_stdin.c \
+           cmd_hooks.c memory_redirect.c cmd_hooks_scope.c cmd_capabilities.c cmd_session_lifecycle.c cmd_agent.c cmd_agent_setup.c cmd_agent_trace.c cmd_agent_delegate.c cmd_agent_delegate_status.c server/delegate_checkout.c server/delegate_prompt_stdin.c \
            cmd_wm.c cmd_work.c cmd_sweep.c cmd_cancel.c cmd_rewind.c cmd_branch.c cmd_mcp.c cmd_util.c cmd_table.c cmd_doctor.c cmd_toolset.c \
            cmd_plugin.c \
            cmd_trajectory.c \

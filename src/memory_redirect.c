@@ -9,8 +9,8 @@
 
 #include "memory_redirect.h"
 
+#include "cli_client.h" /* cli_http_request, cli_v1_client_endpoint/bearer */
 #include "harness_memory_common.h"
-#include "kb_client_internal.h" /* kb_client_v1_post_json */
 
 #include <ctype.h>
 #include <stdio.h>
@@ -198,15 +198,26 @@ int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *
    cJSON_AddStringToObject(body, "type", "fact");
    cJSON_AddStringToObject(body, "body", content);
    cJSON_AddStringToObject(body, "client", (client && client[0]) ? client : "claude");
-   int status = -1;
-   char *resp = kb_client_v1_post_json("/v1/harness_memory/upsert", body, 5000, &status);
+   char *body_s = cJSON_PrintUnformatted(body);
    cJSON_Delete(body);
+
+   char *endpoint = cli_v1_client_endpoint();
+   char *bearer = cli_v1_client_bearer();
+   int status = 0;
+   cJSON *resp = (endpoint && body_s)
+                     ? cli_http_request(endpoint, "POST", "/v1/harness_memory/upsert", body_s,
+                                        bearer, 5000, &status)
+                     : NULL;
+   free(body_s);
+   free(endpoint);
+   free(bearer);
 
    if (!resp || status < 200 || status >= 300)
    {
       /* Fail-open: let the agent write its own file this once; session-start
        * reconcile imports it. Never block the agent on our outage. */
-      free(resp);
+      if (resp)
+         cJSON_Delete(resp);
       fprintf(stderr,
               "aimee: harness-memory store unavailable (status %d); allowing local "
               "write — will reconcile at next session start\n",
@@ -214,16 +225,9 @@ int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *
       return 0;
    }
 
-   long id = 0;
-   cJSON *r = cJSON_Parse(resp);
-   if (r)
-   {
-      cJSON *jid = cJSON_GetObjectItemCaseSensitive(r, "id");
-      if (cJSON_IsNumber(jid))
-         id = (long)jid->valuedouble;
-      cJSON_Delete(r);
-   }
-   free(resp);
+   cJSON *jid = cJSON_GetObjectItemCaseSensitive(resp, "id");
+   long id = cJSON_IsNumber(jid) ? (long)jid->valuedouble : 0;
+   cJSON_Delete(resp);
 
    rematerialize(path, content, home);
    snprintf(msg, msg_len,
