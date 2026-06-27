@@ -3,6 +3,10 @@
  * unit under the 2000-line hard limit. Included (with
  * test_kb_http_routes_endpoints.inc) just before main(); all helpers and
  * fixtures live in test_kb_http_routes.c above the include point. */
+/* §4 surprising self-suppress: rolling judge stats the runtime_state stub serves for
+ * the surprising_judged:/surprising_confirmed: keys (-1 = key absent). */
+static int g_sj_judged = -1;
+static int g_sj_confirmed = -1;
 /* Full memory_t layout (mirrors headers/memory.h) so the stub writes each field
  * at the offset the handler — compiled against the real struct — reads. The main
  * file keeps a truncated local memory_t for other stubs, so we cast a void* here
@@ -613,6 +617,36 @@ static void test_code_graph_surprising_judge(void)
    assert(strstr(buf, "\"judged\":1") != NULL);
 }
 
+/* §4 self-suppress: with the floor enabled and the rolling judge-sampled precision
+ * below it (2/100 = 2% < 10%), an UNJUDGED request returns no links + suppressed:true. */
+static void test_code_graph_surprising_self_suppress(void)
+{
+   char buf[4096];
+   g_precision_floor = 0.10;
+   g_sj_judged = 100;
+   g_sj_confirmed = 2;
+   int s = kb_http_route_ex("GET", "/v1/code/graph/surprising",
+                            "project=proj-alpha&percentile=0&d_min=2&max_results=10", NULL, NULL,
+                            NULL, 0, buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"suppressed\":true") != NULL);
+   assert(strstr(buf, "\"link_count\":0") != NULL);
+   assert(strstr(buf, "\"sampled_precision\":0.02") != NULL);
+
+   /* precision at/above the floor -> NOT suppressed, links shown. */
+   g_sj_confirmed = 50; /* 50% */
+   s = kb_http_route_ex("GET", "/v1/code/graph/surprising",
+                        "project=proj-alpha&percentile=0&d_min=2&max_results=10", NULL, NULL, NULL, 0,
+                        buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"suppressed\":true") == NULL);
+   assert(strstr(buf, "\"link_count\":1") != NULL); /* the disconnected pair surfaces */
+
+   g_precision_floor = 0.0; /* reset for other tests */
+   g_sj_judged = -1;
+   g_sj_confirmed = -1;
+}
+
 /* A vector-store failure (pgvec gather returns <0) is surfaced as 503, not a silent
  * empty 200 — an outage must be distinguishable from "no surprising links". */
 static void test_code_graph_surprising_vecstore_down(void)
@@ -713,9 +747,22 @@ int git_resolve_default_sha(const char *root, char *out, size_t outlen)
 }
 int db2_kb_runtime_state_get(const char *key, char *out, size_t out_len)
 {
-   (void)key;
    if (!out || out_len == 0)
       return -1;
+   if (key && strncmp(key, "surprising_judged:", 18) == 0)
+   {
+      if (g_sj_judged < 0)
+         return -1;
+      snprintf(out, out_len, "%d", g_sj_judged);
+      return 0;
+   }
+   if (key && strncmp(key, "surprising_confirmed:", 21) == 0)
+   {
+      if (g_sj_confirmed < 0)
+         return -1;
+      snprintf(out, out_len, "%d", g_sj_confirmed);
+      return 0;
+   }
    snprintf(out, out_len, "%s", g_stored_sha);
    return g_stored_sha[0] ? 0 : -1;
 }
@@ -738,6 +785,14 @@ static int g_worktree_mode = 0; /* drives the SHA-gate bypass under the worktree
 int code_index_source_is_worktree(void)
 {
    return g_worktree_mode;
+}
+static int g_hook_install_rc = 0; /* return for the §6 post-merge hook installer stub */
+static char g_hook_project[128] = "";
+int code_index_install_branch_hook(const char *project_root, const char *project_name)
+{
+   (void)project_root;
+   snprintf(g_hook_project, sizeof(g_hook_project), "%s", project_name ? project_name : "");
+   return g_hook_install_rc;
 }
 
 /* Unchanged default branch (stored SHA == current) + !force -> skip the re-walk. */
@@ -793,6 +848,38 @@ static void test_code_scan_worktree_ignores_sha(void)
    g_branch_sha[0] = '\0';
    assert(s == 200);
    assert(strstr(buf, "\"skipped\":false") != NULL); /* worktree mode never skips */
+}
+
+/* §6 live: install_hook=true on a git repo (resolved SHA) installs the post-merge
+ * reindex hook and reports it; absent the opt-in the hook is never installed. */
+static void test_code_scan_installs_hook(void)
+{
+   char buf[512];
+   g_db_initialized = 1;
+   g_code_scan_rc = 5;
+   g_hook_install_rc = 0;
+   g_hook_project[0] = '\0';
+   snprintf(g_branch_sha, sizeof(g_branch_sha), "tree-ccc");
+   snprintf(g_stored_sha, sizeof(g_stored_sha), "tree-bbb"); /* moved -> scans */
+   const char *body = "{\"project\":\"proj-alpha\",\"root_path\":\"/tmp/repo\",\"install_hook\":true}";
+   int s = kb_http_route_ex("POST", "/v1/code/scan", NULL, NULL, NULL, body, (int)strlen(body), buf,
+                            sizeof(buf));
+   g_branch_sha[0] = '\0';
+   assert(s == 200);
+   assert(strstr(buf, "\"hook_installed\":true") != NULL);
+   assert(strcmp(g_hook_project, "proj-alpha") == 0);
+
+   /* without the opt-in: no install, hook_installed:false. */
+   g_hook_project[0] = '\0';
+   snprintf(g_branch_sha, sizeof(g_branch_sha), "tree-ddd");
+   snprintf(g_stored_sha, sizeof(g_stored_sha), "tree-ccc");
+   const char *body2 = "{\"project\":\"proj-alpha\",\"root_path\":\"/tmp/repo\"}";
+   s = kb_http_route_ex("POST", "/v1/code/scan", NULL, NULL, NULL, body2, (int)strlen(body2), buf,
+                        sizeof(buf));
+   g_branch_sha[0] = '\0';
+   assert(s == 200);
+   assert(strstr(buf, "\"hook_installed\":false") != NULL);
+   assert(g_hook_project[0] == '\0'); /* installer not called */
 }
 
 static void test_code_scan_ok(void)

@@ -25,6 +25,7 @@
 #endif
 #include "aimee_tls.h"
 #include "aimee_home.h"
+#include "platform_net.h"
 
 #include <windows.h>
 #include <schannel.h>
@@ -54,6 +55,14 @@
 #endif
 #ifndef CERT_NCRYPT_KEY_SPEC
 #define CERT_NCRYPT_KEY_SPEC 0xFFFFFFFF
+#endif
+/* SSL chain-policy "ignore" flag for SSL_EXTRA_CERT_CHAIN_POLICY_PARA.fdwChecks.
+ * Defined in wininet.h, which this backend deliberately does not include; mirror
+ * the defensive-define pattern above with the documented value. Used to suppress
+ * ONLY the untrusted-root error during the pinned-cert fallback (the hostname/SAN
+ * name check still runs and is still enforced). */
+#ifndef SECURITY_FLAG_IGNORE_UNKNOWN_CA
+#define SECURITY_FLAG_IGNORE_UNKNOWN_CA 0x00000100
 #endif
 
 #define ENC_CAP           32768 /* one TLS record fits comfortably; grown via recv loop */
@@ -126,8 +135,95 @@ static int recv_more(aimee_tls_t *t)
    return -1;
 }
 
-/* Verify the server certificate chain + hostname against the Windows store.
- * Returns 0 on success, -1 on any failure. */
+/* Defined further down (with the mTLS/identity helpers); forward-declared here so
+ * the pinned-cert fallback can reuse the same file-read + PEM->DER decoders. */
+static unsigned char *read_small_file(const char *path, DWORD *out_len);
+static int pem_to_der(const unsigned char *pem, DWORD pem_len, unsigned char **der, DWORD *der_len);
+
+/* Resolve <aimee_home>/remote-ca.pem — the pinned server certificate written by
+ * `aimee remote set/trust`. Returns 1 (and fills |out|) when it exists as a
+ * regular file, else 0. Mirrors pinned_ca_path() in the OpenSSL backend; trusting
+ * this cert lets a self-signed/private server verify (chain anchor + hostname/SAN)
+ * without disabling verification (AIMEE_TLS_INSECURE). */
+static int pinned_ca_path(char *out, size_t n)
+{
+   const char *home = aimee_home();
+   if (!home || !*home || !out || n == 0)
+      return 0;
+   snprintf(out, n, "%s/remote-ca.pem", home);
+   DWORD a = GetFileAttributesA(out);
+   return (a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY)) ? 1 : 0;
+}
+
+/* Run the SSL chain policy (chain validity + hostname/SAN name match) for the
+ * already-built |chain| against |whost|. |fdwChecks| suppresses specific errors
+ * (e.g. SECURITY_FLAG_IGNORE_UNKNOWN_CA for the pinned path); 0 enforces all.
+ * Returns 0 iff the policy reports no (non-suppressed) error. */
+static int ssl_policy_check(PCCERT_CHAIN_CONTEXT chain, const wchar_t *whost, DWORD fdwChecks)
+{
+   SSL_EXTRA_CERT_CHAIN_POLICY_PARA ssl_para;
+   memset(&ssl_para, 0, sizeof(ssl_para));
+   ssl_para.cbSize = sizeof(ssl_para);
+   ssl_para.dwAuthType = AUTHTYPE_SERVER;
+   ssl_para.fdwChecks = fdwChecks;
+   ssl_para.pwszServerName = (LPWSTR)whost;
+
+   CERT_CHAIN_POLICY_PARA policy_para;
+   memset(&policy_para, 0, sizeof(policy_para));
+   policy_para.cbSize = sizeof(policy_para);
+   policy_para.pvExtraPolicyPara = &ssl_para;
+
+   CERT_CHAIN_POLICY_STATUS policy_status;
+   memset(&policy_status, 0, sizeof(policy_status));
+   policy_status.cbSize = sizeof(policy_status);
+
+   if (CertVerifyCertificateChainPolicy(CERT_CHAIN_POLICY_SSL, chain, &policy_para,
+                                        &policy_status) &&
+       policy_status.dwError == 0)
+      return 0;
+   return -1;
+}
+
+/* Strict leaf pin: 1 iff <aimee_home>/remote-ca.pem decodes to a DER that byte-
+ * matches the server leaf |cert|. This is the Windows analogue of the OpenSSL
+ * backend trusting exactly remote-ca.pem — a MITM presenting any other cert (even
+ * a validly-issued one) fails this compare. Returns 0 when no pin is configured
+ * or it does not match. */
+static int pinned_leaf_matches(PCCERT_CONTEXT cert)
+{
+   char path[600];
+   if (!pinned_ca_path(path, sizeof(path)))
+      return 0;
+
+   DWORD pem_len = 0;
+   unsigned char *pem = read_small_file(path, &pem_len);
+   if (!pem)
+      return 0;
+
+   unsigned char *der = NULL;
+   DWORD der_len = 0;
+   int match = 0;
+   if (pem_to_der(pem, pem_len, &der, &der_len) == 0)
+   {
+      if (der_len == cert->cbCertEncoded && cert->pbCertEncoded &&
+          memcmp(der, cert->pbCertEncoded, der_len) == 0)
+         match = 1;
+      free(der);
+   }
+   free(pem);
+   return match;
+}
+
+/* Verify the server certificate chain + hostname against the Windows store, OR
+ * against the pinned self-signed cert at <aimee_home>/remote-ca.pem. Returns 0 on
+ * success, -1 on any failure.
+ *
+ * Two accept paths, hostname/SAN enforced in BOTH (matching the OpenSSL backend):
+ *   1. System trust: the chain builds to a trusted root AND the name matches.
+ *   2. Pinned: the system chain is untrusted (unknown CA / self-signed), so we
+ *      ignore ONLY that error in a second name-checking policy run AND require the
+ *      leaf to byte-match remote-ca.pem (strict leaf pin). A different cert fails
+ *      the DER compare; a wrong hostname fails the still-enforced name check. */
 static int verify_server_cert(aimee_tls_t *t)
 {
    /* Fail closed if there is no hostname to verify against: a NULL pwszServerName
@@ -150,7 +246,9 @@ static int verify_server_cert(aimee_tls_t *t)
    {
       /* Widen the hostname for the SSL policy. A DNS hostname is <= 253 chars, so
        * 256 wide chars suffices; a 0 return means truncation/encoding error -> fail
-       * closed rather than verify against a truncated name. */
+       * closed rather than verify against a truncated name. An IP-literal host
+       * (e.g. 192.168.1.254) is passed through verbatim; CERT_CHAIN_POLICY_SSL
+       * matches it against the cert's IP-address SAN on Windows. */
       wchar_t whost[256];
       if (MultiByteToWideChar(CP_UTF8, 0, t->host, -1, whost, 256) == 0)
       {
@@ -159,25 +257,11 @@ static int verify_server_cert(aimee_tls_t *t)
          return -1;
       }
 
-      SSL_EXTRA_CERT_CHAIN_POLICY_PARA ssl_para;
-      memset(&ssl_para, 0, sizeof(ssl_para));
-      ssl_para.cbSize = sizeof(ssl_para);
-      ssl_para.dwAuthType = AUTHTYPE_SERVER;
-      ssl_para.pwszServerName = whost;
-
-      CERT_CHAIN_POLICY_PARA policy_para;
-      memset(&policy_para, 0, sizeof(policy_para));
-      policy_para.cbSize = sizeof(policy_para);
-      policy_para.pvExtraPolicyPara = &ssl_para;
-
-      CERT_CHAIN_POLICY_STATUS policy_status;
-      memset(&policy_status, 0, sizeof(policy_status));
-      policy_status.cbSize = sizeof(policy_status);
-
-      if (CertVerifyCertificateChainPolicy(CERT_CHAIN_POLICY_SSL, chain, &policy_para,
-                                           &policy_status) &&
-          policy_status.dwError == 0)
-         ok = 0;
+      if (ssl_policy_check(chain, whost, 0) == 0)
+         ok = 0; /* path 1: trusted system root + name match */
+      else if (pinned_leaf_matches(cert) &&
+               ssl_policy_check(chain, whost, SECURITY_FLAG_IGNORE_UNKNOWN_CA) == 0)
+         ok = 0; /* path 2: strict leaf pin + name match (untrusted root ignored) */
 
       CertFreeCertificateChain(chain);
    }
@@ -663,6 +747,138 @@ long aimee_tls_read(aimee_tls_t *t, void *buf, size_t len)
          return delivered;
       /* A record with zero application bytes (e.g. a handshake message): loop. */
    }
+}
+
+/* SHA-256 over |data| formatted as uppercase colon-hex into |out| (bounded by
+ * |out_n|). Uses the legacy CryptoAPI hash provider (advapi32 — a default MinGW
+ * link lib, so no extra link flag beyond secur32/crypt32/ncrypt). Returns 0 on
+ * success, -1 on failure (|out| left empty). */
+static int sha256_colon_hex(const unsigned char *data, DWORD len, char *out, size_t out_n)
+{
+   if (!out || out_n == 0)
+      return -1;
+   out[0] = '\0';
+
+   HCRYPTPROV prov = 0;
+   HCRYPTHASH hash = 0;
+   int rc = -1;
+   /* PROV_RSA_AES + a NULL container (CRYPT_VERIFYCONTEXT) gives a default
+    * provider that supports CALG_SHA_256; no key material is touched. */
+   if (!CryptAcquireContextA(&prov, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT | CRYPT_SILENT))
+      return -1;
+   if (CryptCreateHash(prov, CALG_SHA_256, 0, 0, &hash) && CryptHashData(hash, data, len, 0))
+   {
+      BYTE md[32];
+      DWORD mdlen = sizeof(md);
+      if (CryptGetHashParam(hash, HP_HASHVAL, md, &mdlen, 0) && mdlen == sizeof(md))
+      {
+         size_t o = 0;
+         for (DWORD i = 0; i < mdlen && o + 4 < out_n; i++)
+            o += (size_t)snprintf(out + o, out_n - o, i ? ":%02X" : "%02X", md[i]);
+         rc = 0;
+      }
+   }
+   if (hash)
+      CryptDestroyHash(hash);
+   if (prov)
+      CryptReleaseContext(prov, 0);
+   if (rc != 0)
+      out[0] = '\0';
+   return rc;
+}
+
+/* Trust-on-first-use fetch: open a fresh, DELIBERATELY UNVERIFIED Schannel
+ * connection to host:port, grab the server leaf cert, and return it as PEM plus
+ * its SHA-256 colon-hex fingerprint. Mirrors the OpenSSL backend so `aimee remote
+ * set/trust` can pin a self-signed/private server. Returns 0 on success, -1 on
+ * failure (*pem_out = NULL, fp_out[0] = 0). */
+int aimee_tls_fetch_peer_cert(const char *host, const char *port, char **pem_out, char *fp_out,
+                              size_t fp_n)
+{
+   if (pem_out)
+      *pem_out = NULL;
+   if (fp_out && fp_n)
+      fp_out[0] = '\0';
+   if (!host || !*host || !port || !*port || !pem_out)
+      return -1;
+
+   int fd = platform_net_connect(host, port, 10000);
+   if (fd < 0)
+      return -1;
+
+   aimee_tls_t *t = calloc(1, sizeof(*t));
+   if (!t)
+   {
+      platform_net_close(fd);
+      return -1;
+   }
+   t->fd = fd;
+   t->host = _strdup(host); /* SNI target name for the handshake (NULL is tolerated) */
+
+   SCHANNEL_CRED sc;
+   memset(&sc, 0, sizeof(sc));
+   sc.dwVersion = SCHANNEL_CRED_VERSION;
+   sc.grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT;
+#ifdef SP_PROT_TLS1_3_CLIENT
+   sc.grbitEnabledProtocols |= SP_PROT_TLS1_3_CLIENT;
+#endif
+   /* Manual validation + no default client cert: we are FETCHING the cert to show
+    * its fingerprint and pin it (trust-on-first-use), not trusting it yet — so we
+    * deliberately skip the chain/hostname checks entirely. */
+   sc.dwFlags = SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_MANUAL_CRED_VALIDATION | SCH_USE_STRONG_CRYPTO;
+
+   int rc = -1;
+   if (AcquireCredentialsHandleA(NULL, (SEC_CHAR *)UNISP_NAME_A, SECPKG_CRED_OUTBOUND, NULL, &sc,
+                                 NULL, NULL, &t->cred, NULL) == SEC_E_OK)
+   {
+      t->have_cred = 1;
+      if (do_handshake(t, 1) == 0)
+      {
+         PCCERT_CONTEXT cert = NULL;
+         if (QueryContextAttributes(&t->ctx, SECPKG_ATTR_REMOTE_CERT_CONTEXT, &cert) == SEC_E_OK &&
+             cert && cert->pbCertEncoded && cert->cbCertEncoded)
+         {
+            /* PEM: CryptBinaryToStringA with BASE64HEADER emits a full
+             * -----BEGIN/END CERTIFICATE----- block. Size first (NULL out), then
+             * fill; the returned length includes the terminating NUL. */
+            DWORD pem_len = 0;
+            if (CryptBinaryToStringA(cert->pbCertEncoded, cert->cbCertEncoded,
+                                     CRYPT_STRING_BASE64HEADER, NULL, &pem_len) &&
+                pem_len)
+            {
+               char *pem = malloc(pem_len);
+               if (pem && CryptBinaryToStringA(cert->pbCertEncoded, cert->cbCertEncoded,
+                                               CRYPT_STRING_BASE64HEADER, pem, &pem_len))
+               {
+                  *pem_out = pem;
+                  rc = 0; /* PEM is the contract's required output */
+               }
+               else
+               {
+                  free(pem);
+               }
+            }
+            /* Fingerprint is best-effort, like the OpenSSL backend (does not fail
+             * the call if PEM already succeeded). */
+            if (rc == 0 && fp_out && fp_n)
+               (void)sha256_colon_hex(cert->pbCertEncoded, cert->cbCertEncoded, fp_out, fp_n);
+         }
+         if (cert)
+            CertFreeCertificateContext(cert);
+      }
+   }
+
+   aimee_tls_free(t);      /* tears down ctx/cred/host; does NOT close the fd */
+   platform_net_close(fd); /* we opened it, so we close it */
+
+   if (rc != 0)
+   {
+      if (pem_out)
+         *pem_out = NULL;
+      if (fp_out && fp_n)
+         fp_out[0] = '\0';
+   }
+   return rc;
 }
 
 void aimee_tls_free(aimee_tls_t *t)

@@ -30,6 +30,17 @@ typedef void aimee_tls_t;
 static char g_remote_url[512];
 static char g_remote_token[256];
 
+/* When set, the transport suppresses its connection-failure diagnostics on
+ * stderr. `aimee remote set` uses this around the pre-pin reachability probe
+ * (which is EXPECTED to fail against a not-yet-pinned self-signed server) so a
+ * successful set does not print a misleading "TLS handshake failed" line. */
+static int g_suppress_conn_errors = 0;
+
+void aimee_client_suppress_conn_errors(int on)
+{
+   g_suppress_conn_errors = on ? 1 : 0;
+}
+
 void aimee_client_set_remote(const char *url, const char *token)
 {
    if (url && *url)
@@ -281,7 +292,12 @@ static char *tcp_request(const char *url, const char *token, const char *method,
       tls = aimee_tls_connect(fd, host);
       if (!tls)
       {
-         fprintf(stderr, "aimee: TLS handshake with %s failed\n", host);
+         if (!g_suppress_conn_errors)
+            fprintf(stderr,
+                    "aimee: TLS handshake with %s failed (untrusted/self-signed cert?). "
+                    "Run `aimee remote trust` to pin this server's certificate, or set "
+                    "AIMEE_TLS_INSECURE=1 to skip verification.\n",
+                    host);
          platform_net_close(fd);
          return NULL;
       }
@@ -398,5 +414,24 @@ char *aimee_client_request(const char *method, const char *path, const char *bod
    /* Windows has no UDS default — a remote target is required for connectivity. */
    fprintf(stderr, "aimee: no server configured; set AIMEE_SERVER_URL or use --server\n");
    return NULL;
+#endif
+}
+
+int aimee_client_fetch_cert(const char *url, char **pem_out, char *fp_out, unsigned long fp_n)
+{
+   if (pem_out)
+      *pem_out = NULL;
+   if (fp_out && fp_n)
+      fp_out[0] = '\0';
+   if (!url || !*url || !pem_out)
+      return -1;
+   char host[256], port[16];
+   int is_https = 0;
+   if (parse_url(url, host, sizeof(host), port, sizeof(port), &is_https) != 0 || !is_https)
+      return -1; /* only https:// servers present a cert to pin */
+#ifdef WITH_TLS
+   return aimee_tls_fetch_peer_cert(host, port, pem_out, fp_out, (size_t)fp_n);
+#else
+   return -1; /* no TLS in this build */
 #endif
 }
