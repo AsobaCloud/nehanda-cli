@@ -17,6 +17,18 @@ int main(void)
    hmem_slug_from_path("/home/u/dev/app/.aimee/x", s, sizeof(s));
    assert(strcmp(s, "-home-u-dev-app--aimee-x") == 0);
 
+   /* underscores, spaces, and other non-alnum all map to '-' */
+   hmem_slug_from_path("/a/b_c/d e", s, sizeof(s));
+   assert(strcmp(s, "-a-b-c-d-e") == 0);
+
+   /* consecutive separators are NOT collapsed (matches observed slug dirs) */
+   hmem_slug_from_path("/a//b", s, sizeof(s));
+   assert(strcmp(s, "-a--b") == 0);
+
+   /* digits preserved (e.g. worktree hashes) */
+   hmem_slug_from_path("/p/3ef8b2a0/main", s, sizeof(s));
+   assert(strcmp(s, "-p-3ef8b2a0-main") == 0);
+
    /* truncation safety: never overruns the buffer */
    char t[5];
    hmem_slug_from_path("/abcdefgh", t, sizeof(t));
