@@ -138,6 +138,7 @@ CFG_KEY_DESC = {
     "code_hybrid_weight_vector": "RRF weight for the embedding-similarity signal in /v1/code/hybrid (default 1.0; <=0 disables it; auto-skips when no dim-matched embedder).",
     "code_hybrid_weight_memory": "RRF weight for the cross-session knowledge-graph signal in /v1/code/hybrid (default 1.0; <=0 disables it; symbol-anchored, empty without an entity graph).",
     "code_hybrid_rrf_k": "Reciprocal Rank Fusion rank constant k for /v1/code/hybrid (default 60).",
+    "code_surprising_precision_floor": "§4 self-suppress: when the LLM-judge-sampled precision of surprising-link candidates falls below this floor, an unjudged /v1/code/graph/surprising request returns no candidates (default 0 = disabled).",
     "guardrails_blast_radius_advisory_enabled": "Surface a structural blast-radius advisory (graph-impacted files) before an edit (advisory, fail-open).",
     "guardrails_semantic_allow_ml_only_block": "Allow blocking on the ML classifier alone.",
     "guardrails_semantic_block_threshold": "Semantic score threshold to block.",

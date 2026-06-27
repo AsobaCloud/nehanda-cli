@@ -1,6 +1,7 @@
 /* extractors.c: source code parsing, definition extraction (functions, classes, structs) */
 #include "aimee.h"
 #include "extractors_extra.h"
+#include "headers/code_treesitter.h" /* §2 tree-sitter front-end (fallback to below) */
 #include <ctype.h>
 
 /* --- Extension mapping --- */
@@ -855,6 +856,15 @@ int code_def_end_line(const char *content, int start_line, const char *ext)
 
 int extract_definitions(const char *ext, const char *content, definition_t *out, int max)
 {
+   /* §2: prefer the tree-sitter front-end where a grammar is compiled in; fall through
+    * to the hand-rolled line scanners below when it's absent or has no grammar for
+    * `ext` (the default build, with no -DAIMEE_TREESITTER, always falls through). */
+   if (code_treesitter_available(ext))
+   {
+      int n = code_treesitter_definitions(ext, content, out, max);
+      if (n >= 0)
+         return n;
+   }
    lang_t lang = detect_lang(ext);
    def_ctx_t ctx = {out, 0, max, lang == LANG_TS};
    int count = 0;
@@ -923,6 +933,16 @@ int extract_definitions(const char *ext, const char *content, definition_t *out,
 
 int extract_calls(const char *ext, const char *content, call_ref_t *out, int max)
 {
+   /* Prefer the tree-sitter front-end where it is compiled in and handles this language;
+    * fall back to the hand-rolled per-line extractors otherwise (and in the default
+    * build, where code_treesitter_* is a stub). */
+   if (code_treesitter_available(ext))
+   {
+      int n = code_treesitter_calls(ext, content, out, max);
+      if (n >= 0)
+         return n;
+   }
+
    lang_t lang = detect_lang(ext);
    call_ctx_t ctx;
    memset(&ctx, 0, sizeof(ctx));

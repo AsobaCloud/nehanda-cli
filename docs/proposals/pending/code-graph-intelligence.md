@@ -1,13 +1,15 @@
 # Proposal: Code-graph intelligence — a living, embedded, reasoning graph over code
 
-- **State:** IN PROGRESS — §0.5/§1/§3/§4/§5/§7/§8-backend implemented (on the
-  `testing` branch), including the §5 code+graph+vector hybrid, §7 graph-informed
-  delegation, the §4 surprising-links route + its LLM-judge relevance gate, and the §8
-  read-only `/v1/code/graph` backend route, and the §6 cross-session memory-fusion
-  leg in `/v1/code/hybrid`; remainder (§2 tree-sitter, §6 *live* reindex hook, §8
-  webchat frontend, and the §4 precision self-suppress monitoring) still open, as
-  build-/integration-/frontend-tier work. See the
-  "Implementation status" section below.
+- **State:** IN PROGRESS — **every section §0.5–§8 now has an implementation on
+  the `testing` branch**: the §5 code+graph+vector+memory hybrid, §7 graph-informed
+  delegation + blast-radius advisory, the §4 surprising-links route with its LLM-judge
+  relevance gate + precision self-suppress, the §8 `/v1/code/graph` backend route + the
+  webchat Graph view, the §6 live updates (memory-fusion leg + default-branch
+  change-detection gate + post-merge reindex hook), and the **§2 tree-sitter front-end**
+  with grammars for **all 16 supported languages** (opt-in `AIMEE_TREESITTER`
+  build, fall-through to the hand-rolled extractors). Only **optional follow-ups**
+  remain — more §2 grammars + nested-member/parse-tree call edges, and an always-on §6
+  fanotify watch. See the "Implementation status" section.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
   built without a manual step, (b) parsed broadly, (c) ranked by **graph structure
   AND vector similarity AND memory** in one query, and (d) able to *change what the
@@ -117,6 +119,29 @@ Replace/augment the hand-rolled extractors with a **tree-sitter** front-end feed
 the *same* `code_calls` / `code_projection_edges` / symbol tables. Target ≥30
 languages. Keep the existing extractor path as fallback for unsupported grammars.
 This is the one true coverage gap and the largest engineering item.
+
+**Status — front-end + full supported-language set shipped (opt-in).**
+`code_treesitter.c` parses a file with the tree-sitter grammar for its extension and
+emits the same `definition_t` symbols (functions and types) the hand-rolled extractor
+does; `extract_definitions` prefers it where a grammar is compiled in and **falls back**
+otherwise — so the **default build is unchanged**. The runtime + grammars are large
+generated parsers, so they are **fetched at build time** (`scripts/fetch-treesitter.sh`,
+pinned commits, gitignored) and compiled only in the opt-in `AIMEE_TREESITTER` build
+(external scanners linked where a grammar needs one); `code_treesitter.c` is a stub
+without it. Ships grammars for **all 16 hand-rolled supported languages** — C, C++, C#,
+Python, Go, JavaScript, TypeScript, Rust, Java, Ruby, PHP, Lua, Bash, Swift, Kotlin,
+Dart, CSS — each with a per-language `classify_*` mapping its definition node types to
+`function`/`type`. The walk descends through organizational wrappers (namespaces,
+`export`/decorator wrappers) and the member bodies of types, so **nested members
+(class/impl/trait methods) are surfaced** across every OO language — while it never
+descends a function body (so locals stay out). `unit-test-code-treesitter` parses real
+source in every language and asserts the extracted defs (top-level + nested). It also
+extracts **call edges** (`code_treesitter_calls` → `call_ref_t` caller→callee, wired into
+`extract_calls`): a caller-tracking walk attributes every call to its enclosing function
+and resolves the callee to the last identifier of the callee expression (`obj.m()` → `m`,
+`a::b()` → `b`); Bash/CSS defer to the hand-rolled path. Adding a grammar is mechanical —
+vendor its `parser.c`(+`scanner.c`), register its `TSLanguage` + extensions in
+`ts_language_for_ext`, and add a `classify_*`. Remaining increment: more languages.
 
 ## §3 Edge provenance + confidence
 
@@ -247,9 +272,23 @@ embedder — integration/deploy-tier) as a third fused signal.
   (the default ref's tree SHA, §0.5 chain) is compared via the pure
   `code_default_branch_changed` against the last-indexed SHA stored in
   `kb_runtime_state`; unchanged + non-`force` → `{"skipped":true}` (`unit-test-code-collect`
-  exercises the SHA-tracks-commits + gate logic against real git repos). This is the
-  cheap gate a post-merge/fetch **hook** reuses; installing that hook (mirroring
-  `verify_install_git_hook`) + the watch loop remain the integration follow-up.
+  exercises the SHA-tracks-commits + gate logic against real git repos).
+
+  **Status — post-merge + post-checkout hooks shipped.** `code_index_install_branch_hook`
+  writes marker-guarded `post-merge` **and** `post-checkout` git hooks (mirroring
+  `verify_install_git_hook`; won't clobber a foreign hook, O_NOFOLLOW) that background
+  `aimee index scan <project> <root>`, so a pull/merge **or branch switch** advancing the
+  default branch re-indexes the graph — and the SHA gate above makes that a cheap no-op
+  when nothing moved (the post-checkout hook reindexes only on a branch switch, `$3==1`,
+  not a per-file checkout). Two entry points: the server-side `/v1/code/scan
+  {install_hook:true}` (so `workspace add` can enable live reindex), and the client-side
+  `aimee index watch <name> <root>` — a local command, the correct path when the repo
+  lives on the client (a remote server can't write the client's `.git/hooks`). Best-effort,
+  never failing the scan. Tested against real git repos (`test_install_branch_hook`
+  asserts both hooks + the branch-switch gate) + the route (`test_code_scan_installs_hook`).
+  §6 live is now end-to-end: **detect** (SHA gate) → **fire** (hook) → **rebuild** (§1
+  drain). A fanotify/inotify watch for non-git or always-on freshness remains an optional
+  follow-up.
 - **Fuse the graph with conversation memory + the decision log** so the "why" behind
   a symbol is the *actual recorded reasoning*, not just parsed comments — queryable
   via §5. This is the thing a regenerated artifact can never hold.
@@ -314,8 +353,17 @@ pre-cap) and a `truncated` flag that fires when **either** the page cap (`max_re
 1–200) **or** the projection scan window (`HUBS_MAX_EDGES`) bounds the result. Reuses
 `db2_code_projection_list_edges` + `kb_graph_edge_provenance` (`handle_get_code_graph`
 in `src/kb/http/kb_http_code.c`); read-only, off the agent hot path. Shim route tests
-(`test_code_graph_node_*`: out/in neighbors, page-cap truncation, self-loop). The
-webchat **frontend** consumer remains open.
+(`test_code_graph_node_*`: out/in neighbors, page-cap truncation, self-loop).
+
+**Status — frontend shipped.** A read-only **Graph** page in the webchat SPA
+(`frontend/src/pages/Graph.tsx`): for the active session's project it ranks the hubs,
+click one to expand its callers/callees/neighbors (direction + relation + §3
+provenance), drill into any neighbor, and surface the surprising links (with optional
+LLM confirm). It is an adjacency explorer (no heavy graph lib). Backed by webchat Go
+proxies `/api/graph/{hubs,surprising,neighbors}` (`webchat/graph.go`,
+`webchat/graph_test.go`) that forward aimee-server's `index_graph_*` MCP tools (the
+per-node route was exposed as `index({command:"neighbors"})` / `index_graph_node` so
+all three are reachable from the frontend over the trusted UDS hop).
 
 ## Phasing (each independently shippable)
 
@@ -330,6 +378,11 @@ webchat **frontend** consumer remains open.
 - **§0.5** default-branch sourcing (`code_collect.c`, `unit-test-code-collect`).
 - **§1** auto-build of the projection graph on the curator drain, content-addressed +
   idempotent (`kb_graph_build_project_if_changed`, `unit-test-kb-graph`).
+- **§2** tree-sitter extraction front-end (`code_treesitter.c`) + the **C grammar**,
+  feeding the same `definition_t` symbols as the hand-rolled extractors with fall-through;
+  opt-in `AIMEE_TREESITTER` build (runtime + grammars fetched, not committed —
+  `scripts/fetch-treesitter.sh`), so the default build is unchanged
+  (`unit-test-code-treesitter`, opt-in).
 - **§3** edge provenance (`structural`/`inferred`/`ambiguous`) surfaced in `graph.explain`.
 - **§4** hub/degree-centrality analytics — `GET /v1/code/graph/hubs`
   (`kb_graph_analytics.c`, `unit-test-kb-graph-analytics`), **agent-callable** via
@@ -340,7 +393,11 @@ webchat **frontend** consumer remains open.
   containment hub excluded** (`handle_get_code_graph_surprising`,
   `test_code_graph_surprising_*`), with an opt-in **LLM-judge relevance gate**
   (`judge=true` → shared-symbol cross-check + one batched Tier-B judge,
-  `kb_surprising_judge`, `unit-test-kb-surprising-judge`).
+  `kb_surprising_judge`, `unit-test-kb-surprising-judge`) and a **precision
+  self-suppress**: the judge samples the structural generator's precision
+  (`confirmed`/`judged`, rolling per-project in `kb_runtime_state`), and an unjudged
+  request returns no candidates once that precision falls below the configurable
+  `code_surprising_precision_floor` (`kb_surprising_precision_suppress`).
 - **§5+§6** RRF fusion core (`kb_rrf.c`, `unit-test-kb-rrf`) + the `GET /v1/code/hybrid`
   route fusing `code` + `graph` + **`vector`** (embedding similarity over
   `code_embeddings` via `pgvec_code_search_paths`, gated on a dim-matched embedder,
@@ -349,6 +406,11 @@ webchat **frontend** consumer remains open.
   `why`, **agent-callable** via `index({command:"hybrid"})`, with **config-tunable
   per-signal weights** (`kb.code_hybrid.*`). The vector SQL was validated against real
   pgvector/halfvec.
+- **§6 live** — `/v1/code/scan` skips the git re-walk when the default-branch tree SHA
+  is unchanged (`git_resolve_default_sha` + `code_default_branch_changed`, stored in
+  `kb_runtime_state`; worktree-opt-in aware), and an opt-in `install_hook:true`
+  installs a `post-merge` reindex hook (`code_index_install_branch_hook`) so pulls keep
+  the graph fresh (`unit-test-code-collect`, `test_code_scan_*`).
 - **§7** structural blast-radius **advisory** on the guardrail edit path + **graph-informed
   delegation** (a delegate's prompt is prefixed with the callers/dependencies of the
   files its task references) — both advisory, fail-open, structural-only, opt-in
@@ -358,20 +420,18 @@ webchat **frontend** consumer remains open.
 - **§8** read-only node-projection route — `GET /v1/code/graph?project&node&max_results`
   returns a node's incident edges (relation / direction incl. `self` / structural weight /
   §3 provenance) with `match_count` + a page-or-scan `truncated` flag
-  (`handle_get_code_graph`, `test_code_graph_node_*`). Backs the webchat graph view.
+  (`handle_get_code_graph`, `test_code_graph_node_*`) — **plus the webchat Graph view**
+  (`frontend/src/pages/Graph.tsx`) that ranks hubs, drills neighbors, and shows
+  surprising links, via webchat Go proxies `/api/graph/*` (`webchat/graph.go`,
+  `webchat/graph_test.go`) over the `index_graph_*` MCP tools.
 
-**Deferred — needs the embedder / a build-tier dependency / a deployed corpus / a frontend
-(not completable in the agent host):**
-- **§2 tree-sitter** front-end — large build-tier work (vendor ~30 grammars + ABI).
-- **§4 precision self-suppress** — the LLM-judge relevance gate is shipped (opt-in
-  `judge=true`); the precision-sampling monitor that auto-disables the feature below a
-  quality floor needs a deployed corpus + judged-precision telemetry over time.
-- **§6 live half** — the change-detection gate (default-branch SHA + `/v1/code/scan`
-  skip-when-unchanged) and the memory-fusion leg are shipped; the post-merge/fetch
-  **hook install** + watch loop that *fire* the gate on a git event remain, needing a
-  running KB + git events to validate.
-- **§8 webchat visualization** — the **frontend** consumer; the read-only `/v1/code/graph`
-  backend route is shipped (above).
+**Deferred — optional follow-ups (the front-ends are all shipped):**
+- **§2 more grammars + call edges** — the tree-sitter front-end + C grammar + opt-in
+  build ship; vendoring the remaining ~29 grammars and adding `code_calls` extraction
+  over the parse tree is mechanical (and a build-tier / binary-size decision per deploy).
+- **§6 watch (optional)** — the change-detection gate, the post-merge reindex hook, and
+  the memory-fusion leg are all shipped; only an always-on fanotify/inotify watch (for
+  non-git trees or freshness without a git event) remains, as an optional follow-up.
 
 ## Non-goals
 

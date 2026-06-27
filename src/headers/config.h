@@ -1263,6 +1263,10 @@ typedef struct config
    double code_hybrid_weight_vector;
    double code_hybrid_weight_memory;
    double code_hybrid_rrf_k;
+   /* §4: when the LLM-judge-sampled precision of surprising-link structural candidates
+    * falls below this floor, an unjudged /v1/code/graph/surprising request suppresses
+    * its candidates (they're mostly false positives). 0 (default) disables it. */
+   double code_surprising_precision_floor;
    /* embedder-runtime-fetch-autodim §2c: when 0 (default) a recorded-vs-configured
     * embedding-dim mismatch is REFUSED at startup (refuse-and-instruct). When 1, the
     * attended `aimee kb reembed --confirm` reset path is AVAILABLE (it still never
