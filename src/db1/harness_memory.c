@@ -92,10 +92,11 @@ int hmem_upsert(const hmem_row_t *in, int64_t *out_id)
    const char *body = in->body ? in->body : "";
    const char *meta = (in->meta_json && in->meta_json[0]) ? in->meta_json : "{}";
 
+   /* Always derive the hash from the values we are about to store — never trust
+    * a caller-supplied in->content_hash, or a stale/wrong one could suppress a
+    * real update via the no-op path below. */
    char hash[HMEM_HASH_LEN];
-   if (in->content_hash[0])
-      snprintf(hash, sizeof(hash), "%s", in->content_hash);
-   else if (hmem_content_hash(type, in->name, in->description, body, meta, hash) != 0)
+   if (hmem_content_hash(type, in->name, in->description, body, meta, hash) != 0)
       return -1;
 
    /* No-op when an existing live row already holds this content. */
@@ -320,17 +321,20 @@ int hmem_tombstone_prefix(const char *project, const char *dir)
    }
    else
    {
+      /* Wildcard-free prefix match: substr() equality, NOT LIKE — a name char
+       * like '_' is a LIKE metacharacter and would over-tombstone siblings. */
       if (sqlite3_prepare_v2(db,
                              "UPDATE harness_memory SET deleted_at=? WHERE project=?"
-                             " AND deleted_at IS NULL AND (name=? OR name LIKE ?)",
+                             " AND deleted_at IS NULL AND (name=? OR substr(name,1,?)=?)",
                              -1, &st, NULL) != SQLITE_OK)
          return -1;
-      char like[HMEM_NAME_LEN + 4];
-      snprintf(like, sizeof(like), "%s/%%", dir);
+      char prefix[HMEM_NAME_LEN + 2];
+      snprintf(prefix, sizeof(prefix), "%s/", dir);
       sqlite3_bind_text(st, 1, ts, -1, SQLITE_TRANSIENT);
       sqlite3_bind_text(st, 2, project, -1, SQLITE_STATIC);
       sqlite3_bind_text(st, 3, dir, -1, SQLITE_STATIC);
-      sqlite3_bind_text(st, 4, like, -1, SQLITE_TRANSIENT);
+      sqlite3_bind_int(st, 4, (int)strlen(prefix));
+      sqlite3_bind_text(st, 5, prefix, -1, SQLITE_TRANSIENT);
    }
    int rc = sqlite3_step(st);
    int changes = sqlite3_changes(db);
