@@ -14,6 +14,7 @@
 #include "harness_memory_common.h"
 #include "harness_memory_scope.h"
 #include "harness_memory_spill.h"
+#include "platform_path.h" /* platform_mkdir_p */
 
 #include <ctype.h>
 #include <stdio.h>
@@ -124,8 +125,8 @@ static const char *json_str(cJSON *o, const char *key)
  * cannot re-enter the PreToolUse hook). The parent dir is realpath-resolved and
  * confined under ~/.claude/projects/, so a symlinked component can't redirect
  * the write outside the memory tree. Atomic (temp + rename) on POSIX. */
-static int rematerialize(const char *path, const char *content, const char *home,
-                         const char *projects_root)
+int memory_redirect_rematerialize(const char *path, const char *content, const char *home,
+                                  const char *projects_root)
 {
    const char *base = strrchr(path, '/');
    if (!base)
@@ -135,6 +136,18 @@ static int rematerialize(const char *path, const char *content, const char *home
    int dn = (int)(base - 1 - path);
    snprintf(dir, sizeof(dir), "%.*s", dn, path);
    size_t len = strlen(content);
+
+   /* Confine BEFORE any on-disk side effect: the parent must be syntactically
+    * under <home>/<projects_root>/ with no ".." segment. This gates the mkdir
+    * itself (so a bad path can't create dirs outside the memory tree) and is the
+    * ONLY confinement on Windows, where the realpath gate below is compiled out.
+    * On POSIX the realpath()+under_projects_root check additionally defeats a
+    * symlinked component. */
+   if (!under_projects_root(dir, home, projects_root) || strstr(dir, ".."))
+      return -1;
+   /* Create the memory dir tree if absent so a first write to a fresh project
+    * materializes. */
+   platform_mkdir_p(dir, 0700);
 
 #ifndef _WIN32
    char rp[PATH_MAX];
@@ -353,7 +366,8 @@ int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, const 
    cJSON_Delete(resp);
 
    const hmem_scope_t *scope = hmem_scope_for_client(client); /* non-NULL: classify redirected */
-   rematerialize(path, content, home, scope ? scope->projects_root : ".claude/projects");
+   memory_redirect_rematerialize(path, content, home,
+                                 scope ? scope->projects_root : ".claude/projects");
    hmem_audit("redirect", project, name, NULL);
    snprintf(msg, msg_len,
             "Saved to aimee memory (id=%ld). The file now reflects your content — do not "

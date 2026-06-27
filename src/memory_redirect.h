@@ -58,6 +58,14 @@ extern "C"
    int memory_redirect_check(const char *tool, cJSON *root, const char *cwd,
                              const char *project_hint, char *msg, size_t msg_len);
 
+   /* Re-materialize a memory file with aimee's own I/O (atomic temp+rename on
+    * POSIX), confined under <home>/<projects_root>/ via realpath so a symlinked
+    * component cannot redirect the write out of the memory tree. Used by the
+    * server-side interception (which writes DB1 directly) to mirror the stored
+    * row back to disk. Returns 0 on success, -1 otherwise. */
+   int memory_redirect_rematerialize(const char *path, const char *content, const char *home,
+                                     const char *projects_root);
+
 #ifdef __cplusplus
 }
 #endif
