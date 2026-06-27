@@ -21,11 +21,19 @@ extern "C"
     * NULL/invalid/empty). Caller frees. Never returns NULL. */
    char *hmem_canon_meta(const char *meta_json);
 
-   /* content_hash = SHA-256 hex over the length-prefixed canonical tuple
-    * [type, name, description, body, canon(meta_json)] joined by 0x1f. NULL
-    * fields are treated as "". Writes 64 hex chars + NUL into out (>=65).
-    * Returns 0 on success, -1 on error. The ONLY content-hash producer:
-    * P2 codec and P4 reconcile must call this so all three agree. */
+   /* Raw SHA-256 of arbitrary bytes as 64 lowercase hex + NUL into out (>=65).
+    * Self-contained (no OpenSSL link); portable to the Windows build. */
+   void hmem_sha256_hex(const void *data, size_t len, char out[HMEM_HASH_HEX_LEN]);
+
+   /* content_hash = SHA-256 hex over the canonical tuple [type, name,
+    * description, body, canon(meta_json)]. Each field is LENGTH-PREFIXED
+    * ("<len>:<bytes>") and 0x1f-separated; the length prefix alone makes the
+    * framing injective, so an embedded 0x1f in a field cannot forge a different
+    * field arrangement. NULL fields are treated as "". canon(meta_json) drops
+    * null/empty values and sorts keys, so e.g. {} and {"k":""} are identity-
+    * equal by design (an empty value == absent). Writes 64 hex + NUL into out
+    * (>=65); returns 0 / -1. The ONLY content-hash producer — P2 codec and P4
+    * reconcile call this so all three agree. */
    int hmem_content_hash(const char *type, const char *name, const char *description,
                          const char *body, const char *meta_json, char out[HMEM_HASH_HEX_LEN]);
 

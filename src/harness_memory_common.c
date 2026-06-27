@@ -4,6 +4,7 @@
 
 #include "cJSON.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
@@ -112,6 +113,15 @@ static void hmem_sha256(const uint8_t *msg, size_t len, uint8_t out[32])
    }
 }
 
+void hmem_sha256_hex(const void *data, size_t len, char out[HMEM_HASH_HEX_LEN])
+{
+   uint8_t h[32];
+   hmem_sha256((const uint8_t *)data, len, h);
+   for (int i = 0; i < 32; i++)
+      snprintf(out + i * 2, 3, "%02x", h[i]);
+   out[64] = '\0';
+}
+
 static int cmp_keys(const void *a, const void *b)
 {
    return strcmp(*(const char *const *)a, *(const char *const *)b);
@@ -191,11 +201,7 @@ int hmem_content_hash(const char *type, const char *name, const char *descriptio
    for (int i = 0; i < 5; i++)
       pos += (size_t)snprintf(buf + pos, total - pos, "%zu:%s\x1f", strlen(fields[i]), fields[i]);
 
-   uint8_t h[32];
-   hmem_sha256((const uint8_t *)buf, pos, h);
-   for (int i = 0; i < 32; i++)
-      snprintf(out + i * 2, 3, "%02x", h[i]);
-   out[64] = '\0';
+   hmem_sha256_hex(buf, pos, out);
 
    free(buf);
    free(cmeta);
@@ -224,7 +230,11 @@ static int git_toplevel(const char *cwd, char *out, size_t cap)
          dup2(devnull, STDERR_FILENO);
       close(fds[0]);
       close(fds[1]);
+      /* Never block on a credential/SSH prompt or leak system config. */
       setenv("GIT_TERMINAL_PROMPT", "0", 1);
+      setenv("GIT_ASKPASS", "/bin/true", 1);
+      setenv("SSH_ASKPASS", "/bin/true", 1);
+      setenv("GIT_CONFIG_NOSYSTEM", "1", 1);
       if (cwd && cwd[0] && chdir(cwd) != 0)
          _exit(127);
       execlp("git", "git", "rev-parse", "--show-toplevel", (char *)NULL);
@@ -233,12 +243,24 @@ static int git_toplevel(const char *cwd, char *out, size_t cap)
    close(fds[1]);
    char buf[PATH_MAX + 2];
    size_t off = 0;
-   ssize_t r;
-   while (off < sizeof(buf) - 1 && (r = read(fds[0], buf + off, sizeof(buf) - 1 - off)) > 0)
-      off += (size_t)r;
+   for (;;)
+   {
+      ssize_t r = read(fds[0], buf + off, sizeof(buf) - 1 - off);
+      if (r > 0)
+      {
+         off += (size_t)r;
+         if (off >= sizeof(buf) - 1)
+            break;
+      }
+      else if (r < 0 && errno == EINTR)
+         continue;
+      else
+         break;
+   }
    close(fds[0]);
    int status = 0;
-   waitpid(pid, &status, 0);
+   while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+      ;
    if (off == 0 || !(WIFEXITED(status) && WEXITSTATUS(status) == 0))
       return -1;
    buf[off] = '\0';
