@@ -247,7 +247,8 @@ int memory_redirect_bash_targets_memory(const char *client, const char *command,
    return 0;
 }
 
-int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *msg, size_t msg_len)
+int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, const char *project_hint,
+                          char *msg, size_t msg_len)
 {
    if (!root)
       return 0;
@@ -299,9 +300,19 @@ int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *
       snprintf(msg, msg_len, "Memory Write needs a string 'content' field.");
       return 2;
    }
-   char project[256], rootdir[PATH_MAX];
-   if (hmem_resolve_project(cwd, project, sizeof(project), rootdir, sizeof(rootdir)) != 0)
+   /* Prefer the client-resolved project key (correct for a remote server, whose
+    * filesystem lacks the client's cwd/git repo); validate it first since it
+    * arrives over the wire, then fall back to resolving from cwd for a local
+    * server or an older client that doesn't send the hint. */
+   char project[HMEM_PROJECT_KEY_MAX], rootdir[PATH_MAX];
+   if (project_hint && hmem_project_key_ok(project_hint))
+   {
+      snprintf(project, sizeof(project), "%s", project_hint);
+   }
+   else if (hmem_resolve_project(cwd, project, sizeof(project), rootdir, sizeof(rootdir)) != 0)
+   {
       return 0; /* can't identify the project — fail open */
+   }
 
    cJSON *body = cJSON_CreateObject();
    cJSON_AddStringToObject(body, "project", project);

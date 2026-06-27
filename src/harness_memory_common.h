@@ -50,6 +50,18 @@ extern "C"
    int hmem_resolve_project(const char *cwd, char *id_out, size_t id_cap, char *root_out,
                             size_t root_cap);
 
+/* Size of the project-key buffers throughout the harness-memory paths; the
+ * validator and every consumer size against this so they stay in lockstep. */
+#define HMEM_PROJECT_KEY_MAX 256
+
+   /* Validate a project key received over the wire (e.g. a client-resolved key a
+    * remote server cannot re-derive). A key is an opaque namespace string —
+    * typically a repo path, so '/' is allowed — but must be non-empty, shorter
+    * than HMEM_PROJECT_KEY_MAX (the store buffer), and free of control characters
+    * (which hmem_resolve_project never emits and which would corrupt audit/JSON
+    * lines). Returns 1 if acceptable, 0 otherwise. PURE — testable. */
+   int hmem_project_key_ok(const char *key);
+
 #ifdef __cplusplus
 }
 #endif

@@ -48,9 +48,15 @@ extern "C"
     * to /v1/harness_memory/upsert + re-materialize the file) and returns a
     * pre_tool_check verdict: 0 = allow, 2 = deny (msg holds the agent-facing
     * reason). Fail-open: if the store is unreachable it returns 0 (allow) so the
-    * agent is never blocked by our outage. */
-   int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *msg,
-                             size_t msg_len);
+    * agent is never blocked by our outage.
+    *
+    * project_hint: when non-empty, the project key to store under, resolved by
+    * the caller (the thin client, where the real cwd / git repo / AIMEE_PROJECT_ID
+    * live). This is REQUIRED for a remote server, whose filesystem has neither the
+    * client's cwd nor its git repo; when NULL/empty the project is resolved from
+    * cwd as a local-server fallback. */
+   int memory_redirect_check(const char *tool, cJSON *root, const char *cwd,
+                             const char *project_hint, char *msg, size_t msg_len);
 
 #ifdef __cplusplus
 }
