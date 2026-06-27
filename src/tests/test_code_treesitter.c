@@ -106,6 +106,8 @@ int main(void)
    want(".cs", cs, "I", "type");
    want(".cs", cs, "R", "type");
    want(".cs", cs, "Top", "type"); /* top-level, no namespace */
+   want(".cs", "#if DEBUG\nclass Dbg { void M(){} }\n#endif\n", "Dbg",
+        "type"); /* #if-guarded type */
 
    /* --- Python (incl. a decorated def) --- */
    const char *py = "def add(a, b):\n    return a + b\n"
