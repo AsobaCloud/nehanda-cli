@@ -18,6 +18,14 @@ extern "C"
     * terminated slug into out (truncated to cap). PURE — testable. */
    void hmem_slug_from_path(const char *abspath, char *out, size_t cap);
 
+   /* Derive a store name from a memory file path during reconcile: `fp` must be
+    * a "*.md" path strictly under `memreal` (the resolved memory dir). On success
+    * writes the path relative to memreal with ".md" stripped (e.g.
+    * "<memreal>/topics/a.md" -> "topics/a") and returns 0. Returns -1 if fp is
+    * not under memreal, is not a ".md" file, names the "MEMORY" index, or does
+    * not fit in cap. PURE — testable. */
+   int hmem_md_store_name(const char *fp, const char *memreal, char *out, size_t cap);
+
    /* Best-effort hydrate: resolve the project for cwd, fetch its live memory
     * rows from the server, and materialize each under
     * ~/.claude/projects/<slug>/memory/<name>.md. Returns the number written, or
