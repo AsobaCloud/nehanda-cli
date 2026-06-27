@@ -78,6 +78,17 @@ int main(void)
    /* non-claude client -> no surface -> not detected */
    assert(memory_redirect_bash_targets_memory(
               "gemini", "echo x > " H "/.claude/projects/p/memory/n.md", H) == 0);
+   /* quoted '>' is data, not a redirection -> a read stays allowed */
+   assert(BT("grep 'a>b' " H "/.claude/projects/p/memory/n.md") == 0);
+   /* but a real redirection after quoted data IS detected */
+   assert(BT("echo \"x>y\" > " H "/.claude/projects/p/memory/n.md") == 1);
+   /* no-space redirection */
+   assert(BT("echo x>" H "/.claude/projects/p/memory/n.md") == 1);
+   /* prior simple command's write op does not leak across ; or && to a read */
+   assert(BT("echo x > /tmp/a; cat " H "/.claude/projects/p/memory/n.md") == 0);
+   assert(BT("echo x > /tmp/a && cat " H "/.claude/projects/p/memory/n.md") == 0);
+   /* perl -i in-place edit of a memory file is a write */
+   assert(BT("perl -i -pe 's/x/y/' " H "/.claude/projects/p/memory/n.md") == 1);
 #undef BT
 
    printf("test_memory_redirect: OK\n");

@@ -170,14 +170,29 @@ static int rematerialize(const char *path, const char *content, const char *home
 #endif
 }
 
-/* Any write operator in [a,b)? '>' covers >, >>, 2>, &>; plus tool keywords. */
+/* Any write operator in [a,b)? '>' (covers >, >>, 2>, &>) is only counted
+ * OUTSIDE single/double quotes and escapes, so quoted data like grep 'a>b' is
+ * not mistaken for a redirection. Plus a best-effort write-tool keyword list. */
 static int region_has_write_op(const char *a, const char *b)
 {
+   int sq = 0, dq = 0;
    for (const char *p = a; p < b; p++)
-      if (*p == '>')
+   {
+      char c = *p;
+      if (c == '\\' && p + 1 < b)
+      {
+         p++;
+         continue;
+      }
+      if (!dq && c == '\'')
+         sq = !sq;
+      else if (!sq && c == '"')
+         dq = !dq;
+      else if (!sq && !dq && c == '>')
          return 1;
-   static const char *const kw[] = {"tee", "sed -i", "dd of=",  "truncate ",
-                                    "cp ", "mv ",    "install "};
+   }
+   static const char *const kw[] = {"tee", "sed -i",   "dd of=",  "truncate ", "cp ",
+                                    "mv ", "install ", "perl -i", "perl -pi",  "patch "};
    for (size_t i = 0; i < sizeof(kw) / sizeof(kw[0]); i++)
    {
       size_t kl = strlen(kw[i]);
