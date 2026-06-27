@@ -109,20 +109,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       # The aimee-llm images bake multi-GB GGUFs (the GPU tier ~11 GB: Qwen3-4B +
-      # gemma-12B) plus a torch conversion stage. That overruns the ~14 GB free on
-      # a stock runner, so reclaim the preinstalled toolchains we don't use first.
-      # Scoped to the llm legs — the C images build fine without paying this cost.
+      # gemma-12B) through a torch conversion stage that downloads them AND a runtime
+      # stage that re-COPYs them — a transient footprint of ~40 GB. That overran even
+      # a cleaned ~38 GB free on / (the GPU leg failed with "No space left on device").
+      # So for the llm legs: (1) reclaim ALL the preinstalled toolchains we don't use,
+      # and (2) point docker's storage at the runner's larger /mnt disk (~65 GB free)
+      # BEFORE the buildx builder is created, so buildkit writes its layers there. Both
+      # are scoped to the llm legs — the C images build fine without paying this cost.
       - name: Free disk space (aimee-llm legs)
         if: startsWith(matrix.image.name, 'aimee-llm')
         run: |
+          echo "before:"; df -h / /mnt
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /usr/local/share/boost
-          sudo docker image prune --all --force || true
-          df -h /
+            /opt/hostedtoolcache /usr/local/.ghcup /usr/local/share/boost \
+            /usr/share/swift /usr/local/share/powershell /usr/local/lib/node_modules \
+            /opt/microsoft /opt/az "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
+          sudo apt-get clean || true
+          echo "after:"; df -h /
+
+      - name: Move docker storage to /mnt (aimee-llm legs)
+        if: startsWith(matrix.image.name, 'aimee-llm')
+        run: |
+          sudo systemctl stop docker docker.socket || true
+          sudo mkdir -p /mnt/docker
+          printf '{ "data-root": "/mnt/docker" }\n' | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker || sudo systemctl start docker.socket docker || true
+          docker info -f 'docker root: {{ .DockerRootDir }}' || true
+          df -h / /mnt
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build and push by digest
         id: build
