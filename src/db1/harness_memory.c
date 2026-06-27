@@ -141,12 +141,15 @@ int hmem_upsert(const hmem_row_t *in, int64_t *out_id)
    sqlite3_bind_text(st, 1, in->project, -1, SQLITE_STATIC);
    sqlite3_bind_text(st, 2, in->name, -1, SQLITE_STATIC);
    sqlite3_bind_text(st, 3, type, -1, SQLITE_STATIC);
+   /* description/body/meta_json may be caller-borrowed (e.g. cJSON-owned) and
+    * only valid during this call — bind TRANSIENT so SQLite copies immediately,
+    * decoupling row lifetime from the borrowed pointers. */
    if (in->description && in->description[0])
-      sqlite3_bind_text(st, 4, in->description, -1, SQLITE_STATIC);
+      sqlite3_bind_text(st, 4, in->description, -1, SQLITE_TRANSIENT);
    else
       sqlite3_bind_null(st, 4);
-   sqlite3_bind_text(st, 5, body, -1, SQLITE_STATIC);
-   sqlite3_bind_text(st, 6, meta, -1, SQLITE_STATIC);
+   sqlite3_bind_text(st, 5, body, -1, SQLITE_TRANSIENT);
+   sqlite3_bind_text(st, 6, meta, -1, SQLITE_TRANSIENT);
    sqlite3_bind_text(st, 7, hash, -1, SQLITE_TRANSIENT);
    sqlite3_bind_text(st, 8, client, -1, SQLITE_STATIC);
    sqlite3_bind_text(st, 9, sess, -1, SQLITE_STATIC);
