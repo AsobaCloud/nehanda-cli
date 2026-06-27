@@ -501,6 +501,7 @@ set(CORE_SRCS
     ${AIMEE_SRC_DIR}/plugin_loader.c
     ${AIMEE_SRC_DIR}/memory_provider.c
     ${AIMEE_SRC_DIR}/harness_memory_common.c
+    ${AIMEE_SRC_DIR}/harness_memory_scope.c
     ${AIMEE_SRC_DIR}/plugin_c_hook.c
     ${AIMEE_SRC_DIR}/config_plugin.c
     ${AIMEE_SRC_DIR}/code_collect.c

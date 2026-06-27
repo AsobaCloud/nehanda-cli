@@ -295,7 +295,7 @@ CORE_SRCS = db1/db.c db1/db_schema.c config.c config_sections.c config_database.
             model_registry.c models_dev.c models_dev_cache.c lsp_client.c lsp_manager.c plugin.c \
             plugin_ctx.c plugin_loader.c memory_provider.c plugin_c_hook.c config_plugin.c code_collect.c codex_auth.c \
             workflow/wfe_iface.c workflow/wfe_def.c workflow/wfe_validate.c workflow/wfe_canonical.c workflow/wfe_custom.c \
-            harness_memory_common.c
+            harness_memory_common.c harness_memory_scope.c
 CORE_OBJS = $(CORE_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/cJSON.o
 
 # --- Layer 0b: DB1 (user-local tier) ---
@@ -351,7 +351,7 @@ CMD_SRCS = prompts.c persona.c hardware_probe.c curator_profile.c server/delegat
 CMD_OBJS = $(CMD_SRCS:%.c=$(OBJDIR)/%.o)
 
 # --- Pure client (aimee) ---
-CLI_SRCS = cli_main.c cli_agent_setup.c cli_session_start.c harness_memory_hydrate.c harness_memory_common.c cli_attention_guard.c cli_code_audit.c cli_css.c cli_tui.c cli_client.c cli_launch.c cli_mcp_serve.c cli_profile.c client_integrations.c server/delegate_plan.c cmd_profile.c cmd_manuscript.c cmd_optimize.c cli_persona.c cli_roles.c manuscript.c http_uds_client.c aimee_client.c cli_remote.c acp_server.c cli_workspace_serve.c cli_agent_keys.c cmd_workflow.c
+CLI_SRCS = cli_main.c cli_agent_setup.c cli_session_start.c harness_memory_hydrate.c harness_memory_common.c harness_memory_scope.c cli_attention_guard.c cli_code_audit.c cli_css.c cli_tui.c cli_client.c cli_launch.c cli_mcp_serve.c cli_profile.c client_integrations.c server/delegate_plan.c cmd_profile.c cmd_manuscript.c cmd_optimize.c cli_persona.c cli_roles.c manuscript.c http_uds_client.c aimee_client.c cli_remote.c acp_server.c cli_workspace_serve.c cli_agent_keys.c cmd_workflow.c
 ifeq ($(WITH_TLS),1)
 CLI_SRCS += aimee_tls.c
 TLS_OBJS = $(OBJDIR)/aimee_tls.o
