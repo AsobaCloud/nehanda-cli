@@ -77,7 +77,7 @@ TEST_DATA_OBJS = $(TEST_CORE_OBJS) $(OBJDIR)/rel_types.o $(OBJDIR)/memory_fact_g
 # linking both would produce duplicate-symbol errors.
 TEST_DATA_OBJS_MOCK = $(TEST_DATA_OBJS) $(OBJDIR)/tests/support/mock_agent_http.o
 
-TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPREFIX)/unit-test-db2 $(TESTPREFIX)/unit-test-schema-subst $(TESTPREFIX)/unit-test-code-index-ops $(TESTPREFIX)/unit-test-curator-version $(TESTPREFIX)/unit-test-curator-invalidate $(TESTPREFIX)/unit-test-curator-notify $(TESTPREFIX)/unit-test-pgvec $(TESTPREFIX)/unit-test-rules \
+TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPREFIX)/unit-test-harness-memory $(TESTPREFIX)/unit-test-db2 $(TESTPREFIX)/unit-test-schema-subst $(TESTPREFIX)/unit-test-code-index-ops $(TESTPREFIX)/unit-test-curator-version $(TESTPREFIX)/unit-test-curator-invalidate $(TESTPREFIX)/unit-test-curator-notify $(TESTPREFIX)/unit-test-pgvec $(TESTPREFIX)/unit-test-rules \
                $(TESTPREFIX)/unit-test-guardrails $(TESTPREFIX)/unit-test-memory $(TESTPREFIX)/unit-test-tasks \
                $(TESTPREFIX)/unit-test-cmd-hooks-scope \
                $(TESTPREFIX)/unit-test-agent $(TESTPREFIX)/unit-test-agent-repair $(TESTPREFIX)/unit-test-agent-apikey $(TESTPREFIX)/unit-test-script-runner $(TESTPREFIX)/unit-test-provider-cli-adapter $(TESTPREFIX)/unit-test-cli-acp $(TESTPREFIX)/unit-test-acp-server $(TESTPREFIX)/unit-test-extractors \
@@ -429,6 +429,12 @@ $(TESTPREFIX)/unit-test-util: $(OBJDIR)/tests/test_util.o $(OBJDIR)/util.o $(OBJ
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 $(TESTPREFIX)/unit-test-db: $(OBJDIR)/tests/test_db.o $(OBJDIR)/db1/db.o $(OBJDIR)/db1/db_schema.o $(OBJDIR)/db2/db_schema.o $(OBJDIR)/db1/db1_init.o $(OBJDIR)/db1/db1_write.o $(OBJDIR)/db1/db1_trigger.o $(OBJDIR)/db1/db1_cron_jobs.o $(OBJDIR)/db1/model_catalog.o $(OBJDIR)/db1/maintenance.o $(OBJDIR)/db1/eval.o $(OBJDIR)/tests/aimee_pg_sqlite_shim.o $(OBJDIR)/db2/db2_test_shim.o $(OBJDIR)/config.o $(OBJDIR)/config_sections.o $(OBJDIR)/config_database.o $(OBJDIR)/config_learning.o $(OBJDIR)/config_memory.o $(OBJDIR)/config_charter.o $(OBJDIR)/config_trigger.o $(OBJDIR)/config_kb_maintenance.o $(OBJDIR)/config_kb_curator.o $(OBJDIR)/config_server_api.o $(OBJDIR)/config_skills.o $(OBJDIR)/config_save.o \
+                    $(OBJDIR)/yaml.o $(OBJDIR)/dstr.o \
+                    $(OBJDIR)/util.o $(OBJDIR)/text.o $(OBJDIR)/platform_random.o \
+                    $(OBJDIR)/log.o $(PLATFORM_BASIC_OBJS) $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-harness-memory: $(OBJDIR)/tests/test_harness_memory.o $(OBJDIR)/db1/harness_memory.o $(OBJDIR)/harness_memory_common.o $(OBJDIR)/db1/db.o $(OBJDIR)/db1/db_schema.o $(OBJDIR)/db2/db_schema.o $(OBJDIR)/db1/db1_init.o $(OBJDIR)/db1/db1_write.o $(OBJDIR)/db1/db1_trigger.o $(OBJDIR)/db1/db1_cron_jobs.o $(OBJDIR)/db1/model_catalog.o $(OBJDIR)/db1/maintenance.o $(OBJDIR)/db1/eval.o $(OBJDIR)/tests/aimee_pg_sqlite_shim.o $(OBJDIR)/db2/db2_test_shim.o $(OBJDIR)/config.o $(OBJDIR)/config_sections.o $(OBJDIR)/config_database.o $(OBJDIR)/config_learning.o $(OBJDIR)/config_memory.o $(OBJDIR)/config_charter.o $(OBJDIR)/config_trigger.o $(OBJDIR)/config_kb_maintenance.o $(OBJDIR)/config_kb_curator.o $(OBJDIR)/config_server_api.o $(OBJDIR)/config_skills.o $(OBJDIR)/config_save.o \
                     $(OBJDIR)/yaml.o $(OBJDIR)/dstr.o \
                     $(OBJDIR)/util.o $(OBJDIR)/text.o $(OBJDIR)/platform_random.o \
                     $(OBJDIR)/log.o $(PLATFORM_BASIC_OBJS) $(OBJDIR)/cJSON.o
