@@ -179,7 +179,10 @@ static int consume_spills(const char *project, const char *endpoint, const char 
       cJSON *env = cJSON_Parse(txt);
       free(txt);
       if (!env) /* corrupt/partial spill — leave it for inspection, don't replay */
+      {
+         hmem_audit("spill-corrupt", project, e->d_name, NULL);
          continue;
+      }
       const char *p = jstr(env, "project"), *nm = jstr(env, "name"), *ty = jstr(env, "type"),
                  *bd = jstr(env, "body");
       if (p && nm)
