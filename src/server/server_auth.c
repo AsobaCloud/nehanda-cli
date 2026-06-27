@@ -39,6 +39,10 @@ const method_policy_t method_registry[] = {
     /* Memory (exact before prefix) */
     {"memory.store", CAP_MEMORY_WRITE, "store memory"},
     {"memory.*", CAP_MEMORY_READ, "memory operation"},
+    {"harness_memory.upsert", CAP_MEMORY_WRITE, "store harness memory"},
+    {"harness_memory.tombstone", CAP_MEMORY_WRITE, "delete harness memory"},
+    {"harness_memory.tombstone_prefix", CAP_MEMORY_WRITE, "bulk-delete harness memory"},
+    {"harness_memory.*", CAP_MEMORY_READ, "harness memory operation"},
     /* Index (prefix) */
     {"blast_radius.preview", CAP_INDEX_READ, "blast radius preview"},
     {"index.*", CAP_INDEX_READ, "index operation"},

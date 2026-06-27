@@ -326,6 +326,7 @@ set(DB1_SRCS
     ${AIMEE_SRC_DIR}/db1/db1_init.c
     ${AIMEE_SRC_DIR}/db1/db1_write.c
     ${AIMEE_SRC_DIR}/db1/wm.c
+    ${AIMEE_SRC_DIR}/db1/harness_memory.c
     ${AIMEE_SRC_DIR}/db1/fsnap.c
     ${AIMEE_SRC_DIR}/db1/checkpoints.c
     ${AIMEE_SRC_DIR}/db1/clarify.c
@@ -499,6 +500,7 @@ set(CORE_SRCS
     ${AIMEE_SRC_DIR}/plugin_ctx.c
     ${AIMEE_SRC_DIR}/plugin_loader.c
     ${AIMEE_SRC_DIR}/memory_provider.c
+    ${AIMEE_SRC_DIR}/harness_memory_common.c
     ${AIMEE_SRC_DIR}/plugin_c_hook.c
     ${AIMEE_SRC_DIR}/config_plugin.c
     ${AIMEE_SRC_DIR}/code_collect.c
@@ -805,6 +807,7 @@ set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/server/vault_capability.c
     ${AIMEE_SRC_DIR}/server/server_vault.c
     ${AIMEE_SRC_DIR}/server/server_state.c
+    ${AIMEE_SRC_DIR}/server/harness_memory_routes.c
     ${AIMEE_SRC_DIR}/server/server_plugin.c
     ${AIMEE_SRC_DIR}/server/server_work.c
     ${AIMEE_SRC_DIR}/server/server_delegate_monitor.c
