@@ -61,6 +61,25 @@ int main(void)
    /* NULL path must not crash */
    assert(cls("claude", "Write", NULL, name, &reason) == MR_ALLOW);
 
+   /* --- Bash-write detection --- */
+#define BT(cmd) memory_redirect_bash_targets_memory("claude", (cmd), H)
+   /* writes to a memory file via redirection / tee / sed -i -> detected */
+   assert(BT("echo hi > " H "/.claude/projects/p/memory/n.md") == 1);
+   assert(BT("printf x >> " H "/.claude/projects/p/memory/n.md") == 1);
+   assert(BT("echo x | tee " H "/.claude/projects/p/memory/n.md") == 1);
+   assert(BT("sed -i 's/a/b/' " H "/.claude/projects/p/memory/n.md") == 1);
+   assert(BT("cat z > " H "/.claude/projects/p/memory/topics/n.md") == 1); /* nested */
+   /* reading a memory file (no preceding write op) -> not detected */
+   assert(BT("cat " H "/.claude/projects/p/memory/n.md") == 0);
+   /* reads memory, writes elsewhere -> the write target isn't memory -> not detected */
+   assert(BT("cat " H "/.claude/projects/p/memory/n.md > /tmp/y") == 0);
+   /* writes a non-memory file -> not detected */
+   assert(BT("echo x > /tmp/y.md") == 0);
+   /* non-claude client -> no surface -> not detected */
+   assert(memory_redirect_bash_targets_memory(
+              "gemini", "echo x > " H "/.claude/projects/p/memory/n.md", H) == 0);
+#undef BT
+
    printf("test_memory_redirect: OK\n");
    return 0;
 }
