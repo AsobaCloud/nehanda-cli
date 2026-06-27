@@ -1149,6 +1149,12 @@ static const server_method_dispatch_t server_dispatch_table[] = {
     /* Working memory */
     {"wm.set", handle_wm_set},
     {"wm.get", handle_wm_get},
+    {"harness_memory.upsert", handle_hmem_upsert},
+    {"harness_memory.get", handle_hmem_get},
+    {"harness_memory.list", handle_hmem_list},
+    {"harness_memory.search", handle_hmem_search},
+    {"harness_memory.tombstone", handle_hmem_tombstone},
+    {"harness_memory.tombstone_prefix", handle_hmem_tombstone_prefix},
     {"wm.list", handle_wm_list},
     {"wm.context", handle_wm_context},
     /* Per-session primary agent selection */
