@@ -5,10 +5,12 @@
  * its own TU holds cli_main.c under the source line limit. */
 #include "cli_client.h"
 #include "cli_session_start.h"
+#include "harness_memory_hydrate.h"
 #include "cJSON.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <unistd.h>
 
 struct ss_sbuf
@@ -306,6 +308,14 @@ int handle_session_start(int json_output)
    /* Detect server-invoked context: AIMEE_SESSION_ID is set by chat_stream_worker
     * in the environment of the claude subprocess it forks. */
    int nonblocking = (getenv("AIMEE_SESSION_ID") != NULL);
+
+   /* P4: surface this project's central memory into the local memory dir so a
+    * fresh session/agent sees it (best-effort; never blocks session-start). */
+   {
+      char hcwd[4096];
+      if (getcwd(hcwd, sizeof(hcwd)))
+         harness_memory_hydrate(hcwd);
+   }
 
    const char *sock = cli_ensure_server_for_method("hooks.session_start");
    if (!sock)
