@@ -71,7 +71,9 @@ mr_verdict_t memory_redirect_classify(const char *client, const char *tool, cons
    int mn = snprintf(memseg, sizeof(memseg), "/%s/", scope->memory_seg);
    if (mn < 0 || (size_t)mn >= sizeof(memseg))
       return MR_ALLOW;
-   const char *mem = strstr(path, memseg);
+   /* Anchor the memseg search AFTER the confirmed prefix so a "/memory/" inside
+    * HOME/projects_root can't be mistaken for the project's memory dir. */
+   const char *mem = strstr(path + pn, memseg);
    if (!mem)
       return MR_ALLOW;
    size_t plen = strlen(path);

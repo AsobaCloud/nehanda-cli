@@ -13,9 +13,9 @@ int main(void)
    assert(strcmp(s->projects_root, ".claude/projects") == 0);
    assert(strcmp(s->memory_seg, "memory") == 0);
 
-   /* NULL / empty default to claude */
-   assert(hmem_scope_for_client(NULL) == s);
-   assert(hmem_scope_for_client("") == s);
+   /* a missing/empty client has NO scope — never silently default to claude */
+   assert(hmem_scope_for_client(NULL) == NULL);
+   assert(hmem_scope_for_client("") == NULL);
 
    /* an unregistered client has no memory surface */
    assert(hmem_scope_for_client("gemini") == NULL);
