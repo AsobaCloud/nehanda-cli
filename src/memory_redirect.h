@@ -32,6 +32,17 @@ extern "C"
                                          const char *home, char *out_name, size_t name_cap,
                                          const char **out_reason);
 
+   /* PURE (no I/O) — testable. Best-effort: does the Bash `command` WRITE to a
+    * file under the client's memory surface? Looks for a memory path (under
+    * <home>/<projects_root>/.../<memory_seg>/...md) that is the target of a write
+    * operator (>, >>, tee, sed -i, dd of=, truncate, cp/mv) in the same simple
+    * command. A read of a memory file (no preceding write op) returns 0. v1
+    * limit (best-effort): an interpreter writing the file (python -c, node -e,
+    * ruby -e), process substitution, eval, or var-indirection can evade — the
+    * deferred inotify/fanotify backstop is the complete fix. */
+   int memory_redirect_bash_targets_memory(const char *client, const char *command,
+                                           const char *home);
+
    /* Full interception stage for pre_tool_check. Inspects a parsed tool-input
     * object for a memory write/edit; on a memory op performs the redirect (POST
     * to /v1/harness_memory/upsert + re-materialize the file) and returns a

@@ -170,16 +170,113 @@ static int rematerialize(const char *path, const char *content, const char *home
 #endif
 }
 
+/* Any write operator in [a,b)? '>' (covers >, >>, 2>, &>) is only counted
+ * OUTSIDE single/double quotes and escapes, so quoted data like grep 'a>b' is
+ * not mistaken for a redirection. Plus a best-effort write-tool keyword list. */
+static int region_has_write_op(const char *a, const char *b)
+{
+   int sq = 0, dq = 0;
+   for (const char *p = a; p < b; p++)
+   {
+      char c = *p;
+      if (c == '\\' && p + 1 < b)
+      {
+         p++;
+         continue;
+      }
+      if (!dq && c == '\'')
+         sq = !sq;
+      else if (!sq && c == '"')
+         dq = !dq;
+      else if (!sq && !dq && c == '>')
+         return 1;
+   }
+   static const char *const kw[] = {"tee", "sed -i",   "dd of=",  "truncate ", "cp ",
+                                    "mv ", "install ", "perl -i", "perl -pi",  "patch "};
+   for (size_t i = 0; i < sizeof(kw) / sizeof(kw[0]); i++)
+   {
+      size_t kl = strlen(kw[i]);
+      for (const char *p = a; p + kl <= b; p++)
+         if (strncmp(p, kw[i], kl) == 0)
+            return 1;
+   }
+   return 0;
+}
+
+int memory_redirect_bash_targets_memory(const char *client, const char *command, const char *home)
+{
+   const hmem_scope_t *scope = hmem_scope_for_client(client);
+   if (!scope || !command || !home || !home[0])
+      return 0;
+   char prefix[PATH_MAX], memseg[80];
+   if ((size_t)snprintf(prefix, sizeof(prefix), "%s/%s/", home, scope->projects_root) >=
+       sizeof(prefix))
+      return 0;
+   if ((size_t)snprintf(memseg, sizeof(memseg), "/%s/", scope->memory_seg) >= sizeof(memseg))
+      return 0;
+   size_t mslen = strlen(memseg);
+
+   const char *p = command;
+   while ((p = strstr(p, prefix)))
+   {
+      const char *ts = p; /* path-token start */
+      const char *end = ts;
+      while (*end && !strchr(" \t;|&\n\"'`)<>", *end))
+         end++;
+      size_t tlen = (size_t)(end - ts);
+      int has_mem = 0;
+      for (const char *q = ts; q + mslen <= end; q++)
+         if (strncmp(q, memseg, mslen) == 0)
+         {
+            has_mem = 1;
+            break;
+         }
+      int ends_md = tlen >= 3 && end[-3] == '.' && (end[-2] == 'm' || end[-2] == 'M') &&
+                    (end[-1] == 'd' || end[-1] == 'D');
+      if (has_mem && ends_md)
+      {
+         /* start of this simple command (after the last separator before the path) */
+         const char *cs = ts;
+         while (cs > command && !strchr(";|&\n", cs[-1]))
+            cs--;
+         if (region_has_write_op(cs, ts))
+            return 1;
+      }
+      p = (end > p) ? end : p + 1;
+   }
+   return 0;
+}
+
 int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *msg, size_t msg_len)
 {
    if (!root)
       return 0;
    const char *client = getenv("AIMEE_HOOK_CLIENT");
    const char *home = getenv("HOME");
+   if (!home)
+      return 0;
+
+   /* Bash bypass: a shell command that writes a memory file is reject-denied —
+    * we can't capture the command's output, so steer the agent to the Write
+    * tool (which we intercept + store). Reads of memory files are unaffected. */
+   if (tool && strcmp(tool, "Bash") == 0)
+   {
+      const char *cmd = json_str(root, "command");
+      if (cmd && memory_redirect_bash_targets_memory(client, cmd, home))
+      {
+         snprintf(msg, msg_len,
+                  "Memory files are managed by aimee — use the Write tool to set "
+                  "memory/<name>.md, not shell redirection.");
+         hmem_audit("reject", NULL, NULL, "bash-write-memory");
+         return 2;
+      }
+      return 0;
+   }
+
    const char *path = json_str(root, "file_path");
    if (!path)
       path = json_str(root, "path");
-   if (!path || !home)
+   if (!path)
       return 0;
 
    char name[512];
