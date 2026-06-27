@@ -565,8 +565,8 @@ static int is_descendable(const char *t)
        "namespace_declaration", "file_scoped_namespace_declaration", "namespace_definition",
        "declaration_list", "template_declaration", "linkage_specification", "decorated_definition",
        "export_statement", "lexical_declaration", "variable_declaration",
-       /* C/C++ preprocessor conditionals — top-level defs are commonly wrapped in platform
-        * or feature guards (#ifdef AIMEE_POSIX, #if ...); descend them so those defs are not
+       /* C/C++/C# preprocessor conditionals — top-level defs are commonly wrapped in platform
+        * or feature guards (#ifdef AIMEE_POSIX, #if DEBUG); descend them so those defs are not
         * lost (function bodies are still never descended, so this stays safe). */
        "preproc_ifdef", "preproc_if", "preproc_else", "preproc_elif", "preproc_elifdef",
        /* member bodies */
