@@ -5,17 +5,32 @@
 #include "cJSON.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef _WIN32
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
+#endif
+
+#ifdef _WIN32
+static char *hmem_realpath(const char *p, char *out)
+{
+   return _fullpath(out, p, PATH_MAX);
+}
+#else
+static char *hmem_realpath(const char *p, char *out)
+{
+   return realpath(p, out);
+}
 #endif
 
 /* Self-contained SHA-256 (FIPS 180-4) — avoids an OpenSSL link dependency on
@@ -209,7 +224,17 @@ int hmem_content_hash(const char *type, const char *name, const char *descriptio
 }
 
 /* git worktree toplevel of `cwd` via fork/exec (no shell, no injection).
- * Returns 0 + path in out on success; -1 otherwise. */
+ * Returns 0 + path in out on success; -1 otherwise. On Windows there is no
+ * fork/exec here — the resolver falls back to the canonical cwd. */
+#ifdef _WIN32
+static int git_toplevel(const char *cwd, char *out, size_t cap)
+{
+   (void)cwd;
+   (void)out;
+   (void)cap;
+   return -1;
+}
+#else
 static int git_toplevel(const char *cwd, char *out, size_t cap)
 {
    int fds[2];
@@ -271,6 +296,7 @@ static int git_toplevel(const char *cwd, char *out, size_t cap)
    snprintf(out, cap, "%s", buf);
    return 0;
 }
+#endif /* !_WIN32 */
 
 int hmem_resolve_project(const char *cwd, char *id_out, size_t id_cap, char *root_out,
                          size_t root_cap)
@@ -280,7 +306,7 @@ int hmem_resolve_project(const char *cwd, char *id_out, size_t id_cap, char *roo
    if (git_toplevel(cwd, root, sizeof(root)) != 0)
    {
       const char *c = (cwd && cwd[0]) ? cwd : ".";
-      if (!realpath(c, root))
+      if (!hmem_realpath(c, root))
          return -1;
    }
    if (!root[0])
@@ -296,7 +322,7 @@ int hmem_resolve_project(const char *cwd, char *id_out, size_t id_cap, char *roo
          /* path-shaped id must be an ancestor of realpath(cwd) */
          char rc[PATH_MAX];
          const char *c = (cwd && cwd[0]) ? cwd : ".";
-         if (!realpath(c, rc))
+         if (!hmem_realpath(c, rc))
             return -1;
          size_t el = strlen(env);
          if (strncmp(rc, env, el) != 0 || (rc[el] != '\0' && rc[el] != '/'))
