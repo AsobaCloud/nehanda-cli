@@ -1399,6 +1399,10 @@ add_executable(aimee-server
     ${SERVER_CORE_SRCS}
     ${DB1_SRCS}
     ${GIT_SRCS}
+    # server.c's hooks.pre handler intercepts agent memory writes via the
+    # transport-free helpers in memory_redirect.c (classify/bash/rematerialize);
+    # it lives in CMD_SRCS, which the server does not otherwise link.
+    ${AIMEE_SRC_DIR}/memory_redirect.c
 )
 add_dependencies(aimee-server agent_help_header tool_prompts_header schema_data_header)
 target_include_directories(aimee-server PRIVATE
