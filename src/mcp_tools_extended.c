@@ -132,6 +132,16 @@ void mcp_add_extended_tools(cJSON *tools)
             "judge): each gets confirmed + reason. Default false (structural candidates only).");
    ext_require(t, "project");
 
+   t = ext_tool(tools, "index_graph_node",
+                "A code node's incident projection edges (callers / callees / containers / "
+                "neighbors) with relation, direction (in/out/self), structural weight, and §3 "
+                "provenance. Backs interactive graph exploration.");
+   ext_prop(t, "project", "string", "Project the node belongs to.");
+   ext_prop(t, "node", "string", "Node key/symbol to expand (e.g. a hub from index_graph_hubs).");
+   ext_prop(t, "max_results", "integer", "Max neighbors to return (default 50, max 200).");
+   ext_require(t, "project");
+   ext_require(t, "node");
+
    /* ── Memory grounding: explain a retrieval + provenance/history ───────────── */
    t = ext_tool(tools, "memory_explain_match",
                 "Explain WHY a memory matches a query: the per-signal score breakdown "
@@ -279,6 +289,7 @@ static const struct fam_def MCP_FAMILIES[] = {
       {"hybrid", "index_hybrid"},
       {"hubs", "index_graph_hubs"},
       {"surprising", "index_graph_surprising"},
+      {"neighbors", "index_graph_node"},
       {NULL, NULL}}},
     {"note",
      "command",

@@ -495,3 +495,29 @@ jobs:
           for f in compose.yaml compose.server.yaml compose.server-standalone.yaml compose.combined.yaml; do
             echo "::group::$f"; docker compose -f "$f" logs --tail=80 2>/dev/null || true; echo "::endgroup::"
           done
+
+  # §2 tree-sitter extraction front-end (opt-in). The default build compiles
+  # code_treesitter.c to a stub, so the other jobs never exercise the grammar
+  # path or unit-test-code-treesitter. This job builds AIMEE_TREESITTER=1 — which
+  # fetches the vendored grammars (scripts/fetch-treesitter.sh) and compiles them
+  # — and runs the opt-in test that parses real source in every supported language
+  # (definitions, nested members, and call edges).
+  treesitter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Runner diagnostics
+        run: |
+          gcc --version 2>/dev/null | head -1 || true
+          git --version || true
+          df -h / | tail -1
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc make git \
+            libsqlite3-dev libcurl4-openssl-dev libpam0g-dev libssl-dev libpq-dev
+      - name: Build + run the opt-in tree-sitter test
+        run: |
+          cd src
+          make AIMEE_TREESITTER=1 build/obj/tests/unit-test-code-treesitter
+          ./build/obj/tests/unit-test-code-treesitter

@@ -121,3 +121,41 @@ char *kb_client_code_graph_surprising(const char *project, int max_results, int 
    free(path);
    return json;
 }
+
+char *kb_client_code_graph_node(const char *project, const char *node, int max_results,
+                                int *status_out)
+{
+   if (status_out)
+      *status_out = -1;
+   if (!project || !project[0] || !node || !node[0])
+      return NULL;
+
+   char *project_q = kb_client_query_escape(project);
+   char *node_q = kb_client_query_escape(node);
+   if (!project_q || !node_q)
+   {
+      free(project_q);
+      free(node_q);
+      return NULL;
+   }
+   if (max_results < 1)
+      max_results = 1;
+
+   size_t cap = strlen("/v1/code/graph?project=&node=&max_results=") + strlen(project_q) +
+                strlen(node_q) + 32;
+   char *path = malloc(cap);
+   if (!path)
+   {
+      free(project_q);
+      free(node_q);
+      return NULL;
+   }
+   snprintf(path, cap, "/v1/code/graph?project=%s&node=%s&max_results=%d", project_q, node_q,
+            max_results);
+   free(project_q);
+   free(node_q);
+
+   char *json = kb_client_v1_get_json(path, KB_CLIENT_CODE_GRAPH_READ_TIMEOUT_MS, status_out);
+   free(path);
+   return json;
+}
