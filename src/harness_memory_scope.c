@@ -14,9 +14,13 @@ static const hmem_scope_t SCOPES[] = {
 
 const hmem_scope_t *hmem_scope_for_client(const char *client)
 {
-   const char *c = (client && client[0]) ? client : "claude";
+   /* Require an explicit client — a missing/empty AIMEE_HOOK_CLIENT must NOT
+    * silently route into another client's tree (cross-client contamination
+    * footgun once the table has >1 entry). The cross-client hooks always set it. */
+   if (!client || !client[0])
+      return NULL;
    for (size_t i = 0; i < sizeof(SCOPES) / sizeof(SCOPES[0]); i++)
-      if (strcmp(SCOPES[i].client, c) == 0)
+      if (strcmp(SCOPES[i].client, client) == 0)
          return &SCOPES[i];
    return NULL;
 }
