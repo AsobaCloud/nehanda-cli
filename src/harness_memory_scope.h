@@ -7,6 +7,8 @@
 #ifndef DEC_HARNESS_MEMORY_SCOPE_H
 #define DEC_HARNESS_MEMORY_SCOPE_H 1
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -23,6 +25,14 @@ extern "C"
     * NULL when the client has no registered memory surface — callers treat that
     * as "not a memory operation / nothing to hydrate". */
    const hmem_scope_t *hmem_scope_for_client(const char *client);
+
+   /* Parse one registry config line "client:projects_root:memory_seg" (each
+    * field whitespace-trimmed). Returns 0 on a valid scope (out buffers filled),
+    * 1 for a blank/comment line (skip), -1 if malformed or a field overflows its
+    * buffer. The path fields must be relative to $HOME (no leading '/' and no
+    * ".."); the client must be a bare token. PURE — testable. */
+   int hmem_scope_parse_line(const char *line, char *client, size_t client_cap, char *root,
+                             size_t root_cap, char *seg, size_t seg_cap);
 
 #ifdef __cplusplus
 }
