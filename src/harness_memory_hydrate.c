@@ -50,6 +50,32 @@ static void mkdir_parents(const char *file_path)
    }
 }
 
+/* mkdir -p for a directory path (best-effort). */
+static void mkdir_p(const char *dir)
+{
+   char buf[PATH_MAX];
+   if ((size_t)snprintf(buf, sizeof(buf), "%s/", dir) >= sizeof(buf))
+      return;
+   mkdir_parents(buf);
+}
+
+/* Is the resolved parent dir of `target` confined under realpath(memdir)?
+ * Defends against a symlinked component redirecting the write outside the
+ * memory tree (parity with P3's re-materialize). */
+static int target_confined(const char *target, const char *memreal)
+{
+   char dir[PATH_MAX];
+   const char *base = strrchr(target, '/');
+   if (!base)
+      return 0;
+   snprintf(dir, sizeof(dir), "%.*s", (int)(base - target), target);
+   char dreal[PATH_MAX];
+   if (!realpath(dir, dreal))
+      return 0;
+   size_t n = strlen(memreal);
+   return strncmp(dreal, memreal, n) == 0 && (dreal[n] == '/' || dreal[n] == '\0');
+}
+
 static const char *jstr(cJSON *o, const char *k)
 {
    cJSON *i = cJSON_GetObjectItemCaseSensitive(o, k);
@@ -111,6 +137,16 @@ int harness_memory_hydrate(const char *cwd)
       return -1;
    }
 
+   /* Ensure the memory dir exists and resolve it, so we can confine every write
+    * under the *real* directory (a symlinked component can't redirect us out). */
+   mkdir_p(memdir);
+   char memreal[PATH_MAX];
+   if (!realpath(memdir, memreal))
+   {
+      cJSON_Delete(resp);
+      return -1;
+   }
+
    int n = 0;
    cJSON *mems = cJSON_GetObjectItemCaseSensitive(resp, "memories");
    cJSON *m = NULL;
@@ -118,12 +154,13 @@ int harness_memory_hydrate(const char *cwd)
    {
       const char *name = jstr(m, "name");
       const char *btext = jstr(m, "body");
-      if (!name || !name[0] || strstr(name, "..")) /* defensive: never escape memdir */
+      if (!name || !name[0] || name[0] == '/' || strstr(name, "..")) /* never escape memdir */
          continue;
       char target[PATH_MAX];
       if ((size_t)snprintf(target, sizeof(target), "%s/%s.md", memdir, name) >= sizeof(target))
          continue;
-      if (write_file(target, btext ? btext : "") == 0)
+      mkdir_parents(target);
+      if (target_confined(target, memreal) && write_file(target, btext ? btext : "") == 0)
          n++;
    }
    cJSON_Delete(resp);
