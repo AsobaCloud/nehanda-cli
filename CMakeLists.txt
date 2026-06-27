@@ -765,6 +765,7 @@ set(CLI_SRCS
     ${AIMEE_SRC_DIR}/cli_agent_setup.c
     ${AIMEE_SRC_DIR}/cli_session_start.c
     ${AIMEE_SRC_DIR}/harness_memory_hydrate.c
+    ${AIMEE_SRC_DIR}/harness_memory_watch.c
     # hydrate calls hmem_resolve_project/_scope_for_client/_spill_dir/_audit; the
     # standalone `aimee` CLI does not link aimee-core, so their definers must build
     # into the CLI directly (the make build links them via L_CLIENT). Without these
