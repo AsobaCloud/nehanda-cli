@@ -35,10 +35,14 @@ int main(void)
           MR_REDIRECT);
    assert(strcmp(name, "topics/auth") == 0);
 
-   /* flat memory write, client NULL defaults to claude; case-insensitive .MD */
-   assert(cls(NULL, "Write", H "/.claude/projects/proj/memory/note.MD", name, &reason) ==
+   /* flat memory write; case-insensitive .MD */
+   assert(cls("claude", "Write", H "/.claude/projects/proj/memory/note.MD", name, &reason) ==
           MR_REDIRECT);
    assert(strcmp(name, "note") == 0);
+
+   /* a missing/empty client is never intercepted (no silent claude default) */
+   assert(cls(NULL, "Write", H "/.claude/projects/proj/memory/note.md", name, &reason) == MR_ALLOW);
+   assert(cls("", "Write", H "/.claude/projects/proj/memory/note.md", name, &reason) == MR_ALLOW);
 
    /* MEMORY.md -> reject with guidance (case-insensitive) */
    assert(cls("claude", "Write", H "/.claude/projects/proj/memory/MEMORY.md", name, &reason) ==

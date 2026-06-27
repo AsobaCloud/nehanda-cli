@@ -11,6 +11,7 @@
 
 #include "cli_client.h" /* cli_http_request, cli_v1_client_endpoint/bearer */
 #include "harness_memory_common.h"
+#include "harness_memory_scope.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -32,11 +33,11 @@ static int is_write_family(const char *t)
    return t && (strcmp(t, "Write") == 0 || strcmp(t, "Edit") == 0 || strcmp(t, "MultiEdit") == 0);
 }
 
-/* Does abspath start with "<home>/.claude/projects/"? */
-static int under_claude_projects(const char *abspath, const char *home)
+/* Does abspath start with "<home>/<projects_root>/"? */
+static int under_projects_root(const char *abspath, const char *home, const char *projects_root)
 {
    char prefix[PATH_MAX];
-   int n = snprintf(prefix, sizeof(prefix), "%s/.claude/projects/", home);
+   int n = snprintf(prefix, sizeof(prefix), "%s/%s/", home, projects_root);
    if (n < 0 || (size_t)n >= sizeof(prefix) || !abspath)
       return 0;
    return strncmp(abspath, prefix, (size_t)n) == 0;
@@ -54,17 +55,25 @@ mr_verdict_t memory_redirect_classify(const char *client, const char *tool, cons
 {
    if (out_reason)
       *out_reason = NULL;
-   const char *c = (client && client[0]) ? client : "claude";
-   if (strcmp(c, "claude") != 0) /* v1: Claude file-memory only */
+   const hmem_scope_t *scope = hmem_scope_for_client(client);
+   if (!scope) /* unregistered client — not a memory surface we manage */
       return MR_ALLOW;
    if (!is_write_family(tool) || !path || !home || !home[0])
       return MR_ALLOW;
 
-   /* HOME-anchored: the path must literally begin under ~/.claude/projects/ —
-    * an unanchored substring would false-positive on repo paths. */
-   if (!under_claude_projects(path, home))
+   /* HOME-anchored to the client's projects root — an unanchored substring would
+    * false-positive on repo paths. */
+   char prefix[PATH_MAX];
+   int pn = snprintf(prefix, sizeof(prefix), "%s/%s/", home, scope->projects_root);
+   if (pn < 0 || (size_t)pn >= sizeof(prefix) || strncmp(path, prefix, (size_t)pn) != 0)
       return MR_ALLOW;
-   const char *mem = strstr(path, "/memory/");
+   char memseg[80];
+   int mn = snprintf(memseg, sizeof(memseg), "/%s/", scope->memory_seg);
+   if (mn < 0 || (size_t)mn >= sizeof(memseg))
+      return MR_ALLOW;
+   /* Anchor the memseg search AFTER the confirmed prefix so a "/memory/" inside
+    * HOME/projects_root can't be mistaken for the project's memory dir. */
+   const char *mem = strstr(path + pn, memseg);
    if (!mem)
       return MR_ALLOW;
    size_t plen = strlen(path);
@@ -88,7 +97,7 @@ mr_verdict_t memory_redirect_classify(const char *client, const char *tool, cons
       return MR_REJECT;
    }
 
-   const char *after = mem + strlen("/memory/");
+   const char *after = mem + strlen(memseg);
    size_t alen = strlen(after);
    if (alen <= 3 || after[0] == '/') /* just ".md", or an odd leading slash */
       return MR_ALLOW;
@@ -113,7 +122,8 @@ static const char *json_str(cJSON *o, const char *key)
  * cannot re-enter the PreToolUse hook). The parent dir is realpath-resolved and
  * confined under ~/.claude/projects/, so a symlinked component can't redirect
  * the write outside the memory tree. Atomic (temp + rename) on POSIX. */
-static int rematerialize(const char *path, const char *content, const char *home)
+static int rematerialize(const char *path, const char *content, const char *home,
+                         const char *projects_root)
 {
    const char *base = strrchr(path, '/');
    if (!base)
@@ -128,7 +138,7 @@ static int rematerialize(const char *path, const char *content, const char *home
    char rp[PATH_MAX];
    if (!realpath(dir, rp)) /* parent must exist + resolve */
       return -1;
-   if (!under_claude_projects(rp, home)) /* symlink escape — refuse */
+   if (!under_projects_root(rp, home, projects_root)) /* symlink escape — refuse */
       return -1;
    char target[PATH_MAX], tmpl[PATH_MAX];
    if ((size_t)snprintf(target, sizeof(target), "%s/%s", rp, base) >= sizeof(target) ||
@@ -148,6 +158,7 @@ static int rematerialize(const char *path, const char *content, const char *home
    return 0;
 #else
    (void)home;
+   (void)projects_root;
    FILE *f = fopen(path, "wb");
    if (!f)
       return -1;
@@ -229,7 +240,8 @@ int memory_redirect_check(const char *tool, cJSON *root, const char *cwd, char *
    long id = cJSON_IsNumber(jid) ? (long)jid->valuedouble : 0;
    cJSON_Delete(resp);
 
-   rematerialize(path, content, home);
+   const hmem_scope_t *scope = hmem_scope_for_client(client); /* non-NULL: classify redirected */
+   rematerialize(path, content, home, scope ? scope->projects_root : ".claude/projects");
    snprintf(msg, msg_len,
             "Saved to aimee memory (id=%ld). The file now reflects your content — do not "
             "re-write it.",
