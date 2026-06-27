@@ -79,11 +79,35 @@ static void test_resolve(void)
    assert(strcmp(id2, root2) == 0);
 }
 
+static void test_project_key_ok(void)
+{
+   /* path-shaped keys (the common case) and opaque ids are accepted */
+   assert(hmem_project_key_ok("/home/u/dev/aimee") == 1);
+   assert(hmem_project_key_ok("proj-xyz") == 1);
+   /* empty / NULL rejected */
+   assert(hmem_project_key_ok(NULL) == 0);
+   assert(hmem_project_key_ok("") == 0);
+   /* control chars / newlines rejected (would corrupt audit/JSON lines) */
+   assert(hmem_project_key_ok("a\nb") == 0);
+   assert(hmem_project_key_ok("a\tb") == 0);
+   assert(hmem_project_key_ok("a\x7f"
+                              "b") == 0);
+   /* length: 255 ok, 256 rejected (store buffer is char[256]) */
+   char big[300];
+   memset(big, 'x', sizeof(big));
+   big[255] = '\0'; /* 255 chars */
+   assert(hmem_project_key_ok(big) == 1);
+   big[255] = 'x';
+   big[256] = '\0'; /* 256 chars */
+   assert(hmem_project_key_ok(big) == 0);
+}
+
 int main(void)
 {
    test_sha();
    test_hash();
    test_resolve();
+   test_project_key_ok();
    assert(db1_init(":memory:") == 0);
 
    /* upsert + get (nested name round-trips) */

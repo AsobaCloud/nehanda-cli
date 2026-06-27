@@ -298,6 +298,17 @@ static int git_toplevel(const char *cwd, char *out, size_t cap)
 }
 #endif /* !_WIN32 */
 
+int hmem_project_key_ok(const char *key)
+{
+   if (!key || !key[0])
+      return 0;
+   size_t n = 0;
+   for (const unsigned char *p = (const unsigned char *)key; *p; p++, n++)
+      if (*p < 0x20 || *p == 0x7f) /* control char / newline */
+         return 0;
+   return n < HMEM_PROJECT_KEY_MAX;
+}
+
 int hmem_resolve_project(const char *cwd, char *id_out, size_t id_cap, char *root_out,
                          size_t root_cap)
 {

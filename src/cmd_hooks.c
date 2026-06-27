@@ -236,8 +236,16 @@ void cmd_hooks(app_ctx_t *ctx, int argc, char **argv)
          cJSON *ti = (tool_input && tool_input[0]) ? cJSON_Parse(tool_input) : NULL;
          if (ti)
          {
+            /* The thin client resolves the project against the real cwd/git repo
+             * and forwards it; required when this server is remote. Sourced from
+             * the top-level hook input only — any value nested in tool_input is
+             * intentionally ignored (the agent must not pick its own store key). */
+            const char *hp = NULL;
+            cJSON *hpj = cJSON_GetObjectItemCaseSensitive(json, "harness_project");
+            if (cJSON_IsString(hpj) && hpj->valuestring && hpj->valuestring[0])
+               hp = hpj->valuestring;
             char mr_msg[1024] = "";
-            int mr = memory_redirect_check(tool_name, ti, cwd, mr_msg, sizeof(mr_msg));
+            int mr = memory_redirect_check(tool_name, ti, cwd, hp, mr_msg, sizeof(mr_msg));
             cJSON_Delete(ti);
             if (mr == 2)
             {
