@@ -19,7 +19,7 @@
 
 #ifndef _WIN32
 #include <fcntl.h>
-#include <unistd.h>
+#include <unistd.h> /* unlink, fsync */
 #endif
 
 /* Portable canonicalization: POSIX realpath resolves symlinks; on Windows
@@ -225,6 +225,121 @@ static int consume_spills(const char *project, const char *endpoint, const char 
    return n;
 }
 
+int hmem_md_store_name(const char *fp, const char *memreal, char *out, size_t cap)
+{
+   if (!fp || !memreal || !out || cap == 0)
+      return -1;
+   size_t fl = strlen(fp), ml = strlen(memreal);
+   /* Case-SENSITIVE ".md": on a case-sensitive fs "Foo.MD" is a distinct file
+    * and must not be folded onto the canonical lowercase store name. */
+   if (fl < 3 || memcmp(fp + fl - 3, ".md", 3) != 0)
+      return -1;
+   /* fp must sit strictly under memreal: longer than memreal, shared prefix, and
+    * a '/' boundary. The `fl > ml` guard makes fp[ml] unambiguously in-bounds and
+    * rejects a sibling like "<memreal>X/foo.md" (boundary byte is 'X', not '/'). */
+   if (fl <= ml || strncmp(fp, memreal, ml) != 0 || fp[ml] != '/')
+      return -1;
+   const char *rel = fp + ml + 1;
+   size_t rel_len = fl - (ml + 1) - 3; /* minus ".md" */
+   if (rel_len == 0 || rel_len >= cap)
+      return -1;
+   memcpy(out, rel, rel_len);
+   out[rel_len] = '\0';
+   /* Nested names legitimately keep '/' (e.g. "topics/a") and a literal ".." mid-
+    * token is fine (e.g. "v1..0"), but a ".." that IS a whole path component could
+    * escape the root on write-back, so reject only that. */
+   for (const char *p = strstr(out, ".."); p; p = strstr(p + 2, ".."))
+   {
+      int at_start = (p == out) || (p[-1] == '/');
+      int at_end = (p[2] == '\0') || (p[2] == '/');
+      if (at_start && at_end)
+         return -1;
+   }
+   /* "MEMORY" is the harness index (MEMORY.md), matched EXACT-case — a user file
+    * "memory.md" on a case-sensitive fs is a real memory, not the index. */
+   if (strcmp(out, "MEMORY") == 0)
+      return -1;
+   return 0;
+}
+
+/* True if `name` is one of the `nk` strings in `known`. */
+static int name_known(char *const *known, int nk, const char *name)
+{
+   for (int i = 0; i < nk; i++)
+      if (strcmp(known[i], name) == 0)
+         return 1;
+   return 0;
+}
+
+/* Walk `absdir` recursively (absdir is always under the resolved memreal). Any
+ * regular *.md file whose store name is not in `known` is a disk-only memory
+ * (pre-existing file, external edit, or a fail-open write whose spill was lost):
+ * import it into the store via upsert so DB1 becomes the union of disk + store.
+ * lstat (not stat) means symlinked dirs/files are skipped — a symlink can't make
+ * the scan escape memreal or import something outside it. */
+static void import_orphans(const char *absdir, const char *memreal, char *const *known, int nk,
+                           const char *project, const char *endpoint, const char *bearer,
+                           int *count)
+{
+   DIR *d = opendir(absdir);
+   if (!d)
+      return;
+   struct dirent *e;
+   while ((e = readdir(d)) != NULL)
+   {
+      if (e->d_name[0] == '.') /* skip dotfiles, "." and ".." */
+         continue;
+      char fp[PATH_MAX];
+      if ((size_t)snprintf(fp, sizeof(fp), "%s/%s", absdir, e->d_name) >= sizeof(fp))
+         continue;
+      struct stat st;
+      if (lstat(fp, &st) != 0)
+         continue;
+      if (S_ISDIR(st.st_mode))
+      {
+         import_orphans(fp, memreal, known, nk, project, endpoint, bearer, count);
+         continue;
+      }
+      if (!S_ISREG(st.st_mode))
+         continue;
+      char name[PATH_MAX];
+      if (hmem_md_store_name(fp, memreal, name, sizeof(name)) != 0)
+         continue;
+      if (name_known(known, nk, name))
+         continue;
+      char *content = read_whole(fp);
+      if (!content)
+         continue;
+      cJSON *b = cJSON_CreateObject();
+      if (!b)
+      {
+         free(content);
+         continue;
+      }
+      cJSON_AddStringToObject(b, "project", project);
+      cJSON_AddStringToObject(b, "name", name);
+      cJSON_AddStringToObject(b, "type", "fact");
+      cJSON_AddStringToObject(b, "body", content);
+      char *bs = cJSON_PrintUnformatted(b);
+      cJSON_Delete(b);
+      free(content);
+      if (!bs)
+         continue;
+      int code = 0;
+      cJSON *r =
+          cli_http_request(endpoint, "POST", "/v1/harness_memory/upsert", bs, bearer, 15000, &code);
+      free(bs);
+      if (r && code >= 200 && code < 300)
+      {
+         hmem_audit("import", project, name, NULL);
+         (*count)++;
+      }
+      if (r)
+         cJSON_Delete(r);
+   }
+   closedir(d);
+}
+
 int harness_memory_hydrate(const char *cwd)
 {
    const char *home = getenv("HOME");
@@ -257,8 +372,11 @@ int harness_memory_hydrate(const char *cwd)
     * below reflects them. */
    int consumed = consume_spills(project, endpoint, bearer);
 
+   /* include_deleted so tombstoned rows come back too — we materialize live rows
+    * and *remove* the on-disk file for each tombstone (DB1 is authoritative). */
    cJSON *body = cJSON_CreateObject();
    cJSON_AddStringToObject(body, "project", project);
+   cJSON_AddNumberToObject(body, "include_deleted", 1);
    char *body_s = cJSON_PrintUnformatted(body);
    cJSON_Delete(body);
 
@@ -267,12 +385,12 @@ int harness_memory_hydrate(const char *cwd)
                                            bearer, 15000, &status)
                         : NULL;
    free(body_s);
-   free(endpoint);
-   free(bearer);
    if (!resp || status < 200 || status >= 300)
    {
       if (resp)
          cJSON_Delete(resp);
+      free(endpoint);
+      free(bearer);
       return (consumed > 0) ? consumed : -1;
    }
 
@@ -283,31 +401,90 @@ int harness_memory_hydrate(const char *cwd)
    if (!hm_realpath(memdir, memreal))
    {
       cJSON_Delete(resp);
+      free(endpoint);
+      free(bearer);
       return -1;
    }
 
-   int n = 0;
+   /* Every name DB1 knows about — LIVE *and* TOMBSTONED. The disk scan below
+    * imports any *.md whose name is absent from this set; including tombstoned
+    * names here is what stops a tombstone from being resurrected (a deleted
+    * memory whose file lingers stays "known", so it is never re-imported).
+    * known_ok guards completeness: if any insertion fails (OOM), the set is no
+    * longer authoritative, so we skip the import pass entirely rather than risk
+    * resurrecting a tombstone we failed to record. */
+   char **known = NULL;
+   int nk = 0, kcap = 0, known_ok = 1;
+
+   int n = 0, removed = 0;
    cJSON *mems = cJSON_GetObjectItemCaseSensitive(resp, "memories");
    cJSON *m = NULL;
    cJSON_ArrayForEach(m, mems)
    {
       const char *name = jstr(m, "name");
       const char *btext = jstr(m, "body");
+      const char *del = jstr(m, "deleted_at");
       if (!name || !name[0] || name[0] == '/' || strstr(name, "..")) /* never escape memdir */
          continue;
+      if (nk == kcap)
+      {
+         int nc = kcap ? kcap * 2 : 32;
+         char **t = realloc(known, (size_t)nc * sizeof(*t));
+         if (t)
+         {
+            known = t;
+            kcap = nc;
+         }
+      }
+      if (nk < kcap)
+      {
+         char *dup = strdup(name);
+         if (dup)
+            known[nk++] = dup;
+         else
+            known_ok = 0;
+      }
+      else
+      {
+         known_ok = 0;
+      }
       char target[PATH_MAX];
       if ((size_t)snprintf(target, sizeof(target), "%s/%s.md", memdir, name) >= sizeof(target))
          continue;
+      if (del && del[0]) /* tombstoned: ensure the on-disk file is gone */
+      {
+         if (target_confined(target, memreal) && unlink(target) == 0)
+         {
+            removed++;
+            hmem_audit("tombstone-removed", project, name, NULL);
+         }
+         continue;
+      }
       mkdir_parents(target);
       if (target_confined(target, memreal) && write_file(target, btext ? btext : "") == 0)
          n++;
    }
    cJSON_Delete(resp);
 
-   if (n > 0 || consumed > 0)
+   /* Import disk-only memory files the store has never seen (pre-existing files,
+    * external edits, or fail-open writes whose spill was lost). Skipped when the
+    * known set is incomplete — see known_ok above. */
+   int imported = 0;
+   if (known_ok)
+      import_orphans(memreal, memreal, known, nk, project, endpoint, bearer, &imported);
+
+   for (int i = 0; i < nk; i++)
+      free(known[i]);
+   free(known);
+   free(endpoint);
+   free(bearer);
+
+   if (n > 0 || consumed > 0 || removed > 0 || imported > 0)
    {
-      char detail[96];
-      snprintf(detail, sizeof(detail), "hydrated=%d spills_consumed=%d", n, consumed);
+      char detail[160];
+      snprintf(detail, sizeof(detail),
+               "hydrated=%d spills_consumed=%d tombstones_removed=%d imported=%d", n, consumed,
+               removed, imported);
       hmem_audit("reconcile", project, NULL, detail);
    }
    return n;
