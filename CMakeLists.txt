@@ -501,7 +501,6 @@ set(CORE_SRCS
     ${AIMEE_SRC_DIR}/plugin_loader.c
     ${AIMEE_SRC_DIR}/memory_provider.c
     ${AIMEE_SRC_DIR}/harness_memory_common.c
-    ${AIMEE_SRC_DIR}/memory_redirect.c
     ${AIMEE_SRC_DIR}/plugin_c_hook.c
     ${AIMEE_SRC_DIR}/config_plugin.c
     ${AIMEE_SRC_DIR}/code_collect.c
@@ -713,6 +712,7 @@ set(CMD_SRCS
     ${AIMEE_SRC_DIR}/cmd_diagnose.c
     ${AIMEE_SRC_DIR}/cmd_hooks.c
     ${AIMEE_SRC_DIR}/cmd_hooks_scope.c
+    ${AIMEE_SRC_DIR}/memory_redirect.c
     ${AIMEE_SRC_DIR}/cmd_agent.c
     ${AIMEE_SRC_DIR}/cmd_agent_setup.c
     ${AIMEE_SRC_DIR}/cmd_agent_trace.c
