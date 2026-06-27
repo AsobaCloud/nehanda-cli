@@ -37,7 +37,9 @@ extern "C"
     * <home>/<projects_root>/.../<memory_seg>/...md) that is the target of a write
     * operator (>, >>, tee, sed -i, dd of=, truncate, cp/mv) in the same simple
     * command. A read of a memory file (no preceding write op) returns 0. v1
-    * limit: process substitution / eval / var-indirection can evade. */
+    * limit (best-effort): an interpreter writing the file (python -c, node -e,
+    * ruby -e), process substitution, eval, or var-indirection can evade — the
+    * deferred inotify/fanotify backstop is the complete fix. */
    int memory_redirect_bash_targets_memory(const char *client, const char *command,
                                            const char *home);
 
