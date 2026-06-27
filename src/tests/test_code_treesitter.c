@@ -81,6 +81,15 @@ int main(void)
    }
    assert(code_treesitter_definitions(".c", c_src, d, 1) == 1); /* bounded */
 
+   /* definitions wrapped in a preprocessor conditional are surfaced (real C/C++ files
+    * commonly guard top-level defs with #ifdef/#if). */
+   want(".c", "#ifdef X\nint guarded(void){ return 1; }\ntypedef int gint;\n#endif\n", "guarded",
+        "function");
+   want(".c", "#ifdef X\nint guarded(void){ return 1; }\ntypedef int gint;\n#endif\n", "gint",
+        "type");
+   want(".c", "#if A\nint a(void){return 0;}\n#else\nint b(void){return 1;}\n#endif\n", "b",
+        "function"); /* #else branch too */
+
    /* --- C++ (incl. a namespaced class — exercises container descent) --- */
    const char *cpp = "int add(int a){return a;}\nclass C{ void m(); };\nstruct S{};\n"
                      "namespace N { class Inner{}; }\n";
@@ -97,6 +106,8 @@ int main(void)
    want(".cs", cs, "I", "type");
    want(".cs", cs, "R", "type");
    want(".cs", cs, "Top", "type"); /* top-level, no namespace */
+   want(".cs", "#if DEBUG\nclass Dbg { void M(){} }\n#endif\n", "Dbg",
+        "type"); /* #if-guarded type */
 
    /* --- Python (incl. a decorated def) --- */
    const char *py = "def add(a, b):\n    return a + b\n"
