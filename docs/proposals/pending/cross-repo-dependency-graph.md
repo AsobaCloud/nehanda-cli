@@ -1,7 +1,7 @@
 # Proposal: Cross-repo dependency graph — precise inter-repo edges over the multi-repo corpus
 
-- **State:** PROPOSED — not started. Extends [code-graph intelligence](code-graph-intelligence.md);
-  inherits the Architecture Charter (graph layer). Roundtable-reviewed three times (idea round: 3
+- **State:** PROPOSED — not started. Extends code-graph intelligence (now complete; see
+  Charter roles for its path); inherits the Architecture Charter (graph layer). Roundtable-reviewed three times (idea round: 3
   blocking; proposal round 1: 10 blocking; proposal round 2: 16 blocking — all incorporated, §11).
 - **Thesis:** aimee indexes many repos (40 on the reference deployment) but every relation is
   **per-repo**: `db2_code_projection_sync_project` builds each project's graph as its own
@@ -13,8 +13,8 @@
 
 ## Charter roles
 Recall + **Rank-Fuse** (the graph layer) + a new cross-repo **resolution** pass. This is the
-inter-project extension of the code-graph projection layer in
-[code-graph-intelligence](code-graph-intelligence.md) §0/§5; it reuses `terms`, `code_calls`,
+inter-project extension of the code-graph projection layer in code-graph-intelligence (shipped;
+`docs/proposals/done/code-graph-intelligence.md`) §0/§5; it reuses `terms`, `code_calls`,
 `file_exports`, `file_imports`, and the `code_projection_edges`/`entity_edges` generation machinery.
 
 ## Goal
