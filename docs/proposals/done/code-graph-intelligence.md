@@ -1,15 +1,20 @@
 # Proposal: Code-graph intelligence — a living, embedded, reasoning graph over code
 
-- **State:** IN PROGRESS — **every section §0.5–§8 now has an implementation on
-  the `testing` branch**: the §5 code+graph+vector+memory hybrid, §7 graph-informed
-  delegation + blast-radius advisory, the §4 surprising-links route with its LLM-judge
-  relevance gate + precision self-suppress, the §8 `/v1/code/graph` backend route + the
-  webchat Graph view, the §6 live updates (memory-fusion leg + default-branch
-  change-detection gate + post-merge reindex hook), and the **§2 tree-sitter front-end**
-  with grammars for **all 16 supported languages** (opt-in `AIMEE_TREESITTER`
-  build, fall-through to the hand-rolled extractors). Only **optional follow-ups**
-  remain — more §2 grammars + nested-member/parse-tree call edges, and an always-on §6
-  fanotify watch. See the "Implementation status" section.
+- **State:** done
+- **Completed:** 2026-06-28
+- **Moved from:** `docs/proposals/pending/code-graph-intelligence.md`
+- **Summary:** **every section §0.5–§8 shipped to the `testing` branch** — the §5
+  code+graph+vector+memory hybrid, §7 graph-informed delegation + blast-radius advisory,
+  the §4 surprising-links route with its LLM-judge relevance gate + precision
+  self-suppress, the §8 `/v1/code/graph` backend route + the webchat Graph view, the §6
+  live updates (memory-fusion leg + default-branch change-detection gate +
+  post-merge/post-checkout reindex hooks), and the **§2 tree-sitter front-end** with
+  grammars for **all 16 hand-rolled supported languages** + call-edge extraction (opt-in
+  `AIMEE_TREESITTER` build, fall-through to the hand-rolled extractors). Two **optional
+  follow-ups** were deliberately deferred at close-out (roundtable-ratified) and are
+  recorded as future-work / known limitations below: tree-sitter grammars **beyond** the
+  16-language parity set, and an always-on §6 fanotify/inotify watch. See the
+  "Implementation status" and "Deferred" sections.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
   built without a manual step, (b) parsed broadly, (c) ranked by **graph structure
   AND vector similarity AND memory** in one query, and (d) able to *change what the
@@ -378,11 +383,16 @@ all three are reachable from the frontend over the trusted UDS hop).
 - **§0.5** default-branch sourcing (`code_collect.c`, `unit-test-code-collect`).
 - **§1** auto-build of the projection graph on the curator drain, content-addressed +
   idempotent (`kb_graph_build_project_if_changed`, `unit-test-kb-graph`).
-- **§2** tree-sitter extraction front-end (`code_treesitter.c`) + the **C grammar**,
-  feeding the same `definition_t` symbols as the hand-rolled extractors with fall-through;
-  opt-in `AIMEE_TREESITTER` build (runtime + grammars fetched, not committed —
-  `scripts/fetch-treesitter.sh`), so the default build is unchanged
-  (`unit-test-code-treesitter`, opt-in).
+- **§2** tree-sitter extraction front-end (`code_treesitter.c`) with grammars for **all
+  16 hand-rolled supported languages** (C, C++, C#, Python, Go, JavaScript, TypeScript,
+  Rust, Java, Ruby, PHP, Lua, Bash, Swift, Kotlin, Dart, CSS), feeding the same
+  `definition_t` symbols as the hand-rolled extractors with fall-through; descends through
+  organizational wrappers + type member bodies so **nested members are surfaced**, and
+  extracts **call edges** (`code_treesitter_calls` → `extract_calls`). Opt-in
+  `AIMEE_TREESITTER` build (runtime + grammars fetched, not committed —
+  `scripts/fetch-treesitter.sh`), so the default build is unchanged; covered by
+  `unit-test-code-treesitter` (parses real source per language, asserts top-level + nested
+  defs) and a dedicated opt-in `treesitter` CI lane.
 - **§3** edge provenance (`structural`/`inferred`/`ambiguous`) surfaced in `graph.explain`.
 - **§4** hub/degree-centrality analytics — `GET /v1/code/graph/hubs`
   (`kb_graph_analytics.c`, `unit-test-kb-graph-analytics`), **agent-callable** via
@@ -425,13 +435,50 @@ all three are reachable from the frontend over the trusted UDS hop).
   surprising links, via webchat Go proxies `/api/graph/*` (`webchat/graph.go`,
   `webchat/graph_test.go`) over the `index_graph_*` MCP tools.
 
-**Deferred — optional follow-ups (the front-ends are all shipped):**
-- **§2 more grammars + call edges** — the tree-sitter front-end + C grammar + opt-in
-  build ship; vendoring the remaining ~29 grammars and adding `code_calls` extraction
-  over the parse tree is mechanical (and a build-tier / binary-size decision per deploy).
-- **§6 watch (optional)** — the change-detection gate, the post-merge reindex hook, and
-  the memory-fusion leg are all shipped; only an always-on fanotify/inotify watch (for
-  non-git trees or freshness without a git event) remains, as an optional follow-up.
+**Deferred future-work — optional, ratified at close-out (every shipped section's
+front-end is complete).** A close-out roundtable (`minimax` / `mistral` / `mimo-2.5-pro` /
+`glm-5.2` / `codex` + 1; 6 panelists, 0 failed, not degraded) converged on closing the
+proposal now and carrying the two items below as explicit future-work, each with the scope
+recorded so it is a self-contained task, not a re-discovered design:
+
+- **§2 grammars beyond the 16 supported languages.** The tree-sitter front-end, all 16
+  hand-rolled-parity grammars, call-edge extraction, nested-member descent, and the opt-in
+  `treesitter` CI lane all ship. The proposal's aspirational ≥30-language target is **not**
+  met and **not** claimed shipped — only the 16-language hand-rolled parity set is covered.
+  Extending toward it is mechanical and carries **no parity regression** (the extra
+  languages have no hand-rolled coverage today), so it is a build-tier / binary-size
+  decision per deploy, not a gap. Per-language add recipe: (1) vendor its `parser.c`
+  (+ `scanner.c`) via `scripts/fetch-treesitter.sh`; (2) register its `TSLanguage` +
+  extensions in `ts_language_for_ext`; (3) add a `classify_*` (probe the grammar's node
+  types first — don't guess); (4) extend the per-language `unit-test-code-treesitter`
+  fixtures + the supported-languages list. *Hardening note (panel):* add a CI assertion
+  that enumerates every supported language, loads its grammar, and smoke-parses a fixture,
+  failing the build on any missing/mismatched grammar — so a dropped grammar surfaces
+  loudly rather than silently skipping previously-parsed code.
+
+- **§6 always-on filesystem watch — a known freshness limitation, not just a nice-to-have.**
+  The change-detection SHA gate, the post-merge + post-checkout reindex hooks, and the
+  memory-fusion leg all ship, so the **git** path is fully covered: a pull/merge/branch-
+  switch advancing the default branch re-indexes (cheaply no-op'd when nothing moved).
+  **Limitation:** there is **no always-on fanotify/inotify watch**, so a **non-git tree**,
+  or a git tree mutated **out-of-band** without a merge/checkout event, is only as fresh as
+  the last manual rebuild — and §7 blast-radius advisories + graph-informed delegation that
+  read graph state inherit that staleness for such trees. The manual refresh path exists
+  today (`aimee index scan <project> <root>`, or the `/v1/code/scan` route); the gap is
+  *automatic* freshness without a git event. Deferred because this dev/build host
+  **SIGTERMs long-running watch daemons**, so a watcher cannot be end-to-end validated here
+  — an operational blocker, not a correctness one. Revisit on a deployment target that
+  supports persistent watchers; until then, treat non-git / out-of-band freshness as
+  manual-refresh-only.
+
+- **Post-merge AppSec pass (recommended, separate from this close-out).** This proposal
+  closing does not substitute for a code-level security review of the landed `testing`
+  surface. A dedicated AppSec pass over §3 provenance, §4 LLM-judge (untrusted-output-
+  driven; runs opt-in + advisory with deterministic precision self-suppress + bounded
+  candidate count), §5 RRF legs, §6 reindex hooks (marker-guarded, SHA-gated, opt-in;
+  `shquote`-hardened against ref-name injection), §7 advisory delegation, and §8 the web
+  route (bounded `max_results`, UDS-trusted) is recommended before promotion beyond
+  `testing`.
 
 ## Non-goals
 
