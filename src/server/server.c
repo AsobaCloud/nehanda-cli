@@ -809,14 +809,20 @@ static int server_memory_intercept(const char *tool, const char *tool_input, con
    snprintf(row.name, sizeof(row.name), "%s", name);
    snprintf(row.type, sizeof(row.type), "%s", "fact");
    snprintf(row.last_client, sizeof(row.last_client), "%s", client);
-   row.body = (char *)content; /* borrowed; hmem_upsert binds TRANSIENT */
+   /* content is owned by ti and stays valid until cJSON_Delete(ti) at the end of
+    * this function — after hmem_upsert has copied it (SQLITE_TRANSIENT). */
+   row.body = (char *)content;
    if (hmem_upsert(&row, NULL) != 0)
    {
       cJSON_Delete(ti); /* store failed — fail open rather than block the agent */
       return 0;
    }
-   memory_redirect_rematerialize(path, content, home, scope->projects_root);
-   hmem_audit("redirect", project, name, NULL);
+   /* DB1 is authoritative; the on-disk file is a cache. If the mirror write fails
+    * the row is still stored and the next session-start hydrate re-creates the
+    * file — so note it in the single 'redirect' audit rather than failing the op. */
+   int rmrc = memory_redirect_rematerialize(path, content, home, scope->projects_root);
+   hmem_audit("redirect", project, name,
+              rmrc == 0 ? NULL : "file write failed; stored in DB1, pending hydrate");
    snprintf(msg, msg_len,
             "Saved to aimee's central memory store as memory/%s.md (aimee manages these "
             "files; it has been written for you).",
