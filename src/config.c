@@ -506,6 +506,20 @@ static void config_set_defaults(config_t *cfg)
    cfg->learning_implicit_workflow_repetition = 0;
    cfg->integrity_enabled = 0;
    cfg->integrity_dry_run = 1;
+   /* Ingress envelope DEFAULT-ON (operator decision 2026-06-28): inject the
+    * <aimee-context> memory/code preview on primary ingress turns, fold code hits
+    * to recoverable file:line refs (recover via code_span_get), and place the
+    * envelope after the stable prefix for cache survival. TURN OFF (per-request
+    * `X-Aimee-Compress: 0`, or set these false) for agentic ingress where recovery
+    * round-trips can erase the saving. Rationale, metrics + the honest-benchmark
+    * framing: proposal §8.0 (docs/proposals/done/ingress-compression-and-cache-
+    * alignment.md). The compress<-preinject dependency is enforced by control flow
+    * (ingress_preinject_build returns early when neither preinject nor typed-facts
+    * is on, before the compress flag is read — so compress alone is a safe no-op).
+    * Anthropic injection + failure-mining stay opt-in (separate gates). */
+   cfg->ingress_preinject_enabled = 1;
+   cfg->ingress_compress_enabled = 1;
+   cfg->ingress_cache_placement_enabled = 1;
    cfg->ingress_preinject_assembly_budget = 6144;
    cfg->ingress_max_raw_scans = 0;
    cfg->code_span_max_lines = 400;
