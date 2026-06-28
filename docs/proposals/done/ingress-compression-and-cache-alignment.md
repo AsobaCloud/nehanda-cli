@@ -1028,20 +1028,26 @@ cherry-pick datasets to post a ~90% headline too, but we use reliable datasets w
 **end-users can expect in production**.
 
 **When to turn it off (the documented reason).** The fold is a pure win for **non-agentic
-chat ingress** (no tool loop → no recovery). For **agentic ingress** (Codex / Claude-Code,
-the dominant coding traffic) the agent re-opens the very code it was pointed at, so
-`code_span_get` **recovery round-trips can erase or invert the saving** (per-hit the fold
-saves ~one snippet ≈ 40 tok; a recovery costs the tool-call ≈ 30–40 tok + the returned span
-≈ 40–100 tok — so a high recovery rate is net-negative). This is the proposal's own §6
-net-token risk. **Disable for agentic/high-recovery workloads** via:
-- per-request **`X-Aimee-Compress: 0`** header (request-scoped, §1.4/B1 — never forced on);
+chat ingress** *when no recovery is needed* (no tool loop, no follow-up that re-opens the
+folded code). For **agentic ingress** (Codex / Claude-Code, the dominant coding traffic) the
+agent re-opens the very code it was pointed at, so `code_span_get` **recovery round-trips can
+erase or invert the saving** (per-hit the fold saves ~one snippet ≈ 40 tok; a recovery costs
+the tool-call ≈ 30–40 tok + the returned span ≈ 40–100 tok — so a high recovery rate is
+net-negative). This is the proposal's own §6 net-token risk. **Disable for
+agentic/high-recovery workloads** via:
+- per-request **`X-Aimee-Compress: 0`** header (request-scoped via `request_context_t`,
+  §1.4/B1 — never thread-local, never forced on);
 - the config flags (`ingress_compress_enabled: false`, or the whole envelope via
   `ingress_preinject_enabled: false`).
 
-The remaining §6 quantitative gates (the per-task-class net-token bench + forced-rehydration
-accuracy A/B on a deployed agentic corpus) stay **valuable future measurement** to tune *for
-which ingress classes* the levers should stay on — they no longer block the ship decision,
-which the operator has made.
+The ~48% / ~78% figures are a **single representative live measurement** on `.254` (one
+code-heavy turn), not a full distribution — the per-task-class spread is what the §6 bench
+quantifies. Those remaining §6 gates (the per-task-class net-token bench + forced-rehydration
+accuracy A/B on a deployed agentic corpus) stay **valuable future measurement** and no longer
+block the ship decision (the operator has made it). The natural **follow-up refinement** is
+to auto-detect ingress class (agentic vs plain chat — e.g. the presence of a tool loop / the
+Codex/Claude-Code MCP surface) and keep the fold on for plain chat while defaulting it off
+for detected agentic traffic, instead of one global switch.
 
 ## §8 Risks
 
