@@ -1,8 +1,21 @@
 # Proposal: Central agent-memory interception — redirect any agent's local memory into the aimee-server store
 
-- **State:** DRAFT (design approved; pre-implementation). Incorporates roundtable reviews
-  R1 (design, 28 items), R2 (proposal, degraded), and R3 (proposal, clean 6-panel,
-  24 items) — see the "Review revisions" sections.
+- **State:** done
+- **Completed:** 2026-06-28
+- **Moved from:** `docs/proposals/pending/central-agent-memory-interception.md`
+- **Summary:** **all four phases shipped to `testing`, live-validated on a deployed split
+  server.** P1–P4 (DB1 store + routes/CLI + interception + session-start hydration) plus
+  the v1.1/v1.2 follow-ups (multi-client scope registry, spill durability + audit log,
+  Bash-write interception, full reconcile, config-file scope override, remote-server
+  project key, real-time inotify backstop) and two e2e-found fixes (#817 startup segfault,
+  #819 split-server wiring). The approved test plan was executed (9/9 unit suites + a full
+  deployed split-server e2e) and surfaced one further fix (#829 per-client scoping on a
+  shared server). **"Done" = the v1 feature is built, merged, and dev-validated — it does
+  NOT mean production-ready/GA or safe for untrusted/remote/multi-tenant use**; the
+  security-relevant GA gates (prompt-injection provenance, RM3/4/8 remote auth, the
+  cross-client trust boundary, the non-Linux platform window) are recorded in
+  "Implementation status → Close-out scope". Design history: roundtable reviews R1 (design, 28 items),
+  R2 (degraded), R3/R4 (clean) — see the "Review revisions" sections.
 - **Thesis:** An agent's *local, self-owned* memory (today: the Claude Code harness
   file-memory at `~/.claude/projects/<proj>/memory/*.md` + `MEMORY.md`, written via the
   `Write`/`Edit` tools) should not be owned by the agent. aimee already hooks every
@@ -354,6 +367,118 @@ registry entry later if desired.
 - **P4** — session-start spill-consume → deterministic reconcile → incremental hydrate (§5)
   + `configure-hooks.sh` hook-before-reconcile ordering and default registry entries (§6).
   End-to-end test.
+
+## Implementation status
+
+**All four phases shipped to `testing`** (each its own PR, code-level roundtable-reviewed
+before merge per the phasing contract), plus v1.1/v1.2 follow-ups and the e2e/test-plan
+fixes. Modules: `src/db1/harness_memory.{c,h}`, `src/harness_memory_common.{c,h}`,
+`src/server/harness_memory_routes.c`, `src/memory_redirect.{c,h}`,
+`src/harness_memory_hydrate.{c,h}`, `src/harness_memory_watch.{c,h}`.
+
+**Core phases:**
+- **P1 (#794)** — DB1 `harness_memory` table + accessors + `harness_memory_common` (vendored
+  SHA-256 `content_hash`, project resolver). Timestamps are TEXT-ISO `datetime('now')` /
+  `deleted_at TEXT` per DB1 house style (the §2 sketch's `INTEGER` was an erratum, same
+  semantics).
+- **P2 (#795)** — `/v1/harness_memory/*` routes (upsert/get/list/search/tombstone/
+  bulk-tombstone/render) + `aimee harness-memory` CLI over the same handlers; server is the
+  **sole DB1 writer**.
+- **P3 (#798)** — `memory_redirect` interception stage in `pre_tool_check`: detect a
+  `Write`/`Edit` to a registered memory surface → **redirect-deny** → central store; aimee
+  re-materializes the file via a direct syscall (structural loop-bypass). `MEMORY.md` →
+  reject-deny with guidance.
+- **P4 (#802)** — session-start hydration DB1→disk with name-slug + write-confinement under
+  the project memdir.
+
+**v1.1 (#804/#806/#808):** config-driven **multi-client scope registry** (`harness_memory_scope`;
+adding an agent is one table row) + atomic hydrate; **spill durability** (`harness_memory_spill`
+producer/consumer) + **audit log** (`harness_memory_audit`) + session-start replay; **Bash-write
+interception** (reject-deny shell writes to memory files, quote-aware).
+
+**v1.2 (#809/#811/#813/#815):** **full reconcile** (disk-only `import_orphans` + tombstone
+removal, DB1-wins on hash mismatch); **config-file scope override**
+(`AIMEE_HARNESS_MEMORY_SCOPES` / `<AIMEE_HOME>/harness_memory_scopes.conf`); **remote-server
+project key** (thin client resolves + forwards `harness_project`, server validates);
+**real-time inotify backstop** (`harness_memory_watch` + `aimee harness-memory-watch`;
+Linux-only, no-op elsewhere) closing the at-write gap for non-tool edits.
+
+**e2e + test-plan fixes:**
+- **#817** — plugin-loader startup segfault (large `plugin_t` arrays were stack-allocated,
+  overflowing the main-thread stack on a plain non-container deploy; CI's Docker masked it) →
+  heap-allocated.
+- **#819** — interception was never wired into the **split** server: `handle_hooks_pre` in
+  `server/server.c` called the guardrails directly and never ran `memory_redirect`, and
+  `memory_redirect.o` wasn't linked into `aimee-server`. Fixed: `server_memory_intercept()`
+  runs before the guardrails, writes DB1 directly (`hmem_upsert`), mirrors to disk
+  (`memory_redirect_rematerialize`, confined under `projects_root`); module linked into the
+  server.
+- **#829** (found by executing the approved test plan) — a shared split server mis-scoped
+  every agent to one client because it read the server's own `AIMEE_HOOK_CLIENT`; the thin
+  client now forwards `AIMEE_HOOK_CLIENT` as `harness_client` and the server reads it
+  per-request (env fallback only for the local/combined path).
+
+**Validation.** The approved test plan was executed: 9/9 unit suites pass; a deployed
+split-server e2e covered functional (F1–F10), reconcile (RC1–RC9), fail-open, concurrency,
+security (traversal/symlink/cross-project), Bash TP/FP vectors, and the watcher — all PASS.
+
+**Deferred — pre-GA hardening / validation (explicit future-work, not v1-correctness):**
+- **Divergence audit counters** — `overwrite-divergent` / `removed_hash` audit metrics over
+  the reconcile path (the reconcile *behavior* is shipped + tested; this is observability).
+- **`AIMEE_FAULT` fault-injection seam** — a deterministic fault hook to exercise the
+  spill/fail-open paths under test without a real outage.
+- **Remote auth/replay hardening (RM3/4/8)** — the remote-server project-key path ships;
+  authenticated/replay-resistant transport hardening for untrusted remote callers is the
+  next layer.
+- **E-PROD deploy** — promotion + soak on a production deployment (validated on a dev split
+  server; not yet GA-deployed).
+- **Honest limits carried from Risks** — canonicalization is semantically-equivalent, not
+  byte-exact (deliberate cost of one `(project,name)` key shared across clients; round-trip
+  fidelity is audited + logged); shared memory bodies are untrusted (prompt-injection
+  surface — size-capped, no auto-exec; deeper tagging/review is a follow-up).
+
+### Close-out scope: what "done" does and does not mean (R5)
+
+A close-out roundtable (6 panelists, 0 failed, not degraded) agreed the feature is shipped
+and validated and that the proposal may be filed to `done/`, **conditioned on the done
+record stating the accepted residual risk and GA gates explicitly** (the panel's blocking
+item offered exactly this — a recorded threat model — as the alternative to building the
+deferred mitigations first). "Done" here means **the v1 feature is built, merged, and
+validated on a dev split server** — it does **not** mean production-ready, GA, or safe to
+expose to untrusted/remote/multi-tenant callers. The following are recorded as
+**GA-blocking gates**, reclassified from generic future-work:
+
+- **Untrusted shared-memory / cross-agent prompt-injection (GA-blocking for multi-principal
+  use).** One `(project,name)` row shared across clients + session-start hydration is, by
+  design, a path for one agent (or an external edit) to plant body text later hydrated into
+  another agent's context. **v1 trust model:** *all clients sharing a project are mutually
+  trusted* (single-user host). Multi-principal / multi-tenant use is **not supported** until
+  provenance/taint metadata (origin/scope tagging at the hydration boundary) ships and
+  consumers can refuse cross-scope bodies. **Any tool that injects shared memory into a
+  privileged prompt must treat the content as untrusted** until that work lands.
+- **Remote exposure is GA-blocked on RM3/RM4/RM8 (auth + replay hardening).** The
+  remote-server project key (#813) + server-side interception (#819) mean a live remote path
+  exists, but its auth/replay hardening is deferred. Closing this proposal **does not
+  authorize E-PROD or remote multi-user exposure**; that remains gated on RM3/4/8.
+- **Cross-client isolation is a load-bearing trust boundary.** Per-agent scoping depends on
+  `AIMEE_HOOK_CLIENT` being forwarded honestly by the thin client and trusted per-request by
+  the server (the #829 contract; the local/combined path env-fallback requires
+  `AIMEE_HOOK_CLIENT` UNSET on a shared server). Before any multi-principal deployment the
+  server must **authenticate the upstream thin client** so a rogue client cannot spoof an
+  arbitrary `AIMEE_HOOK_CLIENT` to read another client's memory. The UDS hop is currently
+  filesystem-trusted.
+- **Platform matrix.** The real-time backstop (`harness_memory_watch`, inotify) is
+  **Linux-only**; on macOS/Windows (where Claude/Gemini/Codex/Copilot are routinely run)
+  external/manual edits are reconciled **only at session-start** (DB1-wins), leaving a
+  between-sessions window in which a manual edit can be overwritten. A cross-platform watcher
+  (FSEvents / `ReadDirectoryChangesW`) or a polling fallback is future-work; until then the
+  at-write guarantee is Linux-only and the rest is session-start reconcile.
+- **Drift observability.** The deferred `overwrite-divergent` / `removed_hash` audit
+  counters are the **primary signal** that the backstop, reconcile, and canonicalization
+  layers are silently disagreeing in production — prioritized first among the pre-GA items.
+- **Hash domain (documented).** The SHA-256 `content_hash` is computed over the
+  **canonicalized** body, not the raw on-disk bytes — an integrity check over the normalized
+  representation, consistent with byte-non-exact rendering.
 
 ## Non-goals
 
