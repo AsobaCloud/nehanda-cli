@@ -556,6 +556,7 @@ $(TESTPREFIX)/unit-test-css-graph: \
                                        $(OBJDIR)/db2/css_graph.o \
                                        $(OBJDIR)/css_analyze.o \
                                        $(OBJDIR)/db2/code_index.o \
+                                       $(OBJDIR)/db2/cross_repo_resolver.o \
                                        $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
                                        $(OBJDIR)/db2/db_schema.o \
                                        $(TEST_CORE_OBJS)
@@ -568,6 +569,7 @@ $(TESTPREFIX)/unit-test-css-insights: \
                                        $(OBJDIR)/db2/css_graph.o \
                                        $(OBJDIR)/css_analyze.o \
                                        $(OBJDIR)/db2/code_index.o \
+                                       $(OBJDIR)/db2/cross_repo_resolver.o \
                                        $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
                                        $(OBJDIR)/db2/db_schema.o \
                                        $(TEST_CORE_OBJS)
@@ -599,6 +601,7 @@ $(TESTPREFIX)/unit-test-css-migration: \
                                        $(OBJDIR)/db2/typed_facts.o \
                                        $(OBJDIR)/css_analyze.o \
                                        $(OBJDIR)/db2/code_index.o \
+                                       $(OBJDIR)/db2/cross_repo_resolver.o \
                                        $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
                                        $(OBJDIR)/db2/db_schema.o \
                                        $(TEST_CORE_OBJS)
@@ -615,6 +618,7 @@ $(TESTPREFIX)/unit-test-css-render: \
                                        $(OBJDIR)/db2/typed_facts.o \
                                        $(OBJDIR)/css_analyze.o \
                                        $(OBJDIR)/db2/code_index.o \
+                                       $(OBJDIR)/db2/cross_repo_resolver.o \
                                        $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
                                        $(OBJDIR)/db2/db_schema.o \
                                        $(OBJDIR)/cJSON.o \
@@ -927,7 +931,8 @@ $(TESTPREFIX)/unit-test-markdown: $(OBJDIR)/tests/test_markdown.o $(OBJDIR)/mark
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 $(TESTPREFIX)/unit-test-index: $(OBJDIR)/tests/test_index.o $(TEST_DATA_OBJS_MOCK) \
-                               $(OBJDIR)/db2/canonical_index.o
+                               $(OBJDIR)/db2/canonical_index.o \
+                               $(OBJDIR)/db2/cross_repo_resolver.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 $(TESTPREFIX)/unit-test-memory-advanced: $(OBJDIR)/tests/test_memory_advanced.o $(TEST_DATA_OBJS_MOCK)
