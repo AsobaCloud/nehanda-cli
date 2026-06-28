@@ -720,7 +720,24 @@ static int handle_hud_status(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 static int server_memory_intercept(const char *tool, const char *tool_input, const char *cwd,
                                    cJSON *req, char *msg, size_t msg_len)
 {
-   const char *client = getenv("AIMEE_HOOK_CLIENT");
+   /* The client identity is per-REQUEST: a single shared server fields hooks from
+    * many agents (claude/gemini/codex/...), so it must use the harness_client the
+    * thin client forwarded — NOT the server's own AIMEE_HOOK_CLIENT env (which
+    * would scope every request to one fixed client). Fall back to the env only for
+    * the local/combined-binary path where no field is sent; on a shared split
+    * server AIMEE_HOOK_CLIENT must be UNSET so an older/3rd-party client that omits
+    * the field is treated as unknown (no interception) rather than mis-scoped.
+    * TRUST: harness_client is client-supplied and untrusted, but it is used SOLELY
+    * as a scope-registry lookup key — never an authorization, filesystem, or DB
+    * path input. An unknown key → no interception; a spoofed registered name only
+    * re-scopes the spoofer's OWN writes (no cross-client exposure, no escalation).
+    * Do not derive anything but the scope from it. */
+   const char *client = NULL;
+   cJSON *hc = cJSON_GetObjectItemCaseSensitive(req, "harness_client");
+   if (cJSON_IsString(hc) && hc->valuestring && hc->valuestring[0])
+      client = hc->valuestring;
+   if (!client)
+      client = getenv("AIMEE_HOOK_CLIENT");
    const char *home = getenv("HOME");
    if (!client || !client[0] || !home || !home[0])
       return 0;
