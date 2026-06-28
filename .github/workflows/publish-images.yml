@@ -117,8 +117,11 @@ jobs:
       # and (2) point docker's storage at the runner's larger /mnt disk (~65 GB free)
       # BEFORE the buildx builder is created, so buildkit writes its layers there. Both
       # are scoped to the llm legs — the C images build fine without paying this cost.
-      - name: Free disk space (aimee-llm legs)
-        if: startsWith(matrix.image.name, 'aimee-llm')
+      - name: Free disk space (aimee-llm + combined legs)
+        # The combined (aimee-server-kb) image now bundles the aimee-llm CPU
+        # runtime + ~5.5 GB of baked GGUFs (COPYd from aimee-llm-cpu), so it needs
+        # the same disk headroom as the llm legs.
+        if: startsWith(matrix.image.name, 'aimee-llm') || matrix.image.name == 'aimee-server-kb'
         run: |
           echo "before:"; df -h / /mnt
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -128,8 +131,8 @@ jobs:
           sudo apt-get clean || true
           echo "after:"; df -h /
 
-      - name: Move docker storage to /mnt (aimee-llm legs)
-        if: startsWith(matrix.image.name, 'aimee-llm')
+      - name: Move docker storage to /mnt (aimee-llm + combined legs)
+        if: startsWith(matrix.image.name, 'aimee-llm') || matrix.image.name == 'aimee-server-kb'
         run: |
           sudo systemctl stop docker docker.socket || true
           sudo mkdir -p /mnt/docker
@@ -164,12 +167,24 @@ jobs:
           # Images bundle the browser UI (WITH_WEBCHAT=1, the default). webchat's
           # frontend dependency (@rakuensoftware/smoothgui) is vendored in-repo, so
           # the build needs no npm token. The aimee-kb image ignores WITH_WEBCHAT.
+          # Bundled aimee-llm in the combined image is AMD64-ONLY: the llama.cpp
+          # runtime baked into aimee-llm-cpu is the x64 Vulkan binary, so the arm64
+          # combined leg builds lean (WITH_LLM=0) and points at an external llm.
+          # CAVEAT (ordering): the amd64 combined leg COPYs from aimee-llm-cpu:latest
+          # — i.e. the PREVIOUS release's llm image, since this run's llm tags aren't
+          # manifest-merged until after the build matrix. The gateway/model contract
+          # is stable across releases, but for a release that materially changes the
+          # llm image, publish/promote aimee-llm-cpu first (or re-run this leg).
+          # Digest-pinned ordering (combined `needs` the llm digest) is the follow-up.
           build-args: |
             AIMEE_VERSION=${{ needs.prep.outputs.version }}
             WITH_WEBCHAT=1
             ${{ matrix.image.embedder_arg }}
             ${{ matrix.image.reranker_arg }}
             ${{ matrix.image.extra_args }}
+            ${{ (matrix.image.name == 'aimee-server-kb' && matrix.platform.arch == 'amd64') && 'WITH_LLM=1' || '' }}
+            ${{ (matrix.image.name == 'aimee-server-kb' && matrix.platform.arch == 'amd64') && format('AIMEE_LLM_CPU_IMAGE=ghcr.io/{0}/aimee-llm-cpu:latest', env.OWNER) || '' }}
+            ${{ (matrix.image.name == 'aimee-server-kb' && matrix.platform.arch == 'arm64') && 'WITH_LLM=0' || '' }}
           outputs: type=image,name=ghcr.io/${{ env.OWNER }}/${{ matrix.image.name }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
