@@ -1,6 +1,12 @@
 # Proposal: aimee-kb LLM endpoint config + zero-config default CPU container
 
-**Status:** IN PROGRESS — P1 (config surface) complete in #694; P2 (zero-config default CPU sibling) is the open deploy-tier residual.
+**Status:** done — P1 (config surface) shipped in #694; P2 (zero-config CPU LLM) delivered
+across all deploy topologies via the unified `aimee-llm` architecture, including the
+**combined image now bundling + auto-starting the aimee-llm CPU variant** (see the
+2026-06-28 reconciliation). P2's original kb-managed-sibling mechanism was **superseded** by
+`aimee-llm` as a first-class deploy unit.
+**Completed:** 2026-06-28
+**Moved from:** `docs/proposals/pending/kb-llm-endpoints-and-default-cpu.md`
 **Owner:** deploy/kb
 
 > **Reconciliation (2026-06-25).** **P1 — config surface — is complete and shipped in
@@ -19,6 +25,44 @@
 > environment that can exercise it (same class as the deployment/CI residual in
 > [autonomous-dev-execution-substrate.md](autonomous-dev-execution-substrate.md) §3). The
 > proposal stays in `pending/` until P2 lands.
+
+> **Reconciliation (2026-06-28) — closing out: P2's goal delivered, its mechanism
+> superseded.** The principle (the kb runs no model and calls a separate `aimee-llm`
+> container over HTTP for embed/rerank/synth) and the zero-config CPU UX are both **realized
+> in the shipped deploy** — but through a *different* mechanism than P2 sketched, so the
+> proposal is closed as done/superseded rather than waiting on the original P2 item:
+>
+> - **`aimee-llm` is now a first-class deploy unit, not a kb-managed sibling.** The unified
+>   Vulkan llama.cpp image (CPU + GPU tiers via `AIMEE_LLM_NGL`) replaced the old
+>   torch-embedder + standalone-llm split. The kb never spawns or manages it.
+> - **Zero-config CPU default — delivered in `deploy/compose/aimee.yaml`.** The base compose
+>   brings up an `aimee-llm` service defaulting to the **CPU** image
+>   (`${AIMEE_LLM_IMAGE:-ghcr.io/rakuensoftware/aimee-llm:cpu}`) and points the kb at it by
+>   default (`AIMEE_LLM_URL: ${AIMEE_LLM_URL:-http://aimee-llm:8742}`, dim 1024). The
+>   operator opts *up* to the GPU tier (2560-dim + `/dev/dri`) by layering
+>   `deploy/compose/aimee.gpu.yaml` — exactly the "opt up only" UX in this proposal.
+> - **SmoothNAS — `aimee-llm` is its own installable plugin** (`deploy/smoothnas/
+>   aimee-llm.plugin.yaml`), and `aimee-kb.plugin.yaml` exposes `AIMEE_LLM_URL` (+ the
+>   per-service overrides + `AIMEE_EMBEDDING_DIM`) as config knobs pointed at it. The
+>   plugin model installs `aimee-llm` as a peer rather than having the kb conditionally
+>   start a CPU sibling — the same outcome, owned by the deploy unit, not the kb.
+> - **Combined all-in-one image — bundles + auto-starts the aimee-llm CPU variant.**
+>   `Dockerfile.combined` (`WITH_LLM=1`, default on) COPYs the llama.cpp/Vulkan runtime +
+>   the unified gateway + baked GGUFs from the prebuilt `aimee-llm-cpu` image;
+>   `combined-entrypoint.sh` auto-starts the gateway and points the kb embed path + the
+>   curator synth at `127.0.0.1:8742` (dim 1024) — so the default combined container is
+>   self-contained (only Postgres external). Operator endpoints win (an external
+>   `AIMEE_LLM_URL`/`AIMEE_EMBEDDER_URL`/`LLM_ENDPOINT` is never overridden;
+>   `AIMEE_BUNDLED_LLM=off` for the lean image). amd64-only (the llama.cpp runtime is the
+>   x64 Vulkan binary); the arm64 combined image stays lean + external.
+> - **Validated live:** the CPU tier end-to-end on pve `.253` (CT 150) and the GPU split on
+>   `.254` (`AIMEE_LLM_URL=http://10.100.0.1:8742`, 2560-dim). The combined-image bundling
+>   ships in the same change as this close-out; its runtime is exercised by the `:testing`
+>   combined image on deploy (the image build runs in `publish-testing.yml`).
+>
+> Net: every part of this proposal's goal is in `testing`; the only "residual" was an
+> implementation mechanism that the unified-`aimee-llm` architecture made unnecessary. No
+> outstanding work — filed to `done/`.
 
 ## Principle
 
