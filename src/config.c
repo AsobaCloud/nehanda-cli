@@ -506,6 +506,19 @@ static void config_set_defaults(config_t *cfg)
    cfg->learning_implicit_workflow_repetition = 0;
    cfg->integrity_enabled = 0;
    cfg->integrity_dry_run = 1;
+   /* Ingress envelope DEFAULT-ON (operator decision 2026-06-28). The
+    * <aimee-context> memory/code preview is injected on primary ingress turns and
+    * the code block is folded to recoverable `file:line` refs (recover via
+    * code_span_get). Measured ~48% prompt reduction on code-heavy turns; the
+    * envelope code block shrinks ~78% (416->93 tok). Cache-prefix placement is on
+    * too (better provider prefix alignment; no token-economics downside). TURN OFF
+    * (per-request `X-Aimee-Compress: 0`, or set these false) for agentic ingress
+    * where the agent re-opens the folded code so recovery round-trips can erase the
+    * saving (the §6 net-token risk). See the proposal §7/§8. Anthropic injection +
+    * failure-mining stay opt-in (different reachability/pipeline gates). */
+   cfg->ingress_preinject_enabled = 1;
+   cfg->ingress_compress_enabled = 1;
+   cfg->ingress_cache_placement_enabled = 1;
    cfg->ingress_preinject_assembly_budget = 6144;
    cfg->ingress_max_raw_scans = 0;
    cfg->code_span_max_lines = 400;
