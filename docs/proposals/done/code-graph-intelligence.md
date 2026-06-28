@@ -13,8 +13,10 @@
   `AIMEE_TREESITTER` build, fall-through to the hand-rolled extractors). Two **optional
   follow-ups** were deliberately deferred at close-out (roundtable-ratified) and are
   recorded as future-work / known limitations below: tree-sitter grammars **beyond** the
-  16-language parity set, and an always-on §6 fanotify/inotify watch. See the
-  "Implementation status" and "Deferred" sections.
+  16-class parity set, and an always-on §6 fanotify/inotify watch — the latter is a
+  **documented freshness limitation** (non-git / out-of-band trees stay only as fresh as
+  the last manual `aimee index scan`), not merely a nice-to-have. See the "Implementation
+  status" and "Deferred" sections.
 - **Thesis:** aimee should treat the codebase as a *living* graph that is (a) fully
   built without a manual step, (b) parsed broadly, (c) ranked by **graph structure
   AND vector similarity AND memory** in one query, and (d) able to *change what the
@@ -133,9 +135,11 @@ otherwise — so the **default build is unchanged**. The runtime + grammars are 
 generated parsers, so they are **fetched at build time** (`scripts/fetch-treesitter.sh`,
 pinned commits, gitignored) and compiled only in the opt-in `AIMEE_TREESITTER` build
 (external scanners linked where a grammar needs one); `code_treesitter.c` is a stub
-without it. Ships grammars for **all 16 hand-rolled supported languages** — C, C++, C#,
-Python, Go, JavaScript, TypeScript, Rust, Java, Ruby, PHP, Lua, Bash, Swift, Kotlin,
-Dart, CSS — each with a per-language `classify_*` mapping its definition node types to
+without it. Ships grammars covering **all 16 hand-rolled-supported language classes** —
+C/C++, C#, Python, Go, JavaScript, TypeScript, Rust, Java, Ruby, PHP, Lua, Bash, Swift,
+Kotlin, Dart, CSS — as **17 tree-sitter grammars** (C and C++, which the hand-rolled
+extractor handles as one `LANG_C` class, get separate `tree_sitter_c`/`tree_sitter_cpp`
+grammars), each with a per-language `classify_*` mapping its definition node types to
 `function`/`type`. The walk descends through organizational wrappers (namespaces,
 `export`/decorator wrappers) and the member bodies of types, so **nested members
 (class/impl/trait methods) are surfaced** across every OO language — while it never
@@ -383,9 +387,10 @@ all three are reachable from the frontend over the trusted UDS hop).
 - **§0.5** default-branch sourcing (`code_collect.c`, `unit-test-code-collect`).
 - **§1** auto-build of the projection graph on the curator drain, content-addressed +
   idempotent (`kb_graph_build_project_if_changed`, `unit-test-kb-graph`).
-- **§2** tree-sitter extraction front-end (`code_treesitter.c`) with grammars for **all
-  16 hand-rolled supported languages** (C, C++, C#, Python, Go, JavaScript, TypeScript,
-  Rust, Java, Ruby, PHP, Lua, Bash, Swift, Kotlin, Dart, CSS), feeding the same
+- **§2** tree-sitter extraction front-end (`code_treesitter.c`) covering **all 16
+  hand-rolled-supported language classes** (C/C++, C#, Python, Go, JavaScript, TypeScript,
+  Rust, Java, Ruby, PHP, Lua, Bash, Swift, Kotlin, Dart, CSS) as 17 grammars — C and C++,
+  one `LANG_C` class in the hand-rolled extractor, get separate grammars — feeding the same
   `definition_t` symbols as the hand-rolled extractors with fall-through; descends through
   organizational wrappers + type member bodies so **nested members are surfaced**, and
   extracts **call edges** (`code_treesitter_calls` → `extract_calls`). Opt-in
@@ -436,15 +441,16 @@ all three are reachable from the frontend over the trusted UDS hop).
   `webchat/graph_test.go`) over the `index_graph_*` MCP tools.
 
 **Deferred future-work — optional, ratified at close-out (every shipped section's
-front-end is complete).** A close-out roundtable (`minimax` / `mistral` / `mimo-2.5-pro` /
-`glm-5.2` / `codex` + 1; 6 panelists, 0 failed, not degraded) converged on closing the
+front-end is complete).** A close-out roundtable (6 panelists, 0 failed, not degraded)
+converged on closing the
 proposal now and carrying the two items below as explicit future-work, each with the scope
 recorded so it is a self-contained task, not a re-discovered design:
 
-- **§2 grammars beyond the 16 supported languages.** The tree-sitter front-end, all 16
-  hand-rolled-parity grammars, call-edge extraction, nested-member descent, and the opt-in
+- **§2 grammars beyond the 16-class supported set.** The tree-sitter front-end, all
+  hand-rolled-parity grammars (17 grammars covering the 16 hand-rolled language classes —
+  C and C++ split), call-edge extraction, nested-member descent, and the opt-in
   `treesitter` CI lane all ship. The proposal's aspirational ≥30-language target is **not**
-  met and **not** claimed shipped — only the 16-language hand-rolled parity set is covered.
+  met and **not** claimed shipped — only the 16-class hand-rolled parity set is covered.
   Extending toward it is mechanical and carries **no parity regression** (the extra
   languages have no hand-rolled coverage today), so it is a build-tier / binary-size
   decision per deploy, not a gap. Per-language add recipe: (1) vendor its `parser.c`
