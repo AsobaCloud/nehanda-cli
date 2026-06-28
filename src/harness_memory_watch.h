@@ -18,6 +18,8 @@ extern "C"
 {
 #endif
 
+   /* An hmem_watch_t is single-owner: open/poll/free must all run on one thread
+    * (the watcher loop). It is not safe to poll the same handle concurrently. */
    typedef struct hmem_watch hmem_watch_t;
 
    /* Open an inotify watch over `memreal` (an absolute, realpath'd memory dir)
