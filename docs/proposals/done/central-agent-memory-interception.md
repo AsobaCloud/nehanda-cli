@@ -3,13 +3,13 @@
 - **State:** done
 - **Completed:** 2026-06-28
 - **Moved from:** `docs/proposals/pending/central-agent-memory-interception.md`
-- **Summary:** **all four phases shipped to `testing`, live-validated on a deployed split
-  server.** P1–P4 (DB1 store + routes/CLI + interception + session-start hydration) plus
+- **Summary:** **all four phases shipped to `testing`, live-validated on a dev split
+  server** (a dev deployment, not production). P1–P4 (DB1 store + routes/CLI + interception + session-start hydration) plus
   the v1.1/v1.2 follow-ups (multi-client scope registry, spill durability + audit log,
   Bash-write interception, full reconcile, config-file scope override, remote-server
   project key, real-time inotify backstop) and two e2e-found fixes (#817 startup segfault,
   #819 split-server wiring). The approved test plan was executed (9/9 unit suites + a full
-  deployed split-server e2e) and surfaced one further fix (#829 per-client scoping on a
+  dev split-server e2e) and surfaced one further fix (#829 per-client scoping on a
   shared server). **"Done" = the v1 feature is built, merged, and dev-validated — it does
   NOT mean production-ready/GA or safe for untrusted/remote/multi-tenant use**; the
   security-relevant GA gates (prompt-injection provenance, RM3/4/8 remote auth, the
@@ -418,7 +418,7 @@ Linux-only, no-op elsewhere) closing the at-write gap for non-tool edits.
   client now forwards `AIMEE_HOOK_CLIENT` as `harness_client` and the server reads it
   per-request (env fallback only for the local/combined path).
 
-**Validation.** The approved test plan was executed: 9/9 unit suites pass; a deployed
+**Validation.** The approved test plan was executed: 9/9 unit suites pass; a dev
 split-server e2e covered functional (F1–F10), reconcile (RC1–RC9), fail-open, concurrency,
 security (traversal/symlink/cross-project), Bash TP/FP vectors, and the watcher — all PASS.
 
@@ -427,9 +427,10 @@ security (traversal/symlink/cross-project), Bash TP/FP vectors, and the watcher 
   the reconcile path (the reconcile *behavior* is shipped + tested; this is observability).
 - **`AIMEE_FAULT` fault-injection seam** — a deterministic fault hook to exercise the
   spill/fail-open paths under test without a real outage.
-- **Remote auth/replay hardening (RM3/4/8)** — the remote-server project-key path ships;
-  authenticated/replay-resistant transport hardening for untrusted remote callers is the
-  next layer.
+- **Remote auth/replay hardening (RM3/RM4/RM8 — the test plan's remote-transport risk
+  items: caller authentication, request integrity, and replay resistance for untrusted
+  remote callers).** The remote-server project-key path ships; this hardening layer is the
+  next step and is GA-blocking for remote exposure (see Close-out scope).
 - **E-PROD deploy** — promotion + soak on a production deployment (validated on a dev split
   server; not yet GA-deployed).
 - **Honest limits carried from Risks** — canonicalization is semantically-equivalent, not
