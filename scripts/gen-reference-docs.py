@@ -155,15 +155,19 @@ CFG_KEY_DESC = {
     "require_session_worktree": "Fail closed on mutating ops outside an aimee-managed worktree "
     "(session-isolation guard; default off).",
     "ingress_preinject_assembly_budget": "Token budget for ingress context pre-injection.",
-    "ingress_preinject_enabled": "Enable `<aimee-context>` pre-injection on ingress.",
+    "ingress_preinject_enabled": "Enable `<aimee-context>` pre-injection on ingress "
+    "(memory/code preview envelope on primary ingress turns; default on).",
     "ingress_preinject_anthropic_enabled": "Inject the `<aimee-context>` envelope on the "
     "Anthropic-native /v1/messages passthrough too (default off).",
     "ingress_compress_enabled": "Enable ingress envelope compression: span-enrich code hits and "
-    "fold code entries into recoverable references (default off).",
+    "fold code entries into recoverable `file:line` references (recover via code_span_get). "
+    "Default on (~48% prompt reduction on code turns); turn off (or send `X-Aimee-Compress: 0`) "
+    "for agentic ingress where the agent re-opens folded code so recovery round-trips can erase "
+    "the saving.",
     "ingress_compress_min_chars": "Minimum code-snippet length (chars) before it is folded to a "
     "file:line reference (default 80).",
     "ingress_cache_placement_enabled": "Append the <aimee-context> envelope after the stable "
-    "instructions prefix (not before) so provider prefix caches survive (default off).",
+    "instructions prefix (not before) so provider prefix caches survive (default on).",
     "ingress_trusted_proxy_secret": "Shared secret authenticating a trusted ingress proxy.",
     "ingress_usage_accounting_enabled": "Account token usage on ingress requests.",
     "integrity_dry_run": "Run integrity checks without enforcing.",

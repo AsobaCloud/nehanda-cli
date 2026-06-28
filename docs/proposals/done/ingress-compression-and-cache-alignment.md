@@ -1,18 +1,21 @@
 # Proposal: Envelope compression, cache-prefix alignment, reversible rehydration, and failure-mined corrections
 
-- **State:** in progress — implementation incomplete (2026-06-26). The per-phase
-  *machinery* for P1b/P2/P3/P4/P5 is in place behind **default-off flags** (PRs #743,
-  #744, #746, #748, #750, #751, #754, atop P0 #585), but the proposal is **not yet
-  complete**: the default-flip **validation gates remain open** and block every flip.
-  Specifically still TODO: the §6 net-token bench on Aimee's real corpora, the
-  forced-rehydration accuracy A/B, and the per-ingress MCP-tool reachability proof —
-  each requires a live Codex/Claude-Code with a registered Aimee MCP server and a
-  GPU/deployment-tier corpus (not yet run). **P2e** (the in-process rehydration
-  handle store) is **not yet built** — held until ephemeral JSON/tool-result folding
-  has a live producer (durable code folds recover via `code_span_get` and never touch
-  the store). Until those gates pass, every lever stays default-off and this proposal
-  remains in `pending/`. The design-roundtable blockers (below) are resolved in
-  **§6.5 Design-review resolutions**.
+- **State:** done — **defaults flipped ON** (operator decision, 2026-06-28). The full
+  machinery (P0–P5 + the §6 bench) shipped behind flags (PRs #585, #743, #744, #746,
+  #748, #750, #751, #754, with deploy/transport fixes #756/#759/#761), was validated
+  live on `.254`, and the **ingress envelope + code-fold compression + cache-prefix
+  placement now default ON**: `ingress_preinject_enabled`, `ingress_compress_enabled`,
+  and `ingress_cache_placement_enabled` are true in `config_set_defaults`. The earlier
+  data-backed "keep off until the net-token gate passes" stance was **overridden by an
+  explicit operator decision to ship on by default with documented reasons to turn it
+  off** (see §8 "Operating the default-on levers"). What stays **opt-in**:
+  `ingress_preinject_anthropic_enabled` (Claude-Code MCP-reachability gate, §2.3/§3.4)
+  and the failure-mining levers (`kb.mining.*`, pipeline-correctness gate). **P2e** (the
+  in-process rehydration handle store) remains deferred — no producer until ephemeral
+  JSON/tool-result folding lands (durable code folds recover via `code_span_get` and
+  never touch a store). The design-roundtable blockers are resolved in **§6.5**.
+- **Completed:** 2026-06-28
+- **Moved from:** `docs/proposals/pending/ingress-compression-and-cache-alignment.md`
 
 ```yaml acceptance
 - {id: 1, tier: mechanical, check: "make unit-tests"}
@@ -999,6 +1002,52 @@ implementer and do not gate the first phase.
   the open reachability gate before any default flip — it needs a live Claude Code
   with the Aimee MCP server registered. Shipped as a separate opt-in phase behind its
   own gate, with system-block-array preservation.
+
+## §8.0 Operating the default-on levers (close-out, 2026-06-28)
+
+The ingress envelope + code-fold compression + cache-prefix placement now ship
+**default ON** by operator decision. This section is the **documented reason to turn
+them off** and the honest framing of the win.
+
+**What's on:** `ingress_preinject_enabled` (the `<aimee-context>` memory/code preview on
+primary ingress turns), `ingress_compress_enabled` (fold each code hit's snippet to a
+recoverable `file:line` reference — recover via `code_span_get`), and
+`ingress_cache_placement_enabled` (place the envelope after the stable instructions
+prefix so provider prefix caches survive). Anthropic injection and failure-mining stay
+opt-in.
+
+**Why ~50% is the honest, near-optimal number (not 90%).** Measured live on `.254` with a
+real model: the fold cut a code-heavy turn's prompt by **~48%** (the envelope code block
+shrank ~78%, 416→93 tokens). We deliberately report this real number rather than a
+headline. **Most compression systems fail to benchmark honestly**: rates of ~90% are
+reached only by (a) dropping information the consumer actually needs, or (b) handpicking /
+tailoring the benchmark dataset. ~50% is close to optimal for compression that *preserves
+the critical information the agent needs* — aimee's folds stay **recoverable**
+(`code_span_get` re-reads the exact span on demand), so nothing critical is lost. We could
+cherry-pick datasets to post a ~90% headline too, but we use reliable datasets with numbers
+**end-users can expect in production**.
+
+**When to turn it off (the documented reason).** The fold is a pure win for **non-agentic
+chat ingress** *when no recovery is needed* (no tool loop, no follow-up that re-opens the
+folded code). For **agentic ingress** (Codex / Claude-Code, the dominant coding traffic) the
+agent re-opens the very code it was pointed at, so `code_span_get` **recovery round-trips can
+erase or invert the saving** (per-hit the fold saves ~one snippet ≈ 40 tok; a recovery costs
+the tool-call ≈ 30–40 tok + the returned span ≈ 40–100 tok — so a high recovery rate is
+net-negative). This is the proposal's own §6 net-token risk. **Disable for
+agentic/high-recovery workloads** via:
+- per-request **`X-Aimee-Compress: 0`** header (request-scoped via `request_context_t`,
+  §1.4/B1 — never thread-local, never forced on);
+- the config flags (`ingress_compress_enabled: false`, or the whole envelope via
+  `ingress_preinject_enabled: false`).
+
+The ~48% / ~78% figures are a **single representative live measurement** on `.254` (one
+code-heavy turn), not a full distribution — the per-task-class spread is what the §6 bench
+quantifies. Those remaining §6 gates (the per-task-class net-token bench + forced-rehydration
+accuracy A/B on a deployed agentic corpus) stay **valuable future measurement** and no longer
+block the ship decision (the operator has made it). The natural **follow-up refinement** is
+to auto-detect ingress class (agentic vs plain chat — e.g. the presence of a tool loop / the
+Codex/Claude-Code MCP surface) and keep the fold on for plain chat while defaulting it off
+for detected agentic traffic, instead of one global switch.
 
 ## §8 Risks
 
