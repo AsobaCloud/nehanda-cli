@@ -709,6 +709,13 @@ static int handle_hooks(int argc, char **argv, int json_output)
    if (sid && sid[0])
       cJSON_AddStringToObject(req, "session_id", sid);
 
+   /* Forward THIS client's identity so the (possibly shared) server scopes memory
+    * interception to the right agent — the server must not assume its own
+    * AIMEE_HOOK_CLIENT when many agents hook into one server. */
+   const char *hook_client = getenv("AIMEE_HOOK_CLIENT");
+   if (hook_client && hook_client[0])
+      cJSON_AddStringToObject(req, "harness_client", hook_client);
+
    /* Resolve the harness-memory project key HERE, on the client, against the real
     * cwd / git repo / AIMEE_PROJECT_ID, and forward it: a remote server's
     * filesystem has none of those, so it could not resolve the key itself. Only
