@@ -39,6 +39,8 @@ static void resolve_workdir(wfe_ctx *ctx, char *buf, size_t n)
    if (wfe_worktree_ensure(wfe_ctx_work_item(ctx), wfe_ctx_worktree(ctx), repo_dir(),
                            wfe_autonomous_base(), buf, n) != 0)
       snprintf(buf, n, "%s", repo_dir()); /* fall back to the shared checkout */
+   if (!buf[0])                           /* guarantee a non-empty workdir for every caller */
+      snprintf(buf, n, "%s", repo_dir());
 }
 
 static int git_capture(const char *const argv[], char **out)
@@ -678,6 +680,8 @@ static wfe_step_result_t exec_custom(wfe_ctx *ctx, const wfe_node_t *node)
    char head[64] = "", base[64] = "", dhash[65] = "", err[128] = "";
    char handle[80];
    snprintf(handle, sizeof handle, "%s.out", node->id);
+   char wd[1024]; /* F2: a custom block acts in the work-item worktree too */
+   resolve_workdir(ctx, wd, sizeof wd);
 
    if (c->executor == WFE_EXEC_COMMAND)
    {
@@ -712,8 +716,8 @@ static wfe_step_result_t exec_custom(wfe_ctx *ctx, const wfe_node_t *node)
        * array (validated at load); run it directly (no shell), pinned to the
        * work-item repo, under a wall-clock timeout (kill -> step failed). */
       char *out = NULL;
-      int rc = safe_exec_capture_cwd_env_timeout((const char *const *)c->argv, repo_dir(), envp,
-                                                 &out, 1 << 20, wfe_custom_command_timeout_ms());
+      int rc = safe_exec_capture_cwd_env_timeout((const char *const *)c->argv, wd, envp, &out,
+                                                 1 << 20, wfe_custom_command_timeout_ms());
       free(out);
       if (rc != 0)
          return wfe_step_failed(); /* non-zero exit or SAFE_EXEC_TIMEOUT */
@@ -722,7 +726,7 @@ static wfe_step_result_t exec_custom(wfe_ctx *ctx, const wfe_node_t *node)
 
    if (c->produces == WFE_ART_BRANCH)
    {
-      if (wfe_git_freeze(repo_dir(), "HEAD", base, head, dhash, err, sizeof err) != 0 || !head[0])
+      if (wfe_git_freeze(wd, "HEAD", base, head, dhash, err, sizeof err) != 0 || !head[0])
          return wfe_step_failed();
       return wfe_step_advanced(handle, head, 0.0);
    }
