@@ -1,6 +1,7 @@
 /* wfe_iface.c -- the narrow executor vtable + step-result constructors. */
 #include "wfe_iface.h"
 
+#include <math.h> /* isfinite */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +34,29 @@ int wfe_base_is_protected(const char *branch)
 int wfe_autonomous_target_ok(void)
 {
    return !wfe_base_is_protected(wfe_autonomous_base());
+}
+
+/* Server-side authoritative cost estimate (WP-5): a delegate turn's USD cost as
+ * wall-clock seconds * a configured rate. Provider-agnostic (never trusts a
+ * provider-reported figure) so the per-run USD budget cap actually bites. Rate is
+ * AIMEE_AUTONOMY_USD_PER_SEC (default 0.0005 ~= $1.80/hr of delegate wall-clock); a
+ * malformed/negative override falls back to the default. Negative elapsed -> 0. */
+double wfe_autonomy_cost_estimate(double elapsed_secs)
+{
+   double rate = 0.0005;
+   const char *v = getenv("AIMEE_AUTONOMY_USD_PER_SEC");
+   if (v && v[0])
+   {
+      char *end = NULL;
+      double r = strtod(v, &end);
+      /* require finite AND strictly positive: inf/NaN or rate==0 would silently
+       * neutralize the budget cap (every turn would cost 0 or inf). Fall back. */
+      if (end && *end == '\0' && isfinite(r) && r > 0)
+         rate = r;
+   }
+   if (!(elapsed_secs > 0)) /* also rejects NaN */
+      return 0;
+   return elapsed_secs * rate;
 }
 
 static wfe_block_exec_fn g_execs[WFE_BLK__COUNT];

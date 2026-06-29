@@ -26,6 +26,7 @@
 #include "webchat_live.h"     /* db1_webchat_live_get — the browser's live-turn poll */
 #include "index.h"            /* index_scan_project after a webuser clone (WP-D) */
 #include "aimee_home.h"       /* aimee_home — proposal artifact dir for /v1/dev/submit */
+#include <math.h>             /* isfinite — validate the /v1/dev/submit budget cap */
 #include "wfe_engine.h"       /* wfe_work_item_create — POST /v1/dev/submit intake */
 #include "wfe_scheduler.h"    /* wfe_scheduler_notify — resume the autonomy driver */
 #include "wfe_approval.h"     /* wfe_approval_record/present — human-gate approval */
@@ -227,6 +228,24 @@ static int rh_dev_submit(const route_req_t *rq, char *resp, int cap)
       return 500;
    }
    cJSON_Delete(body);
+   /* WP-5: a per-run USD budget ceiling so a runaway autonomous run parks
+    * (budget_exceeded) instead of burning unbounded delegate cost. Default $5.00;
+    * AIMEE_AUTONOMY_MAX_USD overrides (set it to 0 to disable the cap). The engine
+    * checks cum_cost_usd against this each advance; cost is the server-side
+    * wall-clock estimate threaded from the delegate dispatch. */
+   {
+      double cap_usd = 5.0;
+      const char *v = getenv("AIMEE_AUTONOMY_MAX_USD");
+      if (v && v[0])
+      {
+         char *e = NULL;
+         double d = strtod(v, &e);
+         if (e && *e == '\0' && isfinite(d) && d >= 0) /* reject inf/NaN: would void the cap */
+            cap_usd = d;
+      }
+      if (cap_usd > 0)
+         db1_work_item_set_cost_cap(id, cap_usd);
+   }
    wfe_scheduler_notify(); /* drive it now; the run continues server-side */
    cJSON *ok = cJSON_CreateObject();
    cJSON_AddStringToObject(ok, "work_item_id", id);
