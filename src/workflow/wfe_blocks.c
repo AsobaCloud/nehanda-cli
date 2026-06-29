@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cJSON.h"
 #include "util.h"
 #include "wfe_def.h"
 #include "wfe_engine.h"
@@ -154,6 +155,38 @@ void wfe_set_delegate_provider(const wfe_delegate_provider_t *p)
    g_delegate = p;
 }
 
+/* Verify seam (see wfe_blocks.h). Default NULL: implement does not gate on
+ * verification (pre-WP-1b behavior). */
+static const wfe_verify_provider_t *g_verify = NULL;
+
+void wfe_set_verify_provider(const wfe_verify_provider_t *p)
+{
+   g_verify = p;
+}
+
+/* Run the mechanical verify gate on the implemented worktree. Returns 1 to ADVANCE
+ * (only when the top-level verdict is an explicit "passed"); 0 to BLOCK in every
+ * other case — FAIL CLOSED. Blocking cases: no provider installed (a missing safety
+ * gate must never let unverified work advance), the gate could not run, an
+ * unparseable verdict, or a verdict other than "passed". We parse the git_verify
+ * format=json document and read its TOP-LEVEL "verdict" field, so a nested or echoed
+ * verdict token cannot spoof the gate. Exposed (non-static) for the unit test. */
+int wfe_implement_verify_ok(const char *workdir)
+{
+   if (!g_verify || !g_verify->verify)
+      return 0; /* no gate -> fail closed (unverified work never advances) */
+   char verdict[4096] = "";
+   if (g_verify->verify(workdir, verdict, sizeof verdict) != 0)
+      return 0; /* gate could not run -> fail closed */
+   cJSON *doc = cJSON_Parse(verdict);
+   if (!doc)
+      return 0; /* unparseable -> fail closed */
+   const cJSON *vd = cJSON_GetObjectItemCaseSensitive(doc, "verdict");
+   int passed = cJSON_IsString(vd) && vd->valuestring && strcmp(vd->valuestring, "passed") == 0;
+   cJSON_Delete(doc);
+   return passed ? 1 : 0;
+}
+
 /* The step's assigned delegate from node params ("delegate"), or "" for none.
  * May be the sentinel "$random" — the provider resolves it to a random agent. */
 static const char *node_delegate(const wfe_node_t *node)
@@ -235,14 +268,22 @@ static wfe_step_result_t exec_implement(wfe_ctx *ctx, const wfe_node_t *node)
 {
    (void)ctx;
    char commit[64] = "";
-   if (wfe_delegate_dispatch("engineer", node_delegate(node),
-                             "Implement the approved plan on the work-item branch: split into "
-                             "units, delegate each, verify, and commit the accepted work.",
-                             NULL, commit) < 0)
+   if (wfe_delegate_dispatch(
+           "engineer", node_delegate(node),
+           "Implement the approved plan on the work-item branch: split into units, delegate each, "
+           "VERIFY each with `aimee git verify` and fix any failures, then commit the accepted "
+           "work.",
+           NULL, commit) < 0)
       return wfe_step_looped();
    char base[64] = "", head[64] = "", dhash[65] = "", err[128] = "";
    if (wfe_git_freeze(repo_dir(), "HEAD", base, head, dhash, err, sizeof err) != 0 || !head[0])
       return wfe_step_failed();
+   /* Mechanical verify gate (WP-1b): a unit only advances if it PASSES. A failed
+    * verdict loops back to implement (the engine bounds the retries via
+    * stage_attempt and parks max_attempts on exhaustion); a re-dispatched fresh
+    * engineer delegate has the verify tool to see + fix the findings. */
+   if (!wfe_implement_verify_ok(repo_dir()))
+      return wfe_step_looped();
    char handle[80];
    snprintf(handle, sizeof handle, "%s.out", node->id);
    return wfe_step_advanced(handle, head, 0.0);
