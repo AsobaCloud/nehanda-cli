@@ -213,6 +213,9 @@ typedef struct
 /* Lifecycle */
 int server_init(server_ctx_t *ctx, const char *socket_path);
 int server_run(server_ctx_t *ctx);
+/* True if an aimee-server instance is already running for `socket_path` (pid-file
+ * + liveness check). Used by the offline --rotate-master-key guard (D13 F2). */
+int server_is_running(const char *socket_path);
 /* Boot-time delegate-vault provisioning: seal operator-supplied delegate API
  * keys ($AIMEE_DELEGATE_SECRETS_FILE / AIMEE_DELEGATE_KEY_<AGENT>) into the
  * server-principal vault so a fresh server's delegates work with no manual
@@ -296,6 +299,8 @@ int handle_index_list(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_index_blast_radius(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_index_structure(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_index_find_callers(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
+int handle_index_deps(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
+int handle_repo_trust(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_blast_radius_preview(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_graph_sync_code(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_graph_explain(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
@@ -402,10 +407,11 @@ int handle_vault_rekey(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_vault_set(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_vault_set_server(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 
-/* Emit the single vault.audit log line for a server-principal credential write
- * (agent, cred type, non-secret fingerprint, attested transport, acting
- * principal). Shared by every server-vault write path so each one is logged
- * identically — never logs the secret itself. */
+/* Emit a VAULT_SERVER_WRITE record to the dedicated append-only 0600 audit sink
+ * (audit_log) for a server-principal credential write (agent, cred type,
+ * non-secret fingerprint, attested transport, acting principal). Shared by every
+ * server-vault write path so each one is logged identically — never logs the
+ * secret itself. */
 void vault_audit_server_write(const server_conn_t *conn, const char *agent, const char *cred,
                               const char *secret);
 

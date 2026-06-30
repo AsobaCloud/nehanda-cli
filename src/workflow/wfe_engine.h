@@ -18,6 +18,7 @@ const wfe_node_t *wfe_ctx_node(const wfe_ctx *c);
 const char *wfe_ctx_repo(const wfe_ctx *c);          /* normalized repo url */
 const char *wfe_ctx_proposal_path(const wfe_ctx *c); /* proposal artifact path */
 const char *wfe_ctx_pr_ref(const wfe_ctx *c);        /* forge PR ref from pr.open, or "" */
+const char *wfe_ctx_worktree(const wfe_ctx *c);      /* per-work-item git worktree, or "" */
 
 /* Load a workflow definition by name from $AIMEE_HOME/workflows/<name>.yaml.
  * Caller frees with wfe_def_free. */
@@ -27,6 +28,14 @@ wfe_def_t *wfe_load_workflow(const char *name, char *err, size_t errlen);
  * the start stage. Fills out_id (>= 80 bytes). Returns 0 on success. */
 int wfe_work_item_create(const char *workflow_name, const char *repo, const char *proposal_path,
                          const char *mode, char out_id[80], char *err, size_t errlen);
+
+/* Resolve a workflow for a work item WITHOUT writing any row: load + validate the
+ * def, compute its version, normalize the repo, and mint the id. Lets a caller
+ * (e.g. the capped intake path) do the insert itself inside its own transaction.
+ * Fills out_name(64)/out_ver(65)/out_start(64)/out_repo(512)/out_id(80). 0 on ok. */
+int wfe_work_item_resolve(const char *workflow_name, const char *repo, char out_name[64],
+                          char out_ver[65], char out_start[64], char out_repo[512], char out_id[80],
+                          char *err, size_t errlen);
 
 typedef struct
 {

@@ -2,7 +2,7 @@
 
 > Auto-generated from `api/openapi-v1.yaml` by `scripts/gen-api-docs.py`. Do not edit by hand; run `make docs-gen` to regenerate.
 
-Total endpoints: 46
+Total endpoints: 48
 
 ## Endpoints
 
@@ -108,6 +108,26 @@ Responses:
 - `401` — Unauthorized
 - `503` — Canonical index unavailable
 
+### `GET /v1/code/cross-repo-deps`
+
+Cross-repo dependency edges for a project (confidence-tiered, with evidence + version stamp), or the AMBIGUOUS review queue when status=ambiguous
+
+| Name | In | Required | Type | Description |
+|------|----|----------|------|-------------|
+| `project` | query | yes | string |  |
+| `direction` | query | no | string (out, in, both) | Dependency direction. Only "out" is implemented today; "in"/"both" return 501. Ignored when status=ambiguous. |
+| `min_tier` | query | no | string (high, medium, tentative) | Minimum confidence tier to emit. Ignored when status=ambiguous. |
+| `status` | query | no | string (ambiguous) | When "ambiguous", returns the AMBIGUOUS review queue for the project instead of edges (direction/min_tier are not applied in that mode). |
+
+Responses:
+
+- `200` — Cross-repo dependency edges (or ambiguous review queue)
+- `400` — Missing required parameters
+- `401` — Unauthorized
+- `413` — Response too large; narrow the query
+- `501` — Requested direction not yet implemented
+- `503` — Canonical index unavailable
+
 ### `GET /v1/code/find`
 
 Symbol/identifier lookup across the canonical index
@@ -153,6 +173,23 @@ Responses:
 - `401` — Unauthorized
 - `405` — Method not allowed
 - `503` — Canonical index unavailable
+
+### `POST /v1/code/repo-trust`
+
+Set a registered repo's cross-repo trust (owner credential only)
+
+Transactionally sets projects.trust, bumps cross_repo_meta.trust_epoch on a real transition, audits the change to cross_repo_trust_audit, and (on a change) recomputes the blocked_symbols frequency model. A scoped token is rejected with 403; the project must already exist.
+
+Request body (`application/json`).
+
+Responses:
+
+- `200` — Trust applied (status, project, prior_trust, new_trust, changed)
+- `400` — Missing project or invalid trust value
+- `403` — Forbidden (requires the owner credential)
+- `404` — No such project
+- `405` — Method not allowed
+- `503` — Knowledge service store unavailable
 
 ### `POST /v1/code/scan`
 

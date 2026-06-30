@@ -7,6 +7,10 @@
 
 #include "cJSON.h"
 #include "db2/kb_payload.h"
+#include "kb_blob_store.h"
+#include "kb_doc_hash.h"
+#include "log.h"
+#include "util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,7 +74,15 @@ int handle_get_pdf_search_route(const char *method, const char *query_string, ch
       snprintf(out_buf, (size_t)out_cap, "{\"error\":\"missing query parameter\"}");
       return 400;
    }
-   pdf_qparam(query_string, "project", project, sizeof(project));
+   /* Require a project scope — consistent with open_page / open_neighbors /
+    * inspect_structure (which all 400 on an empty project) and the pdf_search_chunks MCP
+    * tool (project is a required arg). This keeps both the lexical and the Phase-A vector
+    * leg scoped to one project rather than searching every project's chunks/vectors. */
+   if (!pdf_qparam(query_string, "project", project, sizeof(project)) || !project[0])
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"missing project parameter\"}");
+      return 400;
+   }
    int max = PDF_MAX_CHUNKS;
    if (pdf_qparam(query_string, "max_results", maxs, sizeof(maxs)))
    {
@@ -91,7 +103,8 @@ int handle_get_pdf_search_route(const char *method, const char *query_string, ch
       return 500;
    }
 
-   int n = db2_kb_pdf_search_chunks(project[0] ? project : NULL, query, max, chunks);
+   db2_kb_answerability_t ans;
+   int n = db2_kb_pdf_search_chunks(project, query, max, chunks, &ans);
 
    cJSON *root = cJSON_CreateObject();
    cJSON *arr = cJSON_AddArrayToObject(root, "chunks");
@@ -104,9 +117,16 @@ int handle_get_pdf_search_route(const char *method, const char *query_string, ch
       cJSON_AddNumberToObject(c, "page_end", chunks[i].page_end);
       cJSON_AddStringToObject(c, "content", chunks[i].content);
       cJSON_AddStringToObject(c, "sensitivity_class", chunks[i].sensitivity_class);
+      /* Phase A2: relevance + which leg matched. */
+      cJSON_AddNumberToObject(c, "score", chunks[i].score);
+      cJSON_AddStringToObject(c, "matched_via", chunks[i].matched_vector ? "vector" : "lexical");
 
       cJSON *cits = cJSON_AddArrayToObject(c, "citations");
       int rn = db2_kb_doc_regions_for_chunk(chunks[i].chunk_id, regs, PDF_MAX_REGIONS);
+      /* Phase A2: has_citation is the candidate→region LEFT-JOIN flag — a candidate whose
+       * regions are not (yet) present degrades to has_citation=false with an empty
+       * citations array instead of being silently dropped. */
+      cJSON_AddBoolToObject(c, "has_citation", rn > 0 ? 1 : 0);
       for (int j = 0; j < rn; j++)
       {
          cJSON *cit = cJSON_CreateObject();
@@ -124,6 +144,18 @@ int handle_get_pdf_search_route(const char *method, const char *query_string, ch
       cJSON_AddItemToArray(arr, c);
    }
    cJSON_AddNumberToObject(root, "total", n);
+
+   /* Phase A3: the per-query-over-corpus answerability judgment. This is a KB-side SHARED
+    * signal and is deliberately a DISTINCT field from any server-side per-user confidence
+    * tier — clients must not conflate the two. */
+   cJSON *aobj = cJSON_AddObjectToObject(root, "answerability");
+   cJSON_AddNumberToObject(aobj, "score", ans.score);
+   cJSON_AddStringToObject(aobj, "label", ans.label);
+   cJSON *ains = cJSON_AddObjectToObject(aobj, "inputs");
+   cJSON_AddNumberToObject(ains, "top_score", ans.top_score);
+   cJSON_AddNumberToObject(ains, "coverage", ans.coverage);
+   cJSON_AddNumberToObject(ains, "saturation", ans.saturation);
+   cJSON_AddNumberToObject(ains, "table_facts", ans.table_facts);
 
    char *s = cJSON_PrintUnformatted(root);
    int status = 200;
@@ -366,5 +398,202 @@ int handle_get_pdf_structure_route(const char *method, const char *query_string,
    }
    cJSON_AddNumberToObject(root, "total", n);
    free(ol);
+   return pdf_emit_json(root, out_buf, out_cap);
+}
+
+/* GET /v1/pdf/lookup_table — structured-PDF Phase B table cells (see kb_http_pdf.h). */
+#define PDF_MAX_CELLS 512
+int handle_get_pdf_lookup_table_route(const char *method, const char *query_string, char *out_buf,
+                                      int out_cap)
+{
+   if (!method || strcmp(method, "GET") != 0)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"method not allowed\"}");
+      return 405;
+   }
+   char project[128] = "", document_key[1024] = "", pages[16] = "";
+   if (!pdf_qparam(query_string, "project", project, sizeof(project)) || !project[0])
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"missing project parameter\"}");
+      return 400;
+   }
+   if (!pdf_qparam(query_string, "document_key", document_key, sizeof(document_key)) ||
+       !document_key[0])
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"missing document_key parameter\"}");
+      return 400;
+   }
+   int page_no = -1; /* default: all pages */
+   if (pdf_qparam(query_string, "page_no", pages, sizeof(pages)))
+      page_no = atoi(pages);
+
+   db2_kb_table_cell_t *cells = malloc((size_t)PDF_MAX_CELLS * sizeof(*cells));
+   if (!cells)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+   int n = db2_kb_table_cells_lookup(project, document_key, page_no, cells, PDF_MAX_CELLS);
+
+   /* tsr_status: derive from the per-document TSR outcome, gated by the same ACL. A
+    * guessed/foreign/withheld document_key yields no readable state -> 'unavailable'. */
+   char state[32] = "";
+   db2_kb_pdf_tsr_state(project, document_key, state, sizeof(state));
+   const char *tsr_status = strcmp(state, "ran") == 0        ? "ran"
+                            : strcmp(state, "no_table") == 0 ? "not_a_table"
+                                                             : "unavailable";
+
+   cJSON *root = cJSON_CreateObject();
+   cJSON_AddStringToObject(root, "tsr_status", tsr_status);
+   cJSON *arr = cJSON_AddArrayToObject(root, "cells");
+   for (int i = 0; i < n; i++)
+   {
+      cJSON *c = cJSON_CreateObject();
+      cJSON_AddNumberToObject(c, "page_no", cells[i].page_no);
+      cJSON_AddNumberToObject(c, "row", cells[i].cell_row);
+      cJSON_AddNumberToObject(c, "col", cells[i].cell_col);
+      cJSON_AddStringToObject(c, "text", cells[i].cell_text);
+      cJSON_AddNumberToObject(c, "tsr_confidence", cells[i].tsr_confidence);
+      if (cells[i].subject[0] || cells[i].relation[0] || cells[i].object[0])
+      {
+         cJSON_AddStringToObject(c, "subject", cells[i].subject);
+         cJSON_AddStringToObject(c, "relation", cells[i].relation);
+         cJSON_AddStringToObject(c, "object", cells[i].object);
+      }
+      cJSON_AddItemToArray(arr, c);
+   }
+   cJSON_AddNumberToObject(root, "total", n);
+   free(cells);
+   return pdf_emit_json(root, out_buf, out_cap);
+}
+
+/* GET /v1/pdf/assets — list a document's visual assets (metadata + opaque id, NO blob_ref).
+ * Discovery surface for open_asset. Full PDF ACL via the db2 join. */
+#define PDF_MAX_ASSETS 256
+int handle_get_pdf_assets_route(const char *method, const char *query_string, char *out_buf,
+                                int out_cap)
+{
+   if (!method || strcmp(method, "GET") != 0)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"method not allowed\"}");
+      return 405;
+   }
+   char project[128] = "", document_key[1024] = "";
+   if (!pdf_qparam(query_string, "project", project, sizeof(project)) || !project[0] ||
+       !pdf_qparam(query_string, "document_key", document_key, sizeof(document_key)) ||
+       !document_key[0])
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"missing project or document_key\"}");
+      return 400;
+   }
+   db2_kb_doc_asset_t *assets = malloc((size_t)PDF_MAX_ASSETS * sizeof(*assets));
+   if (!assets)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+   int n = db2_kb_doc_assets_list(project, document_key, assets, PDF_MAX_ASSETS);
+   cJSON *root = cJSON_CreateObject();
+   cJSON *arr = cJSON_AddArrayToObject(root, "assets");
+   for (int i = 0; i < n; i++)
+   {
+      cJSON *a = cJSON_CreateObject();
+      cJSON_AddNumberToObject(a, "asset_id",
+                              (double)assets[i].id); /* OPAQUE handle for open_asset */
+      cJSON_AddNumberToObject(a, "page_no", assets[i].page_no);
+      cJSON_AddStringToObject(a, "kind", assets[i].kind);
+      cJSON_AddStringToObject(a, "caption", assets[i].caption);
+      cJSON_AddStringToObject(a, "content_type", assets[i].content_type);
+      cJSON *bbox = cJSON_AddArrayToObject(a, "bbox");
+      cJSON_AddItemToArray(bbox, cJSON_CreateNumber(assets[i].x0));
+      cJSON_AddItemToArray(bbox, cJSON_CreateNumber(assets[i].y0));
+      cJSON_AddItemToArray(bbox, cJSON_CreateNumber(assets[i].x1));
+      cJSON_AddItemToArray(bbox, cJSON_CreateNumber(assets[i].y1));
+      cJSON_AddItemToArray(arr, a);
+   }
+   cJSON_AddNumberToObject(root, "total", n);
+   free(assets);
+   return pdf_emit_json(root, out_buf, out_cap);
+}
+
+/* GET /v1/pdf/open_asset?project=&asset_id= — stream a crop's bytes (base64 in JSON) for an
+ * OPAQUE asset id. The sole gated read path for the blob store: applies the document_key ACL
+ * (via db2_kb_doc_asset_open), writes an append-only access audit line (allowed/denied), and
+ * NEVER echoes the sha256/blob_ref. A guessed/foreign/withheld id is an empty 404. */
+/* Cap the raw crop so the base64 envelope fits the 1 MiB response buffer with headroom; larger
+ * assets are a 413 (a binary-streaming endpoint is the GA path for big crops). */
+#define PDF_ASSET_MAX_BYTES (600 * 1024)
+int handle_get_pdf_open_asset_route(const char *method, const char *query_string, char *out_buf,
+                                    int out_cap)
+{
+   if (!method || strcmp(method, "GET") != 0)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"method not allowed\"}");
+      return 405;
+   }
+   char project[128] = "", ids[32] = "";
+   if (!pdf_qparam(query_string, "project", project, sizeof(project)) || !project[0] ||
+       !pdf_qparam(query_string, "asset_id", ids, sizeof(ids)) || !ids[0])
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"missing project or asset_id\"}");
+      return 400;
+   }
+   long long asset_id = atoll(ids);
+
+   char blob_ref[KB_DOC_HASH_HEX_LEN + 1] = "", content_type[48] = "";
+   int readable = db2_kb_doc_asset_open(project, (int64_t)asset_id, blob_ref, sizeof(blob_ref),
+                                        content_type, sizeof(content_type));
+   if (!readable)
+   {
+      /* Audit the denial (caller-identity threading is a GA item; project + id + verdict here).
+       * Note: blob_ref/sha256 is NEVER logged. */
+      LOG_INFO("kb.asset.audit", "open_asset asset_id=%lld project=%s verdict=denied", asset_id,
+               project);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"asset not found\"}");
+      return 404;
+   }
+
+   /* Reject an oversized blob from its size ALONE — before reading it into memory — so a
+    * referenced 256 MiB crop cannot force a huge allocation just to return 413. */
+   long long bsize = kb_blob_store_size(blob_ref);
+   if (bsize > PDF_ASSET_MAX_BYTES)
+   {
+      LOG_INFO("kb.asset.audit", "open_asset asset_id=%lld project=%s verdict=too_large", asset_id,
+               project);
+      snprintf(out_buf, (size_t)out_cap,
+               "{\"error\":\"asset too large for inline transfer\",\"code\":\"asset_too_large\"}");
+      return 413;
+   }
+
+   void *bytes = NULL;
+   size_t blen = 0;
+   if (kb_blob_store_read(blob_ref, &bytes, &blen) != 0)
+   {
+      /* Row resolved but the blob is missing (e.g. mid-reconciliation race) — treat as gone. */
+      LOG_WARN("kb.asset.audit", "open_asset asset_id=%lld project=%s verdict=blob_missing",
+               asset_id, project);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"asset bytes unavailable\"}");
+      return 404;
+   }
+
+   size_t b64cap = aimee_base64_encoded_len(blen);
+   char *b64 = malloc(b64cap);
+   if (!b64)
+   {
+      free(bytes);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+   aimee_base64_encode((const unsigned char *)bytes, blen, b64, b64cap);
+   free(bytes);
+
+   cJSON *root = cJSON_CreateObject();
+   cJSON_AddNumberToObject(root, "asset_id", (double)asset_id);
+   cJSON_AddStringToObject(root, "content_type", content_type[0] ? content_type : "image/png");
+   cJSON_AddNumberToObject(root, "bytes", (double)blen);
+   cJSON_AddStringToObject(root, "bytes_base64", b64);
+   free(b64);
+   LOG_INFO("kb.asset.audit", "open_asset asset_id=%lld project=%s verdict=allowed bytes=%zu",
+            asset_id, project, blen);
    return pdf_emit_json(root, out_buf, out_cap);
 }

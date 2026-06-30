@@ -38,6 +38,7 @@ static cJSON *hmem_row_json(const hmem_row_t *r)
    cJSON_AddStringToObject(o, "meta_json", r->meta_json ? r->meta_json : "{}");
    cJSON_AddStringToObject(o, "content_hash", r->content_hash);
    cJSON_AddStringToObject(o, "last_client", r->last_client);
+   cJSON_AddStringToObject(o, "deleted_at", r->deleted_at); /* "" when live */
    cJSON_AddStringToObject(o, "created_at", r->created_at);
    cJSON_AddStringToObject(o, "updated_at", r->updated_at);
    return o;

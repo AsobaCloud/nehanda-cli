@@ -3,6 +3,9 @@
 
 int handle_post_code_scan(const char *body, char *out_buf, int out_cap);
 int handle_post_code_scan_route(const char *method, const char *body, char *out_buf, int out_cap);
+int handle_post_code_repo_trust(const char *body, char *out_buf, int out_cap, int owner);
+int handle_post_code_repo_trust_route(const char *method, const char *body, char *out_buf,
+                                      int out_cap, int owner);
 int handle_get_code_projects(const char *query_string, char *out_buf, int out_cap);
 int handle_get_code_projects_route(const char *method, const char *query_string, char *out_buf,
                                    int out_cap);
@@ -24,6 +27,9 @@ int handle_get_code_callers_route(const char *method, const char *query_string, 
 int handle_get_code_project_stats(const char *query_string, char *out_buf, int out_cap);
 int handle_get_code_project_stats_route(const char *method, const char *query_string, char *out_buf,
                                         int out_cap);
+int handle_get_code_cross_repo_deps(const char *query_string, char *out_buf, int out_cap);
+int handle_get_code_cross_repo_deps_route(const char *method, const char *query_string,
+                                          char *out_buf, int out_cap);
 int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap);
 int handle_get_code_hybrid_route(const char *method, const char *query_string, char *out_buf,
                                  int out_cap);

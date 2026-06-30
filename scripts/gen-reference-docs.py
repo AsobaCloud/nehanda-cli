@@ -155,15 +155,19 @@ CFG_KEY_DESC = {
     "require_session_worktree": "Fail closed on mutating ops outside an aimee-managed worktree "
     "(session-isolation guard; default off).",
     "ingress_preinject_assembly_budget": "Token budget for ingress context pre-injection.",
-    "ingress_preinject_enabled": "Enable `<aimee-context>` pre-injection on ingress.",
+    "ingress_preinject_enabled": "Enable `<aimee-context>` pre-injection on ingress "
+    "(memory/code preview envelope on primary ingress turns; default on).",
     "ingress_preinject_anthropic_enabled": "Inject the `<aimee-context>` envelope on the "
     "Anthropic-native /v1/messages passthrough too (default off).",
     "ingress_compress_enabled": "Enable ingress envelope compression: span-enrich code hits and "
-    "fold code entries into recoverable references (default off).",
+    "fold code entries into recoverable `file:line` references (recover via code_span_get). "
+    "Default on (~48% prompt reduction on code turns); turn off (or send `X-Aimee-Compress: 0`) "
+    "for agentic ingress where the agent re-opens folded code so recovery round-trips can erase "
+    "the saving.",
     "ingress_compress_min_chars": "Minimum code-snippet length (chars) before it is folded to a "
     "file:line reference (default 80).",
     "ingress_cache_placement_enabled": "Append the <aimee-context> envelope after the stable "
-    "instructions prefix (not before) so provider prefix caches survive (default off).",
+    "instructions prefix (not before) so provider prefix caches survive (default on).",
     "ingress_trusted_proxy_secret": "Shared secret authenticating a trusted ingress proxy.",
     "ingress_usage_accounting_enabled": "Account token usage on ingress requests.",
     "integrity_dry_run": "Run integrity checks without enforcing.",
@@ -173,6 +177,27 @@ CFG_KEY_DESC = {
     "kb_evidence_emit_enabled": "Emit evidence records from KB ingest.",
     "kb_pdf_ingest_enabled": "Route PDF uploads through the structured geometry extractor "
     "(kb_doc_pdf) instead of plain pdftotext (default off).",
+    "kb_pdf_vector_enabled": "Embed structured-PDF chunks into the isolated kb_pdf_embeddings "
+    "relation and add the vector candidate leg to search_chunks (default off; degrades to "
+    "lexical-only when the embedder is absent).",
+    "kb_pdf_tsr_enabled": "Run the table-structure-recognition (TSR) sidecar at PDF ingest to turn "
+    "table regions into structured kb_table_cells, surfaced via lookup_table (default off; "
+    "degrades to text-only when the sidecar is absent).",
+    "tsr_command": "TSR sidecar endpoint/command for structured-PDF table recognition (resolves "
+    "like embedding_command; AIMEE_TSR_URL env fallback).",
+    "kb_pdf_assets_enabled": "Render structured-PDF figure/table crops to the content-addressed "
+    "blob store + kb_doc_assets at ingest, served via open_asset (default off; needs pdftoppm).",
+    "kb_pdf_blob_dir": "Override the structured-PDF blob store root (default "
+    "<kb-config-dir>/kb-blobs).",
+    "kb_pdf_blob_recon_secs": "Interval (seconds) for the orphan-blob reconciliation sweep "
+    "(default 3600; <=0 disables it).",
+    "kb_pdf_blob_orphan_alarm_mb": "Warn when reclaimable orphan blob bytes exceed this many MB "
+    "(default 1024; <=0 disables the alarm).",
+    "kb_pdf_ocr_enabled": "OCR a scanned / no-text-layer PDF via the OCR sidecar at ingest so its "
+    "text + geometry feed the normal citation path (default off; without it a scanned PDF is "
+    "ingested asset-only).",
+    "ocr_command": "OCR sidecar endpoint/command for structured-PDF scanned-page recognition "
+    "(resolves like embedding_command; AIMEE_OCR_URL env fallback).",
     "kb_mining_enabled": "Enable background KB mining.",
     "kb_mining_min_poll_s": "Minimum interval (s) between KB mining polls.",
     "kb_search_max_results": "Default max results for KB search.",
@@ -452,6 +477,7 @@ ENV_DESC = {
     "AIMEE_GUARDRAILS_PATH": ("Paths & assets", "Path to the guardrails policy file."),
     "AIMEE_FORENSICS_DIR": ("Paths & assets", "Directory for shutdown-forensics dumps."),
     "AIMEE_PACK_DIR": ("Paths & assets", "Directory of memory profile packs."),
+    "AIMEE_HARNESS_MEMORY_SCOPES": ("Paths & assets", "Path to the agent memory-surface registry config (default `<AIMEE_HOME>/harness_memory_scopes.conf`). Each `client:projects_root:memory_seg` line adds a new agent or overrides a built-in's paths for memory interception/hydration."),
     "AIMEE_WORKSPACES_DIR": ("Paths & assets", "Root directory for mirrored/registered workspaces."),
     "AIMEE_MODELS_DEV_SNAPSHOT": ("Paths & assets", "Path to an offline models.dev catalog snapshot."),
     # Client & session
@@ -475,8 +501,10 @@ ENV_DESC = {
     "AIMEE_SERVER_HTTP_BIND": ("Server runtime", "TCP bind address for the server `/v1` HTTP listener (else UDS-only)."),
     "AIMEE_SERVER_STARTUP_FD": ("Server runtime", "Inherited fd for startup-readiness signalling (service launch)."),
     "AIMEE_API_REMOTE_WRITES": ("Server runtime", "Gate remote (TCP) write methods: `off` | `data` | `full`."),
+    "AIMEE_WEBCHAT_GIT": ("Server runtime", "Per-webuser webchat git surface — repo connect/clone, git ops (pull/commit/push/branch), per-host token + SSH-key credential intake, the workspace forge-token broker, project listing + session-dir resolution, and \"Sign in with GitHub\" (on by default; set to the literal value 0 to disable the entire surface — all of those routes then return 503, e.g. for a chat/editor-only deployment; any other value leaves it on). Independent of AIMEE_WEBCHAT_EDITOR."),
     "AIMEE_WEBCHAT_EDITOR": ("Server runtime", "Per-webuser in-browser code-server editor (on by default; set to 0 to disable; needs a code-server binary, shipped by WITH_VSCODE images)."),
     "AIMEE_WEBCHAT_EDITOR_BIN": ("Server runtime", "Override path to the code-server binary used for the in-browser editor."),
+    "AIMEE_WEBCHAT_EDITOR_IDLE_SECS": ("Server runtime", "Idle timeout in seconds before a per-webuser code-server editor is reaped. Default 1800 (30 min); positive values are clamped to [60, 604800]; 0 disables idle reaping; malformed/negative/overflow values fall back to the default. An actively-open editor is kept alive by the proxy keepalive, so it is not reaped mid-session."),
     "AIMEE_WEBCHAT_EDITOR_UID": ("Server runtime", "Dedicated service user the per-webuser code-server drops to (defence in depth; only honoured when aimee-server runs as root)."),
     "AIMEE_GITHUB_OAUTH_CLIENT_ID": ("Server runtime", "Client ID of a GitHub OAuth App (device flow enabled) for the webchat \"Sign in with GitHub\" button; populates the github.com git credential. Public, no secret needed."),
     "AIMEE_INGRESS_PROXY_SECRET": ("Server runtime", "Shared secret authenticating a trusted ingress proxy's identity headers."),

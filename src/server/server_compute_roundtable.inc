@@ -1,4 +1,11 @@
-#define ROUNDTABLE_BRIEF_MAX_BYTES    4096
+/* Upper bound on a rendered caller brief. Generous (256 KB) because reviewers
+ * routinely pass a whole diff / design doc / test plan as the brief; the old
+ * 4096 cap silently truncated those mid-document, so panelists reviewed half an
+ * artifact and emitted bogus "section missing" findings. At this raised size the
+ * buffer is heap-allocated (a 256 KB buffer must not sit on a thread stack), and
+ * build_round_prompt already renders an arbitrary-length brief, so this bound is
+ * only an abuse backstop, not a functional limit. */
+#define ROUNDTABLE_BRIEF_MAX_BYTES    (256 * 1024)
 #define ROUNDTABLE_MAX_ROUNDS_REQUEST 16
 
 typedef struct
@@ -80,8 +87,14 @@ static int normalize_roundtable_brief(cJSON *req, normalized_roundtable_brief_t 
    cJSON *brief = cJSON_GetObjectItemCaseSensitive(req, "brief");
    if (!brief)
       return 0;
-   char tmp[ROUNDTABLE_BRIEF_MAX_BYTES + 1];
-   memset(tmp, 0, sizeof(tmp));
+   /* Heap, not stack: a 256 KB buffer must never sit on a thread stack. */
+   const size_t cap = ROUNDTABLE_BRIEF_MAX_BYTES + 1;
+   char *tmp = calloc(cap, 1);
+   if (!tmp)
+   {
+      snprintf(err, err_n, "out of memory");
+      return -1;
+   }
    size_t pos = 0;
    if (cJSON_IsString(brief))
    {
@@ -89,36 +102,45 @@ static int normalize_roundtable_brief(cJSON *req, normalized_roundtable_brief_t 
       while (*s && isspace((unsigned char)*s))
          s++;
       if (!*s)
+      {
+         free(tmp);
          return 0;
-      int rc = brief_append(tmp, sizeof(tmp), &pos, "focus:\n- %s\n", s);
+      }
+      int rc = brief_append(tmp, cap, &pos, "focus:\n- %s\n", s);
       if (rc > 0)
          out->truncated = 1;
    }
    else if (cJSON_IsObject(brief))
    {
-      if (brief_array_append("focus", cJSON_GetObjectItemCaseSensitive(brief, "focus"), tmp,
-                             sizeof(tmp), &pos, out, err, err_n) != 0 ||
-          brief_array_append("fixes", cJSON_GetObjectItemCaseSensitive(brief, "fixes"), tmp,
-                             sizeof(tmp), &pos, out, err, err_n) != 0 ||
+      /* brief_array_append returns 0 on success OR truncation (it sets
+       * out->truncated itself) and -1 only on a malformed (non-array/non-string)
+       * field, so this `!= 0` short-circuit frees+fails only on real errors —
+       * truncation keeps the partial render, matching the string branch above. */
+      if (brief_array_append("focus", cJSON_GetObjectItemCaseSensitive(brief, "focus"), tmp, cap,
+                             &pos, out, err, err_n) != 0 ||
+          brief_array_append("fixes", cJSON_GetObjectItemCaseSensitive(brief, "fixes"), tmp, cap,
+                             &pos, out, err, err_n) != 0 ||
           brief_array_append("invariants", cJSON_GetObjectItemCaseSensitive(brief, "invariants"),
-                             tmp, sizeof(tmp), &pos, out, err, err_n) != 0 ||
+                             tmp, cap, &pos, out, err, err_n) != 0 ||
           brief_array_append("questions", cJSON_GetObjectItemCaseSensitive(brief, "questions"), tmp,
-                             sizeof(tmp), &pos, out, err, err_n) != 0)
+                             cap, &pos, out, err, err_n) != 0)
+      {
+         free(tmp);
          return -1;
+      }
       if (pos == 0)
+      {
+         free(tmp);
          return 0;
+      }
    }
    else
    {
+      free(tmp);
       snprintf(err, err_n, "brief must be a string or object");
       return -1;
    }
-   out->rendered = strdup(tmp);
-   if (!out->rendered)
-   {
-      snprintf(err, err_n, "out of memory");
-      return -1;
-   }
+   out->rendered = tmp; /* transfer ownership; freed by the caller */
    return 0;
 }
 

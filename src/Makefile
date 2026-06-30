@@ -290,12 +290,12 @@ MCP_GIT_OBJS = $(MCP_GIT_SRCS:%.c=$(OBJDIR)/%.o)
 # --- Layer 0: Foundation (db, config, util, text, render, log, platform, cJSON) ---
 CORE_SRCS = db1/db.c db1/db_schema.c config.c config_sections.c config_database.c config_learning.c config_memory.c config_charter.c config_trigger.c config_kb_maintenance.c config_kb_curator.c config_server_api.c config_skills.c config_save.c config_mode.c config_fields.c toolset.c util.c util_url.c forge_credentials.c forge_app_token.c workspace_mirror.c report_enrichment.c delivery_target.c text.c render.c markdown.c json_fluent.c code_audit_graph.c log.c shutdown_forensics.c dstr.c yaml.c diff.c sse_parser.c \
             aimee_home.c shared/kb_paths.c provider_client.c kb_curator_provider.c \
-            compact.c platform_random.c slop_detect.c proxy_bootstrap.c reasoning_cap.c \
+            compact.c coord_closet.c fold_budget.c context_fold.c fold_register.c fold_recall.c task_rail.c episode_seal.c platform_random.c slop_detect.c proxy_bootstrap.c reasoning_cap.c \
             client_integrations.c mcp_tools.c mcp_tool_profile.c mcp_tools_extended.c mcp_skill_tools.c mcp_tools_gateway.c events.c \
             model_registry.c models_dev.c models_dev_cache.c lsp_client.c lsp_manager.c plugin.c \
             plugin_ctx.c plugin_loader.c memory_provider.c plugin_c_hook.c config_plugin.c code_collect.c codex_auth.c \
             workflow/wfe_iface.c workflow/wfe_def.c workflow/wfe_validate.c workflow/wfe_canonical.c workflow/wfe_custom.c \
-            harness_memory_common.c
+            harness_memory_common.c harness_memory_scope.c harness_memory_audit.c harness_memory_spill.c
 CORE_OBJS = $(CORE_SRCS:%.c=$(OBJDIR)/%.o) $(OBJDIR)/cJSON.o
 
 # --- Layer 0b: DB1 (user-local tier) ---
@@ -312,7 +312,10 @@ DB2_PG_SRCS = db2/db_postgres.c
 DB2_PG_OBJS = $(DB2_PG_SRCS:%.c=$(OBJDIR)/%.o)
 DB2_SRCS = db2/db2_init.c db2/db2_reembed.c db2/db2_pool.c db2/agent_hints.c db2/agent_outcomes.c db2/canonical_index.c db2/anti_patterns.c db2/workflow_patterns.c db2/evidence_vectors.c db2/learning_synth_ops.c db2/collab_rules.c db2/curiosity.c db2/decision_log.c db2/entity_edges.c db2/rel_types_store.c db2/entity_registry.c db2/fact_lifecycle.c db2/ontology_evolution.c db2/fact_ingest.c db2/fact_recall.c db2/entity_nodes.c db2/code_projection.c db2/shadow_delta.c db2/entity_profiles.c db2/epistemic_directives.c db2/failed_queries.c db2/feedback.c db2/notes.c db2/prospective_memories.c db2/rules.c db2/stopwords.c db2/tasks.c db2/tool_registry.c db2/trace_mining.c db2/kind_lifecycle.c db2/kb_payload.c db2/kb_runtime_state.c db2/kb_service_backend.c db2/kb_service_backend_ingest.c db2/kb_service_backend_agent.c db2/kb_service_backend_memory.c db2/memory_briefing.c db2/memory_conflicts.c db2/memory_export.c db2/memory_health.c db2/memory_lifecycle.c db2/memory_payload.c db2/memory_promotion.c db2/memory_query.c db2/memory_query_bookkeeping.c db2/memory_entity_graph.c db2/memory_row_mapper_pg.c db2/memory_score_fields.c db2/memory_scope_query.c db2/memory_relations.c db2/memory_scenes.c db2/vector_index_ops.c db2/code_index_ops.c db2/learning.c db2/code_index.c db2/css_graph.c db2/css_migration.c db2/css_render.c db2/css_insights.c db2/typed_facts.c db2/db_schema.c db2/memory_lint.c db2/sketch.c db2/artifacts.c db2/corpus_structural.c db2/corpus_jobs.c db2/mining.c db2/calibration.c db2/demotion.c db2/fidelity.c db2/feature_rows.c db2/report_enrichments.c db2/bandit.c db2/kb_maintenance.c db2/kb_service_backend_export.c db2/kb_docs.c db2/kb_releases.c db2/code_audit.c \
            db2/pgvec_transport.c db2/memory_vectors.c db2/kb_vectors.c db2/vector_status.c db2/pgvec_verify.c db2/pgvec_kb_service.c \
-           db2/curator_terms.c db2/curator_gaps.c
+           db2/curator_terms.c db2/curator_gaps.c \
+           db2/cross_repo_resolver.c db2/cross_repo_classify.c db2/cross_repo_stats.c \
+           db2/cross_repo_deps.c db2/cross_repo_review.c db2/cross_repo_identity.c \
+           db2/cross_repo_route.c db2/cross_repo_build.c
 DB2_OBJS = $(DB2_SRCS:%.c=$(OBJDIR)/%.o)
 
 # --- Layer 1: Data & policy (memory, index, rules, guardrails, workspace) ---
@@ -341,7 +344,7 @@ AGENT_OBJS = $(AGENT_SRCS:%.c=$(OBJDIR)/%.o) $(PLATFORM_AGENT_OBJS)
 # --- Layer 3: Commands + UI (cmd_*, webchat, dashboard) ---
 CMD_SRCS = prompts.c persona.c hardware_probe.c curator_profile.c server/delegate_source_authority.c \
            cmd_core.c cmd_init.c cmd_data.c cmd_infra.c cmd_session_history.c cmd_memory.c cmd_memory_core.c cmd_memory_curiosity.c cmd_memory_embed.c cmd_memory_op.c cmd_memory_pack.c cmd_memory_lint.c cmd_wiki.c cmd_memory_vector.c cmd_index.c cmd_graph.c cmd_rules.c cmd_roadmap.c cmd_auto.c cmd_learning.c cmd_review.c cmd_dogfood.c cmd_identity.c cmd_onboard.c cmd_diagnose.c \
-           cmd_hooks.c cmd_hooks_scope.c cmd_capabilities.c cmd_session_lifecycle.c cmd_agent.c cmd_agent_setup.c cmd_agent_trace.c cmd_agent_delegate.c cmd_agent_delegate_status.c server/delegate_checkout.c server/delegate_prompt_stdin.c \
+           cmd_hooks.c memory_redirect.c cmd_hooks_scope.c cmd_capabilities.c cmd_session_lifecycle.c cmd_agent.c cmd_agent_setup.c cmd_agent_trace.c cmd_agent_delegate.c cmd_agent_delegate_status.c server/delegate_checkout.c server/delegate_prompt_stdin.c \
            cmd_wm.c cmd_work.c cmd_sweep.c cmd_cancel.c cmd_rewind.c cmd_branch.c cmd_mcp.c cmd_util.c cmd_table.c cmd_doctor.c cmd_toolset.c \
            cmd_plugin.c \
            cmd_trajectory.c \
@@ -351,7 +354,7 @@ CMD_SRCS = prompts.c persona.c hardware_probe.c curator_profile.c server/delegat
 CMD_OBJS = $(CMD_SRCS:%.c=$(OBJDIR)/%.o)
 
 # --- Pure client (aimee) ---
-CLI_SRCS = cli_main.c cli_agent_setup.c cli_session_start.c cli_attention_guard.c cli_code_audit.c cli_css.c cli_tui.c cli_client.c cli_launch.c cli_mcp_serve.c cli_profile.c client_integrations.c server/delegate_plan.c cmd_profile.c cmd_manuscript.c cmd_optimize.c cli_persona.c cli_roles.c manuscript.c http_uds_client.c aimee_client.c cli_remote.c acp_server.c cli_workspace_serve.c cli_agent_keys.c cmd_workflow.c
+CLI_SRCS = cli_main.c cli_agent_setup.c cli_session_start.c harness_memory_hydrate.c harness_memory_watch.c harness_memory_common.c harness_memory_scope.c harness_memory_audit.c harness_memory_spill.c cli_attention_guard.c cli_code_audit.c cli_css.c cli_tui.c cli_client.c cli_launch.c cli_mcp_serve.c cli_profile.c client_integrations.c server/delegate_plan.c cmd_profile.c cmd_manuscript.c cmd_optimize.c cli_persona.c cli_roles.c manuscript.c http_uds_client.c aimee_client.c cli_remote.c acp_server.c cli_workspace_serve.c cli_agent_keys.c cmd_workflow.c
 ifeq ($(WITH_TLS),1)
 CLI_SRCS += aimee_tls.c
 TLS_OBJS = $(OBJDIR)/aimee_tls.o
@@ -370,14 +373,14 @@ CLIENT_COMPILE_OBJS = $(CLI_OBJS) $(CLIENT_PLATFORM_OBJS) $(OBJDIR)/dstr.o $(OBJ
 $(CLIENT_COMPILE_OBJS): C_FLAGS := $(CLIENT_C_FLAGS)
 
 # --- Server ---
-SERVER_SRCS = server/server_main.c server/server.c server/server_http.c server/server_conn_io.c server/server_tls.c server/server_http_reqctx.c server/server_http_identity.c server/request_context.c server/response_dedup.c server/anthropic_shape.c server/anthropic_ingress.c server/anthropic_http.c server/openai_shape.c server/openai_chat.c server/ingress_preinject.c server/code_span.c server/gw_stage_memory.c server/fidelity_check.c server/openai_responses_store.c server/openai_runs_store.c server/server_api.c server/server_auth.c server/server_session.c server/server_hooks.c server/server_state.c server/harness_memory_routes.c server/server_plugin.c server/server_memory_benchmark.c server/server_work.c server/workspace_provider_detached.c server/workspace_runner_queue.c server/workspace_runner_registry.c server/workspace_turn.c server/workspace_scope.c server/webuser_runtime.c \
-              server/server_delegate_monitor.c server/server_coord_dispatcher.c server/server_session_pools.c server/presence.c server/turn_registry.c server/wfe_live_delegate.c server/wfe_delegate_resolve.c server/wfe_scheduler.c \
+SERVER_SRCS = server/server_main.c server/server.c server/server_http.c server/server_conn_io.c server/server_tls.c server/server_http_reqctx.c server/server_http_identity.c server/request_context.c server/response_dedup.c server/anthropic_shape.c server/anthropic_ingress.c server/anthropic_http.c server/openai_shape.c server/openai_chat.c server/ingress_preinject.c server/code_span.c server/gw_stage_memory.c server/fidelity_check.c server/openai_responses_store.c server/openai_runs_store.c server/server_api.c server/server_auth.c server/server_session.c server/server_hooks.c server/server_state.c server/server_state_index.c server/harness_memory_routes.c server/server_plugin.c server/server_memory_benchmark.c server/server_work.c server/workspace_provider_detached.c server/workspace_runner_queue.c server/workspace_runner_registry.c server/workspace_turn.c server/workspace_scope.c server/webuser_runtime.c \
+              server/server_delegate_monitor.c server/server_coord_dispatcher.c server/server_session_pools.c server/presence.c server/turn_registry.c server/wfe_live_delegate.c server/wfe_live_forge.c server/wfe_delegate_resolve.c server/wfe_scheduler.c \
               server/server_agent.c server/server_cli_oauth.c server/server_compute.c server/server_delegate_ondemand.c server/server_skill_jobs.c server/server_delegate_status.c server/server_compute_async.c server/server_jobs_aux.c server/server_skill.c server/server_mcp.c server/server_mcp_tools.c server/server_mcp_delegate.c server/server_mcp_process.c server/server_mcp_skill.c server/server_mcp_learning.c server/server_mcp_workflows.c server/server_mcp_gateway.c server/session_search_tool.c server/compute_pool.c cli_client.c \
               server/roundtable_pipeline_eval.c server/roundtable_pipeline_capture.c server/roundtable_pipeline_chunk.c server/server_pipeline.c \
               server/compute_concurrency.c server/provider_catalog.c \
               server/dashboard_server.c hud.c cmd_identity.c prompts.c persona.c working_profile.c \
               server/delegate_role.c server/delegate_depth.c server/delegate_prompt.c server/delegate_run_phases.c server/delegate_routing.c server/delegate_launch.c server/delegate_source_authority.c server/delegate_economics.c server/delegate_credentials.c server/delegate_credential_retry.c server/delegate_patch_coordinator.c server/delegate_ensemble.c server/evidence_replay.c server/roundtable_verify.c server/sweep_exclude.c server/sweep_score.c server/sweep_scope.c server/sweep_parse.c server/server_sweep.c server/delegate_checkout.c cmd_init.c \
-              server/trigger_scheduler.c server/server_trigger.c server/server_cron.c server/server_trajectory.c server/server_config.c server/vault_principal.c server/vault_crypto.c server/vault_kek_cache.c server/vault_server_key.c server/vault_store.c server/vault_service.c server/git_forge_vault.c server/git_cred_inject.c server/git_host_resolve.c server/git_ssh_agent.c server/git_project.c server/git_ops.c server/git_host_cred.c server/git_oauth_github.c server/webuser_editor.c server/vault_capability.c server/server_vault.c server/server_vault_bootstrap.c server/pki.c server/server_cert.c \
+              server/trigger_scheduler.c server/server_trigger.c server/server_cron.c server/server_trajectory.c server/server_config.c server/vault_principal.c server/vault_crypto.c server/vault_kek_cache.c server/vault_server_key.c server/vault_store.c server/vault_service.c server/git_forge_vault.c server/git_cred_inject.c server/git_host_resolve.c server/git_ssh_agent.c server/git_project.c server/git_ops.c server/git_host_cred.c server/git_oauth_github.c server/git_pr_api.c server/webuser_editor.c server/vault_capability.c server/server_vault.c server/server_vault_bootstrap.c server/pki.c server/server_cert.c \
               workflow/wfe_engine.c workflow/wfe_blocks.c workflow/wfe_approval.c \
               workflow/wfe_verdict.c workflow/wfe_roundtable.c workflow/wfe_autonomy.c \
               server/server_workflow_api.c
@@ -391,6 +394,7 @@ SERVER_DATA_OBJS = $(SERVER_DATA_SRCS:%.c=$(OBJDIR)/server/%.o) \
 # pattern rule.
 SERVER_CMD_OBJS = $(OBJDIR)/server/cmd_session_lifecycle.o \
                   $(OBJDIR)/server/cmd_hooks_scope.o \
+                  $(OBJDIR)/memory_redirect.o \
                   $(OBJDIR)/server/server_session_start_stubs.o
 
 # kb_client objects — request-side glue from the daemon to the
@@ -405,7 +409,7 @@ KB_CLIENT_OBJS = $(OBJDIR)/server/kb_client.o $(OBJDIR)/server/kb_client_cache.o
 SERVER_KB_CLIENT_OBJS = $(KB_CLIENT_OBJS)
 
 # --- KB Service ---
-KB_SRCS = kb/kb_main.c kb/kb_background.c kb/kb_service.c kb/kb_service_workers.c kb/kb_ingest_workers.c kb/kb_service_kb.c kb/kb_service_memory.c kb/kb_service_css.c kb/kb_service_agent.c kb/kb_service_graph.c kb/kb_rrf.c kb/kb_graph_analytics.c kb/kb_surprising_judge.c kb/kb_service_artifacts.c kb/kb_service_roadmap.c kb/kb_intel_payload.c kb/kb_bandit_registry.c kb/kb_reflection.c kb/kb_curator_queue.c kb/kb_curator_extract.c kb/kb_curator_extract_code.c kb/kb_curator_grounding.c kb/kb_curator_drain.c kb/kb_curator_resolve_entities.c kb/kb_curator_sidecar.c kb/kb_curator_llm.c kb/kb_curator_judge.c kb/kb_curator_synthesize.c kb/kb_curator_promote.c kb/kb_curator_index_narrative.c kb/kb_curator_index_claims.c kb/kb_curator_contradictions.c kb/kb_curator_index_code_unit.c kb/kb_curator_link_artifacts.c kb/kb_curator_serve.c kb/kb_evidence_embed.c kb/kb_learning_synth.c kb/kb_learning_version.c kb/kb_curator_version.c kb/kb_curator_notify.c kb/kb_mining.c kb/http/kb_http.c kb/http/kb_tls.c kb/http/kb_tls_serve.c kb/http/kb_http_conn.c kb/http/kb_http_ws.c kb/http/kb_http_search.c kb/kb_scope.c kb/http/kb_http_code.c kb/http/kb_http_pdf.c kb/http/kb_http_ingest.c kb/http/kb_http_jobs.c kb/kb_doc_hash.c kb/kb_doc_pdf.c kb/http/kb_http_releases.c kb/http/kb_http_reflections.c kb/kb_ingest_normalize.c kb/kb_service_code_embed.c kb/kb_memory_embed.c kb/kb_memory_facts.c kb/memory_rewrite_llm.c kb/enroll.c kb/verifier.c kb/auth_oidc.c kb/pki.c
+KB_SRCS = kb/kb_main.c kb/kb_background.c kb/kb_service.c kb/kb_service_workers.c kb/kb_ingest_workers.c kb/kb_service_kb.c kb/kb_service_memory.c kb/kb_service_css.c kb/kb_service_agent.c kb/kb_service_graph.c kb/kb_rrf.c kb/kb_graph_analytics.c kb/kb_surprising_judge.c kb/kb_service_artifacts.c kb/kb_service_roadmap.c kb/kb_intel_payload.c kb/kb_bandit_registry.c kb/kb_reflection.c kb/kb_curator_queue.c kb/kb_curator_extract.c kb/kb_curator_extract_code.c kb/kb_curator_grounding.c kb/kb_curator_drain.c kb/kb_curator_resolve_entities.c kb/kb_curator_sidecar.c kb/kb_curator_llm.c kb/kb_curator_judge.c kb/kb_curator_synthesize.c kb/kb_curator_promote.c kb/kb_curator_index_narrative.c kb/kb_curator_index_claims.c kb/kb_curator_contradictions.c kb/kb_curator_index_code_unit.c kb/kb_curator_link_artifacts.c kb/kb_curator_serve.c kb/kb_evidence_embed.c kb/kb_learning_synth.c kb/kb_learning_version.c kb/kb_curator_version.c kb/kb_curator_notify.c kb/kb_mining.c kb/http/kb_http.c kb/http/kb_tls.c kb/http/kb_tls_serve.c kb/http/kb_http_conn.c kb/http/kb_http_ws.c kb/http/kb_http_search.c kb/kb_scope.c kb/http/kb_http_code.c kb/http/kb_http_pdf.c kb/http/kb_http_ingest.c kb/http/kb_http_jobs.c kb/kb_doc_hash.c kb/kb_doc_pdf.c kb/kb_tsr_sidecar.c kb/kb_blob_store.c kb/kb_blob_reconcile.c kb/kb_ocr_sidecar.c kb/http/kb_http_releases.c kb/http/kb_http_reflections.c kb/kb_ingest_normalize.c kb/kb_service_code_embed.c kb/kb_memory_embed.c kb/kb_memory_facts.c kb/memory_rewrite_llm.c kb/enroll.c kb/verifier.c kb/auth_oidc.c kb/pki.c
 KB_OBJS = $(KB_SRCS:%.c=$(OBJDIR)/%.o)
 KB_CORE_SRCS = $(filter-out db1/%,$(CORE_SRCS))
 KB_CORE_OBJS = $(KB_CORE_SRCS:%.c=$(OBJDIR)/kb/%.o) $(OBJDIR)/cJSON.o
@@ -542,7 +546,7 @@ ALL_OBJS = $(CORE_OBJS) $(DB1_OBJS) $(DB2_PG_OBJS) $(DB2_OBJS) $(MCP_GIT_OBJS) $
            $(CLI_OBJS) $(SERVER_OBJS) $(SERVER_KB_CLIENT_OBJS) $(KB_OBJS) $(GATEWAY_OBJS) $(KB_DB2_PG_OBJS) $(KB_DB2_OBJS) $(PLATFORM_OBJS) $(PLATFORM_AGENT_OBJS)
 DEPS = $(ALL_OBJS:.o=.d)
 
-.PHONY: all clean install forge-cred-integration forge-app-token-validation lint code-vector-graph-corpus-check line-check schema-sync-check charter-tables-check tier-deps-check module-boundary-check dispatch-caps-check kb-v1-coverage-check kb-target-isolation-check kb-container-packaging-check sidecar-clients-check docs-gen docs-gen-check api-conformance-check server-api-conformance-check v1-method-coverage-check cli-v1-routes-check kb-intelligence-surfaced-check proposal-links-check proposal-reconcile-check git-cred-centralized-check gen-sdks sdk-parity-check v1-ws-test format unit-tests verify-local integration-tests v1-third-party-test v1-sdk-smoke v1-ws-test init-migrate-service-test server lean fuzz coverage static-analysis cppcheck clang-tidy bench bench-check bench-baseline memory-retrieval-eval-check virtual-context-eval-check virtual-context-inspect curator-eval curator-eval-check build-integrity build-variants check-linking retire-obsolete-binaries
+.PHONY: all clean install forge-cred-integration forge-app-token-validation lint code-vector-graph-corpus-check line-check schema-sync-check charter-tables-check tier-deps-check module-boundary-check dispatch-caps-check kb-v1-coverage-check kb-target-isolation-check kb-container-packaging-check sidecar-clients-check docs-gen docs-gen-check api-conformance-check server-api-conformance-check v1-method-coverage-check cli-v1-routes-check kb-intelligence-surfaced-check proposal-links-check proposal-reconcile-check dev-accept-check git-cred-centralized-check gen-sdks sdk-parity-check v1-ws-test format unit-tests verify-local integration-tests v1-third-party-test v1-sdk-smoke v1-ws-test init-migrate-service-test server lean fuzz coverage static-analysis cppcheck clang-tidy bench bench-check bench-baseline memory-retrieval-eval-check virtual-context-eval-check virtual-context-inspect curator-eval curator-eval-check build-integrity build-variants check-linking retire-obsolete-binaries
 
 all: retire-obsolete-binaries $(BINARY) $(ALL_WEBCHAT) $(SERVER) $(KB) $(GATEWAY)
 ifneq ($(HAVE_GO),1)
@@ -1114,6 +1118,11 @@ proposal-reconcile-check:
 	@python3 ../scripts/check-proposal-reconcile.py --plant-test
 	@python3 ../scripts/check-proposal-reconcile.py
 
+# dev-accept (§3/§4/§5): the runtime acceptance executor + active auto-file. This
+# gate runs its unit tests so CI protects the tier-routing/verdict/file logic.
+dev-accept-check:
+	@python3 -m unittest discover -s ../scripts/tests -p test_dev_accept.py
+
 # CI gate: every git/forge credential resolution routes through the ONE policy
 # (git_cred_inject); no downstream caller hand-rolls the credential ladder.
 git-cred-centralized-check:
@@ -1173,7 +1182,7 @@ clean:
 # you genuinely need a different binary.
 CLANG_FORMAT ?= clang-format-19
 
-lint: line-check schema-sync-check charter-tables-check tier-deps-check module-boundary-check dispatch-caps-check kb-v1-coverage-check kb-target-isolation-check kb-container-packaging-check sidecar-clients-check docs-gen-check api-conformance-check server-api-conformance-check v1-method-coverage-check cli-v1-routes-check kb-intelligence-surfaced-check curator-story-check aimee-home-check code-vector-graph-corpus-check proposal-links-check proposal-reconcile-check git-cred-centralized-check
+lint: line-check schema-sync-check charter-tables-check tier-deps-check module-boundary-check dispatch-caps-check kb-v1-coverage-check kb-target-isolation-check kb-container-packaging-check sidecar-clients-check docs-gen-check api-conformance-check server-api-conformance-check v1-method-coverage-check cli-v1-routes-check kb-intelligence-surfaced-check curator-story-check aimee-home-check code-vector-graph-corpus-check proposal-links-check proposal-reconcile-check dev-accept-check git-cred-centralized-check
 
 # Structural guard for the code-vector-graph fusion eval corpus + ablation
 # matrix (>=100 queries, all categories, well-formed; baseline+full_fusion arms).

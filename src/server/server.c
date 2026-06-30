@@ -3,7 +3,12 @@
 #define _GNU_SOURCE
 #endif
 #include "aimee.h"
-#include "json_fluent.h" /* jo_ok */
+#include "harness_memory.h"        /* hmem_upsert (server owns DB1) */
+#include "harness_memory_audit.h"  /* hmem_audit */
+#include "harness_memory_common.h" /* hmem_resolve_project / hmem_project_key_ok */
+#include "harness_memory_scope.h"  /* hmem_scope_for_client */
+#include "json_fluent.h"           /* jo_ok */
+#include "memory_redirect.h"       /* memory_redirect_classify / _bash_targets / _rematerialize */
 #include "server.h"
 #include "turn_registry.h"
 #include "server_http.h" /* server_http_api_status_report */
@@ -707,6 +712,142 @@ static int handle_hud_status(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    return server_send_ok(conn, parsed);
 }
 
+/* Server-side central agent-memory interception. The split server owns DB1, so
+ * (unlike the CLI path's HTTP POST) it writes the store directly via hmem_upsert
+ * and mirrors the row back to disk. Returns 2 (deny — msg set) when a memory op
+ * was intercepted/rejected, else 0 (allow). Fail-open: any inability to identify
+ * or store returns 0 so a normal tool call is never blocked by this stage. */
+static int server_memory_intercept(const char *tool, const char *tool_input, const char *cwd,
+                                   cJSON *req, char *msg, size_t msg_len)
+{
+   /* The client identity is per-REQUEST: a single shared server fields hooks from
+    * many agents (claude/gemini/codex/...), so it must use the harness_client the
+    * thin client forwarded — NOT the server's own AIMEE_HOOK_CLIENT env (which
+    * would scope every request to one fixed client). Fall back to the env only for
+    * the local/combined-binary path where no field is sent; on a shared split
+    * server AIMEE_HOOK_CLIENT must be UNSET so an older/3rd-party client that omits
+    * the field is treated as unknown (no interception) rather than mis-scoped.
+    * TRUST: harness_client is client-supplied and untrusted, but it is used SOLELY
+    * as a scope-registry lookup key — never an authorization, filesystem, or DB
+    * path input. An unknown key → no interception; a spoofed registered name only
+    * re-scopes the spoofer's OWN writes (no cross-client exposure, no escalation).
+    * Do not derive anything but the scope from it. */
+   const char *client = NULL;
+   cJSON *hc = cJSON_GetObjectItemCaseSensitive(req, "harness_client");
+   if (cJSON_IsString(hc) && hc->valuestring && hc->valuestring[0])
+      client = hc->valuestring;
+   if (!client)
+      client = getenv("AIMEE_HOOK_CLIENT");
+   const char *home = getenv("HOME");
+   if (!client || !client[0] || !home || !home[0])
+      return 0;
+   const hmem_scope_t *scope = hmem_scope_for_client(client);
+   if (!scope)
+      return 0;
+   cJSON *ti = tool_input ? cJSON_Parse(tool_input) : NULL;
+   if (!ti)
+      return 0;
+
+   int verdict = 0;
+
+   /* Bash bypass: a shell command that writes a memory file is reject-denied (we
+    * can't capture its output) — steer the agent to the Write tool. */
+   if (strcmp(tool, "Bash") == 0)
+   {
+      cJSON *jc = cJSON_GetObjectItemCaseSensitive(ti, "command");
+      const char *cmd = (jc && cJSON_IsString(jc)) ? jc->valuestring : NULL;
+      if (cmd && memory_redirect_bash_targets_memory(client, cmd, home))
+      {
+         snprintf(msg, msg_len,
+                  "Memory files are managed by aimee — use the Write tool to set "
+                  "memory/<name>.md, not shell redirection.");
+         hmem_audit("reject", NULL, NULL, "bash-write-memory");
+         verdict = 2;
+      }
+      cJSON_Delete(ti);
+      return verdict;
+   }
+
+   cJSON *jp = cJSON_GetObjectItemCaseSensitive(ti, "file_path");
+   if (!jp || !cJSON_IsString(jp))
+      jp = cJSON_GetObjectItemCaseSensitive(ti, "path");
+   const char *path = (jp && cJSON_IsString(jp)) ? jp->valuestring : NULL;
+   if (!path)
+   {
+      cJSON_Delete(ti);
+      return 0;
+   }
+
+   char name[HMEM_NAME_LEN];
+   const char *reason = NULL;
+   mr_verdict_t v = memory_redirect_classify(client, tool, path, home, name, sizeof(name), &reason);
+   if (v == MR_ALLOW)
+   {
+      cJSON_Delete(ti);
+      return 0;
+   }
+   if (v == MR_REJECT)
+   {
+      snprintf(msg, msg_len, "%s", reason ? reason : "memory write rejected");
+      hmem_audit("reject", NULL, NULL, reason);
+      cJSON_Delete(ti);
+      return 2;
+   }
+
+   /* MR_REDIRECT: a Write with no string content is invalid — never store an
+    * empty body over an existing entry. */
+   cJSON *jcont = cJSON_GetObjectItemCaseSensitive(ti, "content");
+   const char *content = (jcont && cJSON_IsString(jcont)) ? jcont->valuestring : NULL;
+   if (!content)
+   {
+      snprintf(msg, msg_len, "Memory Write needs a string 'content' field.");
+      cJSON_Delete(ti);
+      return 2;
+   }
+
+   /* Project key: prefer the client-resolved hint (correct for a remote server),
+    * else resolve from cwd (local server). */
+   char project[HMEM_PROJECT_KEY_MAX], rootdir[1024];
+   const char *hp = NULL;
+   cJSON *hpj = cJSON_GetObjectItemCaseSensitive(req, "harness_project");
+   if (cJSON_IsString(hpj) && hpj->valuestring && hpj->valuestring[0])
+      hp = hpj->valuestring;
+   if (hp && hmem_project_key_ok(hp))
+      snprintf(project, sizeof(project), "%s", hp);
+   else if (hmem_resolve_project(cwd, project, sizeof(project), rootdir, sizeof(rootdir)) != 0)
+   {
+      cJSON_Delete(ti); /* can't identify the project — fail open */
+      return 0;
+   }
+
+   hmem_row_t row;
+   memset(&row, 0, sizeof(row));
+   snprintf(row.project, sizeof(row.project), "%s", project);
+   snprintf(row.name, sizeof(row.name), "%s", name);
+   snprintf(row.type, sizeof(row.type), "%s", "fact");
+   snprintf(row.last_client, sizeof(row.last_client), "%s", client);
+   /* content is owned by ti and stays valid until cJSON_Delete(ti) at the end of
+    * this function — after hmem_upsert has copied it (SQLITE_TRANSIENT). */
+   row.body = (char *)content;
+   if (hmem_upsert(&row, NULL) != 0)
+   {
+      cJSON_Delete(ti); /* store failed — fail open rather than block the agent */
+      return 0;
+   }
+   /* DB1 is authoritative; the on-disk file is a cache. If the mirror write fails
+    * the row is still stored and the next session-start hydrate re-creates the
+    * file — so note it in the single 'redirect' audit rather than failing the op. */
+   int rmrc = memory_redirect_rematerialize(path, content, home, scope->projects_root);
+   hmem_audit("redirect", project, name,
+              rmrc == 0 ? NULL : "file write failed; stored in DB1, pending hydrate");
+   snprintf(msg, msg_len,
+            "Saved to aimee's central memory store as memory/%s.md (aimee manages these "
+            "files; it has been written for you).",
+            name);
+   cJSON_Delete(ti);
+   return 2;
+}
+
 static int handle_hooks_pre(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
    cJSON *jtn = cJSON_GetObjectItemCaseSensitive(req, "tool_name");
@@ -746,6 +887,29 @@ static int handle_hooks_pre(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    session_state_t state;
    session_state_load(&state, sid);
    hooks_ensure_cwd_worktree(&state, sid, cwd);
+
+   /* Memory interception: redirect an agent's local memory-file write into the
+    * central store BEFORE the generic guardrails see it (a memory write must not
+    * be tripped by e.g. the worktree guardrail). rc==2 with a message is rendered
+    * by the client as a PreToolUse deny. */
+   {
+      char mr_msg[1024] = "";
+      if (server_memory_intercept(tool_name, tool_input, cwd, req, mr_msg, sizeof(mr_msg)) == 2)
+      {
+         cJSON *mresp = cJSON_CreateObject();
+         cJSON_AddStringToObject(mresp, "status", "blocked");
+         cJSON_AddNumberToObject(mresp, "exit_code", 2);
+         if (mr_msg[0])
+            cJSON_AddStringToObject(mresp, "message", mr_msg);
+         if (request_id)
+            cJSON_AddStringToObject(mresp, "request_id", request_id);
+         int mrc = server_send_response(conn, mresp);
+         cJSON_Delete(mresp);
+         if (ti_heap)
+            free(ti_heap);
+         return mrc;
+      }
+   }
 
    /* Run guardrail check */
    char msg[1024] = "";
@@ -1099,6 +1263,8 @@ static const server_method_dispatch_t server_dispatch_table[] = {
     {"index.blast_radius", handle_index_blast_radius},
     {"index.structure", handle_index_structure},
     {"index.find_callers", handle_index_find_callers},
+    {"index.deps", handle_index_deps},
+    {"repo.trust", handle_repo_trust},
     {"graph.sync_code", handle_graph_sync_code},
     {"graph.explain", handle_graph_explain},
     {"blast_radius.preview", handle_blast_radius_preview},
@@ -1525,6 +1691,14 @@ static int server_pid_alive(const char *socket_path)
 #endif
 }
 
+/* Public liveness check: is an aimee-server instance running for `socket_path`?
+ * Used by the offline `--rotate-master-key` path to refuse to mutate the vault
+ * while the server is up (D13 F2). The caller resolves the default socket path. */
+int server_is_running(const char *socket_path)
+{
+   return socket_path ? server_pid_alive(socket_path) : 0;
+}
+
 static void server_pid_write(const char *socket_path)
 {
    char pid_path[1024];
@@ -1763,11 +1937,13 @@ int server_run(server_ctx_t *ctx)
    /* The /v1 HTTP listener (server_http.c) runs on its own accept thread with
     * per-connection workers, so the main thread has no NDJSON accept loop to
     * drive any more. Park here until a signal flips ctx->running, then return so
-    * run_server() can tear everything down. */
+    * run_server() can tear everything down. The 1s tick also drives idle-reaping
+    * of per-webuser code-server editors (WP-I lifecycle) via reap_tick. */
    while (ctx->running)
    {
       struct timespec ts = {.tv_sec = 1, .tv_nsec = 0};
       nanosleep(&ts, NULL);
+      webuser_editor_reap_tick();
    }
    return 0;
 }

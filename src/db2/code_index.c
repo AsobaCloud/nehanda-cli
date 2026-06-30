@@ -3,6 +3,7 @@
 #include "code_index.h"
 #include "../headers/aimee.h"      /* MAX_PATH_LEN, now_utc */
 #include "../headers/code_match.h" /* code_match_line (P1b span enrichment) */
+#include "cross_repo_resolver.h"   /* H0b: xrepo_lang_name / xrepo_path_is_vendored */
 #include "db2.h"
 #include "db2_internal.h"
 #include "db_postgres.h"
@@ -451,9 +452,13 @@ int64_t db2_code_index_file_upsert(int64_t project_id, const char *rel_path, con
    if (!conn)
       return -1;
 
-   static const char *sql = "INSERT INTO files (project_id, path, scanned_at)"
-                            " VALUES (?1, ?2, ?3)"
-                            " ON CONFLICT(project_id, path) DO UPDATE SET scanned_at = ?3"
+   /* H0b: per-file language + vendored flag, derived from the path at index time. */
+   const char *language = xrepo_lang_name(xrepo_lang_from_path(rel_path));
+   int vendored = xrepo_path_is_vendored(rel_path);
+   static const char *sql = "INSERT INTO files (project_id, path, scanned_at, language, vendored)"
+                            " VALUES (?1, ?2, ?3, ?4, ?5)"
+                            " ON CONFLICT(project_id, path) DO UPDATE SET scanned_at = ?3,"
+                            " language = ?4, vendored = ?5"
                             " RETURNING id";
    char err[CIDX_ERRBUF] = "";
    aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
@@ -462,6 +467,8 @@ int64_t db2_code_index_file_upsert(int64_t project_id, const char *rel_path, con
    aimee_pg_bind_int64(st, "?1", project_id);
    aimee_pg_bind_text(st, "?2", rel_path);
    aimee_pg_bind_text(st, "?3", scanned_at);
+   aimee_pg_bind_text(st, "?4", language);
+   aimee_pg_bind_int(st, "?5", vendored);
    int64_t id = -1;
    if (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
       id = aimee_pg_column_int64(st, 0);
@@ -531,6 +538,38 @@ int db2_code_index_purge_files_matching(int64_t project_id, const char *path_glo
    return affected;
 }
 
+/* SQL predicate (on `path`) selecting a project-relative path that HAS a hidden
+ * component yet is NOT a wanted dotfile build manifest, so the hidden-path purges
+ * delete exactly what the ingest layer would have refused (ci_path_ingest_excluded
+ * / ci_is_dotfile_manifest — recall §2.2). A .gitmodules is spared ONLY when every
+ * ANCESTOR component is non-hidden: the repo-root `.gitmodules`, or `dir/.gitmodules`
+ * with no hidden dir before it. A .gitmodules under a hidden ancestor (`.git/.gitmodules`,
+ * `a/.hidden/.gitmodules`) is still purged — ingest never admits it. */
+#define CIDX_HIDDEN_NOT_MANIFEST                                                                   \
+   "(path LIKE '.%' OR path LIKE '%/.%') "                                                         \
+   "AND NOT (path = '.gitmodules' OR (path LIKE '%/.gitmodules' AND path NOT LIKE '.%' "           \
+   "                                  AND path NOT LIKE '%/.%/.gitmodules'))"
+
+int db2_code_index_purge_hidden_except_manifests(int64_t project_id)
+{
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+
+   /* Per-project hidden-path purge that spares wanted dotfile manifests. */
+   static const char *sql = "DELETE FROM files WHERE project_id = ?1 AND " CIDX_HIDDEN_NOT_MANIFEST;
+   char err[CIDX_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_int64(st, "?1", project_id);
+   int affected = -1;
+   if (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_DONE)
+      affected = aimee_pg_stmt_changes(st);
+   aimee_pg_finalize(st);
+   return affected;
+}
+
 int db2_code_index_purge_hidden_pollution(void)
 {
    void *conn = db2_conn();
@@ -540,9 +579,12 @@ int db2_code_index_purge_hidden_pollution(void)
    int total = 0;
    char err[CIDX_ERRBUF] = "";
 
-   /* Cross-project file purge: every file whose project-relative path has
-    * any hidden component. CASCADE drops dependent rows. */
-   static const char *files_sql = "DELETE FROM files WHERE path LIKE '.%' OR path LIKE '%/.%'";
+   /* Cross-project file purge: every file whose project-relative path has a hidden
+    * component, EXCEPT a wanted dotfile build manifest (.gitmodules with all
+    * non-hidden ancestors) — git submodule declarations are legitimately indexed
+    * despite the leading-'.' filename (recall §2.2); the ingest path admits them, so
+    * this startup cleanup must not delete them back out. CASCADE drops dependents. */
+   static const char *files_sql = "DELETE FROM files WHERE " CIDX_HIDDEN_NOT_MANIFEST;
    aimee_pg_stmt_t *st = aimee_pg_prepare(conn, files_sql, err, sizeof(err));
    if (!st)
       return -1;
@@ -669,8 +711,11 @@ int db2_code_index_file_replace(int64_t file_id, const code_index_file_data_t *d
 
    if (rc == 0 && data->definition_count > 0 && data->definitions)
    {
-      static const char *ins = "INSERT INTO terms (file_id, name, kind, line, line_end)"
-                               " VALUES (?1, ?2, ?3, ?4, ?5)";
+      /* H0a: coarse kind stays 'definition' (the ~10 kind='definition' consumers,
+       * incl. index_structure/index_find here, are unchanged); the extractor's
+       * granular kind goes to def_kind for the cross-repo resolver (§5). */
+      static const char *ins = "INSERT INTO terms (file_id, name, kind, def_kind, line, line_end)"
+                               " VALUES (?1, ?2, 'definition', ?3, ?4, ?5)";
       for (int i = 0; i < data->definition_count; i++)
       {
          aimee_pg_stmt_t *st = aimee_pg_prepare(conn, ins, err, sizeof(err));

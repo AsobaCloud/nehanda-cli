@@ -145,7 +145,23 @@ static int check_required_env(const plugin_t *p)
 
 int plugin_loader_discover_all(char *err_buf, size_t err_len)
 {
-   plugin_t merged[PLUGIN_MAX_PLUGINS];
+   /* plugin_t is ~70 KB, so plugin_t[PLUGIN_MAX_PLUGINS] is ~4.3 MB. Two such
+    * arrays live at once here (merged + a scratch found buffer); on the stack
+    * that overflows the 8 MB main-thread stack and segfaults at function entry.
+    * Heap-allocate both. plugin_t is flat POD (only inline char arrays / ints —
+    * no owned pointers), so the merged[x]=found[i] value-copy is complete and a
+    * single found buffer can be reused across the scan passes (each scan fully
+    * populates found[0..n-1], which is all the merge reads). */
+   plugin_t *merged = calloc(PLUGIN_MAX_PLUGINS, sizeof(*merged));
+   plugin_t *found = calloc(PLUGIN_MAX_PLUGINS, sizeof(*found));
+   if (!merged || !found)
+   {
+      free(merged);
+      free(found);
+      if (err_buf)
+         snprintf(err_buf, err_len, "plugin discovery: out of memory");
+      return 0; /* non-fatal: startup continues without plugins */
+   }
    int merged_count = 0;
 
    /* 1. Bundled plugins */
@@ -153,7 +169,6 @@ int plugin_loader_discover_all(char *err_buf, size_t err_len)
       char bdir[MAX_PATH_LEN];
       bundled_plugins_dir(bdir, sizeof(bdir));
 
-      plugin_t found[PLUGIN_MAX_PLUGINS];
       int n = plugin_loader_scan_dir(bdir, found, PLUGIN_MAX_PLUGINS);
       for (int i = 0; i < n && merged_count < PLUGIN_MAX_PLUGINS; i++)
          merged[merged_count++] = found[i];
@@ -170,7 +185,6 @@ int plugin_loader_discover_all(char *err_buf, size_t err_len)
          char udir[MAX_PATH_LEN];
          snprintf(udir, sizeof(udir), "%s/plugins", home);
 
-         plugin_t found[PLUGIN_MAX_PLUGINS];
          int n = plugin_loader_scan_dir(udir, found, PLUGIN_MAX_PLUGINS);
          if (n > 0)
          {
@@ -188,7 +202,6 @@ int plugin_loader_discover_all(char *err_buf, size_t err_len)
          char pdir[MAX_PATH_LEN];
          snprintf(pdir, sizeof(pdir), "%s", ".aimee/plugins");
 
-         plugin_t found[PLUGIN_MAX_PLUGINS];
          int n = plugin_loader_scan_dir(pdir, found, PLUGIN_MAX_PLUGINS);
          if (n > 0)
          {
@@ -224,5 +237,7 @@ int plugin_loader_discover_all(char *err_buf, size_t err_len)
    if (failures > 0 && err_buf)
       snprintf(err_buf, err_len, "%d plugin(s) failed to load", failures);
 
+   free(merged);
+   free(found);
    return 0; /* non-fatal: individual plugin failures do not abort startup */
 }

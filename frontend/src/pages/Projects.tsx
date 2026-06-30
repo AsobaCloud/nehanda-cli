@@ -40,10 +40,12 @@ export default function Projects() {
   const [name, setName] = useState('');
   const [token, setToken] = useState('');
   const [commitMsg, setCommitMsg] = useState('');
+  const [prTitle, setPrTitle] = useState('');
   const [branch, setBranch] = useState('');
   const [hosts, setHosts] = useState<string[]>([]);
   const [credHost, setCredHost] = useState('');
   const [credToken, setCredToken] = useState('');
+  const [credSSHKey, setCredSSHKey] = useState('');
   const [ghCode, setGhCode] = useState('');
   const [ghUri, setGhUri] = useState('');
   const [ghConfigured, setGhConfigured] = useState(false);
@@ -134,6 +136,33 @@ export default function Projects() {
     } finally { setBusy(false); }
   }
 
+  async function addSSHKey() {
+    if (!credSSHKey.trim()) return;
+    setBusy(true); setErr('');
+    try {
+      const r = await api('/api/git/sshkey', {
+        method: 'POST',
+        body: JSON.stringify({ ssh_key: credSSHKey }),
+      });
+      const d = await r.json().catch(() => ({}));
+      // Always drop the key from component state once it has left the browser —
+      // never leave private-key material sitting in React state / the textarea.
+      setCredSSHKey('');
+      if (r.status === 423) { setErr('unlock your vault first, then add the SSH key'); }
+      else if (!r.ok) { setErr(d.error || 'could not save SSH key'); }
+      else { setErr('SSH key saved'); }
+    } finally { setBusy(false); }
+  }
+
+  async function removeSSHKey() {
+    setBusy(true); setErr('');
+    try {
+      const r = await api('/api/git/sshkey', { method: 'DELETE' });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); setErr(d.error || 'could not clear SSH key'); }
+      else { setCredSSHKey(''); setErr('SSH key cleared'); }
+    } finally { setBusy(false); }
+  }
+
   async function removeCred(host: string) {
     setBusy(true); setErr('');
     try {
@@ -160,8 +189,8 @@ export default function Projects() {
     } finally { setBusy(false); }
   }
 
-  async function runOp(op: string, extra?: Record<string, unknown>) {
-    if (!selected) return;
+  async function runOp(op: string, extra?: Record<string, unknown>): Promise<boolean> {
+    if (!selected) return false;
     setBusy(true); setErr(''); setOutput('');
     try {
       // When operating on the active session's project, act on that session's
@@ -172,9 +201,10 @@ export default function Projects() {
         body: JSON.stringify({ project: selected, op, session_id, ...extra }),
       });
       const d = await r.json();
-      if (!r.ok) { setErr(d.error || `${op} failed`); }
-      else { setOutput(d.output || `(${op}: ok)`); }
-    } finally { setBusy(false); }
+      if (!r.ok) { setErr(d.error || `${op} failed`); return false; }
+      setOutput(d.output || `(${op}: ok)`);
+      return true;
+    } catch { return false; } finally { setBusy(false); }
   }
 
   return (
@@ -246,6 +276,24 @@ export default function Projects() {
             <button style={{ ...btn, background: '#234', color: '#8cf', borderColor: '#456' }}
               disabled={busy || !credHost.trim() || !credToken.trim()} onClick={addCred}>Save</button>
           </div>
+          <details style={{ marginTop: '10px', fontSize: '12px', color: '#aaa' }}>
+            <summary style={{ cursor: 'pointer' }}>SSH private key (for git over SSH)</summary>
+            <div style={{ marginTop: '6px' }}>
+              <div style={{ marginBottom: '6px' }}>
+                Paste an <b>unencrypted</b> OpenSSH/PEM private key (no passphrase). It is stored only in
+                your encrypted vault and never shown again. Requires your vault to be unlocked.
+              </div>
+              <textarea style={{ ...input, width: '100%', minHeight: '110px', fontFamily: 'monospace' }}
+                placeholder={'-----BEGIN OPENSSH PRIVATE KEY-----\n…\n-----END OPENSSH PRIVATE KEY-----'}
+                value={credSSHKey} onChange={e => setCredSSHKey(e.target.value)} />
+              <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap' }}>
+                <button style={{ ...btn, background: '#234', color: '#8cf', borderColor: '#456' }}
+                  disabled={busy || !credSSHKey.trim()} onClick={addSSHKey}>Save SSH key</button>
+                <button style={{ ...btn, borderColor: '#d99', color: '#c33' }} disabled={busy}
+                  onClick={removeSSHKey}>Clear SSH key</button>
+              </div>
+            </div>
+          </details>
         </div>
       </Panel>
 
@@ -284,6 +332,14 @@ export default function Projects() {
                   value={branch} onChange={e => setBranch(e.target.value)} />
                 <button style={btn} disabled={busy || !branch.trim()}
                   onClick={() => runOp('checkout', { branch })}>checkout</button>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <input style={{ ...input, flex: 1, minWidth: '180px' }}
+                  placeholder="PR title (optional — empty fills from commits)"
+                  value={prTitle} onChange={e => setPrTitle(e.target.value)} />
+                <button style={{ ...btn, borderColor: '#7a7' }} disabled={busy}
+                  title="Open a GitHub pull request for the pushed branch"
+                  onClick={async () => { if (await runOp('pr', { message: prTitle })) setPrTitle(''); }}>open PR</button>
               </div>
             </div>
           )}

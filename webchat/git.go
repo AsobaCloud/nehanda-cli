@@ -146,6 +146,53 @@ func (s *server) handleGitCredentials(w http.ResponseWriter, r *http.Request) {
 		}
 		body, _ := json.Marshal(map[string]string{"host": req.Host, "token": req.Token})
 		st, data, err := s.v1RequestWebuser(ctx, user, r.Method, "/v1/git/credentials", body)
+		// On revoke, aimee-server recycles the user's editor (its spawn env held
+		// the now-deleted token). Evict our cached loopback port so the next
+		// /vscode request re-ensures a freshly-spawned, credential-free editor
+		// instead of dialing the dead port and self-healing only after a failure.
+		if r.Method == http.MethodDelete && err == nil && st == http.StatusOK {
+			editorPorts.Delete(user)
+		}
+		s.gitRelay(w, st, data, err)
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// /api/git/sshkey — store (POST {ssh_key}) or remove (DELETE) the caller's SSH
+// private key for git over SSH. The key is write-only: it goes to the user's
+// encrypted vault server-side and is never read back to the browser. Storing
+// needs the user's vault unlocked; aimee-server returns 423 if it is locked,
+// which the UI surfaces as a prompt to unlock.
+func (s *server) handleGitSSHKey(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), socketCallTimeout)
+	defer cancel()
+	user := currentUser(r)
+	switch r.Method {
+	case http.MethodDelete:
+		st, data, err := s.v1RequestWebuser(ctx, user, http.MethodDelete, "/v1/git/sshkey", nil)
+		s.gitRelay(w, st, data, err)
+	case http.MethodPost:
+		// A private key is a few KB; cap the body so a huge POST can't force
+		// large allocations + parse + re-marshal here and downstream.
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		var req struct {
+			SSHKey string `json:"ssh_key"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SSHKey == "" {
+			if _, ok := err.(*http.MaxBytesError); ok {
+				writeJSONError(w, http.StatusRequestEntityTooLarge, "ssh key too large")
+				return
+			}
+			writeJSONError(w, http.StatusBadRequest, "ssh_key required")
+			return
+		}
+		body, err := json.Marshal(map[string]string{"ssh_key": req.SSHKey})
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "could not encode request")
+			return
+		}
+		st, data, err := s.v1RequestWebuser(ctx, user, http.MethodPost, "/v1/git/sshkey", body)
 		s.gitRelay(w, st, data, err)
 	default:
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")

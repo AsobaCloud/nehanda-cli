@@ -17,15 +17,20 @@
 
 /* Route-handler deps used below but not needed by server_http.c's own body
  * (kept here, not in server_http.c, to respect its 2000-line limit). */
+#include "git_forge_vault.h"  /* GIT_FORGE_VAULT_AGENT/SSHKEY_CRED — per-webuser ssh-key vault */
 #include "git_host_cred.h"    /* per-host git credential store for /v1/git/credentials */
 #include "git_oauth_github.h" /* GitHub device-flow sign-in (/v1/git/oauth/github) */
 #include "git_ops.h"          /* git_ops_run for /v1/workspace/git (WP-E) */
+#include "git_ssh_agent.h"    /* git_ssh_agent_stop — drop live key handles on revoke */
+#include "vault_service.h"    /* vault_service_set/delete for the per-webuser ssh-key route */
 #include "git_project.h"      /* git_project_clone for /v1/workspace/clone (WP-D) */
 #include "webuser_editor.h"   /* webuser_editor_ensure for /v1/workspace/editor (WP-I) */
 #include "workspace_scope.h"  /* ws_scope_user_root — project workspace root */
 #include "webchat_live.h"     /* db1_webchat_live_get — the browser's live-turn poll */
 #include "index.h"            /* index_scan_project after a webuser clone (WP-D) */
 #include "aimee_home.h"       /* aimee_home — proposal artifact dir for /v1/dev/submit */
+#include <math.h>             /* isfinite — validate the /v1/dev/submit budget cap */
+#include <errno.h>            /* strtol overflow detection for /v1/dev/submit caps */
 #include "wfe_engine.h"       /* wfe_work_item_create — POST /v1/dev/submit intake */
 #include "wfe_scheduler.h"    /* wfe_scheduler_notify — resume the autonomy driver */
 #include "wfe_approval.h"     /* wfe_approval_record/present — human-gate approval */
@@ -180,6 +185,24 @@ static int rh_runs_post(const route_req_t *rq, char *resp, int cap)
  * to drive it server-side. The run proceeds independent of this connection;
  * human gates park it for approval. Returns {work_item_id}. This is the ONLY way
  * an autonomous run begins — aimee never self-initiates. */
+/* Parse a positive-integer env cap value. Returns `defval` for unset/empty/
+ * non-numeric/trailing-garbage/overflow/out-of-[1,1000000] — so a malformed
+ * AIMEE_AUTONOMY_* (incl. "0" or a negative) can never silently DISABLE the cap,
+ * only fall back to the safe default. The whole string must be consumed. The
+ * caller fetches the value via a getenv string literal so the var stays
+ * discoverable by the docs-gen scanner. */
+static int dev_env_cap(const char *v, int defval)
+{
+   if (!v || !v[0])
+      return defval;
+   errno = 0;
+   char *end = NULL;
+   long n = strtol(v, &end, 10);
+   if (errno != 0 || !end || *end != '\0' || n < 1 || n > 1000000)
+      return defval;
+   return (int)n;
+}
+
 static int rh_dev_submit(const route_req_t *rq, char *resp, int cap)
 {
    cJSON *body = rq->body ? cJSON_Parse(rq->body) : NULL;
@@ -196,37 +219,115 @@ static int rh_dev_submit(const route_req_t *rq, char *resp, int cap)
        (jwf && cJSON_IsString(jwf) && jwf->valuestring[0]) ? jwf->valuestring : "build";
    const char *repo = (jrepo && cJSON_IsString(jrepo)) ? jrepo->valuestring : "";
 
-   /* Persist the submitted proposal to a unique artifact path. */
+   /* Intake-auth (WP-4/WP-5): require an attested submitter, and cap per-principal
+    * concurrency + submit rate so one principal can't fan out unbounded autonomous
+    * runs (each spends budget and, once the live forge is enabled, opens PRs). The
+    * endpoint is already CAP_DELEGATE; this binds the run to the principal for audit
+    * and bounds resource abuse. Both caps are DB-backed (survive restart). */
+   const char *submitter = server_http_identity_principal();
+   if (!submitter || !submitter[0])
+   {
+      cJSON_Delete(body);
+      snprintf(resp, cap, "{\"error\":\"unauthenticated: no attested principal\"}");
+      return 401;
+   }
+   /* The submitter is the cap/audit key and is stored in submitter[128]; a longer
+    * principal would truncate and collide with another's quota bucket, so reject it
+    * rather than silently mis-bucket. */
+   if (strlen(submitter) >= 128)
+   {
+      cJSON_Delete(body);
+      snprintf(resp, cap, "{\"error\":\"principal too long\"}");
+      return 400;
+   }
+   int max_active = dev_env_cap(getenv("AIMEE_AUTONOMY_MAX_ACTIVE_PER_PRINCIPAL"), 5);
+   int rate_max = dev_env_cap(getenv("AIMEE_AUTONOMY_SUBMIT_RATE_PER_MIN"), 10);
+   int rate_secs = dev_env_cap(getenv("AIMEE_AUTONOMY_SUBMIT_WINDOW_SECS"), 60);
+
+   /* Compute the unique artifact path now, but DON'T write the file until the
+    * submit is admitted below — a capped/rate-limited/faulted principal must not be
+    * able to land an unbounded proposal file on disk on every rejected request. */
    const char *home = aimee_home();
    char dir[1024];
    snprintf(dir, sizeof dir, "%s/workflows/proposals", home ? home : "/tmp");
-   mkdir(dir, 0700); /* best effort; parent created by standup */
    char ppath[1152];
    snprintf(ppath, sizeof ppath, "%s/wi-%ld-%d.md", dir, (long)time(NULL), (int)getpid());
-   FILE *pf = fopen(ppath, "wb");
-   if (!pf)
-   {
-      cJSON_Delete(body);
-      snprintf(resp, cap, "{\"error\":\"could not persist proposal\"}");
-      return 500;
-   }
-   fwrite(jprop->valuestring, 1, strlen(jprop->valuestring), pf);
-   fclose(pf);
 
+   /* Resolve the workflow (no DB write), then create + cap-check + submitter-bind +
+    * audit ATOMICALLY under one BEGIN IMMEDIATE so concurrent submits from one
+    * principal serialize (TOCTOU-free) and any DB fault fails closed. */
    char id[80] = "", err[256] = "";
-   int rc = wfe_work_item_create(workflow, repo, ppath, "autonomous", id, err, sizeof err);
-   if (rc != 0 || !id[0])
+   char wf_name[64], wf_ver[65], wf_start[64], wf_repo[512];
+   if (wfe_work_item_resolve(workflow, repo, wf_name, wf_ver, wf_start, wf_repo, id, err,
+                             sizeof err) != 0 ||
+       !id[0])
    {
       cJSON *e = cJSON_CreateObject();
-      cJSON_AddStringToObject(e, "error", err[0] ? err : "failed to create work item");
+      cJSON_AddStringToObject(e, "error", err[0] ? err : "failed to resolve workflow");
       char *s = cJSON_PrintUnformatted(e);
-      snprintf(resp, cap, "%s", s ? s : "{\"error\":\"failed to create work item\"}");
+      snprintf(resp, cap, "%s", s ? s : "{\"error\":\"failed to resolve workflow\"}");
       free(s);
       cJSON_Delete(e);
       cJSON_Delete(body);
       return 500;
    }
+   int sr = db1_work_item_submit_capped(id, wf_repo, ppath, wf_name, wf_ver, wf_start, submitter,
+                                        max_active, rate_max, rate_secs);
+   if (sr == 1)
+   {
+      cJSON_Delete(body);
+      snprintf(resp, cap, "{\"error\":\"too many active autonomous runs for this principal\"}");
+      return 429;
+   }
+   if (sr == 2)
+   {
+      cJSON_Delete(body);
+      snprintf(resp, cap, "{\"error\":\"submit rate exceeded for this principal\"}");
+      return 429;
+   }
+   if (sr != 0)
+   {
+      /* Fail CLOSED: a DB/txn fault on the cap path returns 503, never an
+       * uncapped/unattributed run. */
+      cJSON_Delete(body);
+      snprintf(resp, cap, "{\"error\":\"could not record submission\"}");
+      return 503;
+   }
+   /* Admitted: now (and only now) write the proposal artifact the row references.
+    * If the write fails, abandon the just-created run so it can't drive a missing
+    * proposal forward. */
+   mkdir(dir, 0700); /* best effort; parent created by standup */
+   FILE *pf = fopen(ppath, "wb");
+   if (pf)
+   {
+      fwrite(jprop->valuestring, 1, strlen(jprop->valuestring), pf);
+      fclose(pf);
+   }
    cJSON_Delete(body);
+   if (!pf)
+   {
+      db1_work_item_set_terminal(id, "abandoned");
+      snprintf(resp, cap, "{\"error\":\"could not persist proposal\"}");
+      return 500;
+   }
+   /* WP-5: a per-run USD budget ceiling so a runaway autonomous run parks
+    * (budget_exceeded) instead of burning unbounded delegate cost. Default $5.00;
+    * AIMEE_AUTONOMY_MAX_USD overrides (set it to 0 to disable the cap). The engine
+    * checks cum_cost_usd against this each advance; cost is the server-side
+    * wall-clock estimate threaded from the delegate dispatch. */
+   {
+      double cap_usd = 5.0;
+      const char *v = getenv("AIMEE_AUTONOMY_MAX_USD");
+      if (v && v[0])
+      {
+         char *e = NULL;
+         double d = strtod(v, &e);
+         if (e && *e == '\0' && isfinite(d) && d >= 0) /* reject inf/NaN: would void the cap */
+            cap_usd = d;
+      }
+      if (cap_usd > 0)
+         db1_work_item_set_cost_cap(id, cap_usd);
+   }
    wfe_scheduler_notify(); /* drive it now; the run continues server-side */
    cJSON *ok = cJSON_CreateObject();
    cJSON_AddStringToObject(ok, "work_item_id", id);
@@ -1051,14 +1152,27 @@ static int rh_workspace_remove(const route_req_t *rq, char *resp, int cap)
    return ws_dispatch_args("workspace.remove", path, NULL, 0, resp, cap);
 }
 
-/* POST /v1/workspaces/{id}/forge-token — install a short-lived brokered forge
- * token for the workspace (workspace-resource-plane §4). Body:
- * {token, scope?, ttl_seconds?}. The token is held in memory only and injected
- * into the server's git/gh exec env; it is never written to disk or logged, and
- * is revoked when the workspace closes. tool:execute (write); reachable over TCP
- * so a filesystem-rich client hands its token to a detached/co-located hub. */
+/* AIMEE_WEBCHAT_GIT=0 disables the whole webchat git surface — forge-token,
+ * clone, ops, per-host credentials, ssh-key, projects, session-dir, OAuth —
+ * without affecting the editor (which has its own AIMEE_WEBCHAT_EDITOR gate;
+ * session-dir is git-panel-only and not on the editor path, so gating it here is
+ * safe). On by default; only the exact value "0" disables it, so a blank/other
+ * value leaves git enabled. Read per call (immediate single-byte compare, like
+ * webuser_editor's AIMEE_WEBCHAT_EDITOR gate) — aimee never setenv()s at request
+ * time, so there is no concurrent-mutation window. Each git route checks this
+ * first and returns 503 when off — ahead of the 403 webuser check, which is
+ * intentional: the disabled state is not a secret, and an operator can ship the
+ * image with the editor but no git intake. */
+static int git_surface_enabled(void)
+{
+   const char *v = getenv("AIMEE_WEBCHAT_GIT");
+   return !(v && v[0] == '0' && v[1] == '\0');
+}
+
 static int rh_workspace_forge_token(const route_req_t *rq, char *resp, int cap)
 {
+   if (!git_surface_enabled())
+      return err_json(resp, cap, 503, "the git surface is disabled on this server");
    char path[MAX_PATH_LEN];
    ws_pct_decode(rq->id, path, sizeof(path));
    if (!path[0])
@@ -1096,6 +1210,8 @@ static int rh_workspace_forge_token(const route_req_t *rq, char *resp, int cap)
  * injected from the user's sealed vault (WP-C); never accepted in the body. */
 static int rh_workspace_clone(const route_req_t *rq, char *resp, int cap)
 {
+   if (!git_surface_enabled())
+      return err_json(resp, cap, 503, "the git surface is disabled on this server");
    const char *principal = server_http_identity_principal();
    if (!principal || strncmp(principal, "webuser:", 8) != 0)
       return err_json(resp, cap, 403, "git projects require a webchat user");
@@ -1139,6 +1255,8 @@ static int rh_workspace_clone(const route_req_t *rq, char *resp, int cap)
  * allowlisted by git_ops, and remote ops use the user's vaulted creds. */
 static int rh_workspace_git(const route_req_t *rq, char *resp, int cap)
 {
+   if (!git_surface_enabled())
+      return err_json(resp, cap, 503, "the git surface is disabled on this server");
    const char *principal = server_http_identity_principal();
    if (!principal || strncmp(principal, "webuser:", 8) != 0)
       return err_json(resp, cap, 403, "git projects require a webchat user");
@@ -1160,9 +1278,10 @@ static int rh_workspace_git(const route_req_t *rq, char *resp, int cap)
    /* Optional: run in the calling session's isolated worktree (same tree its
     * agent edits) rather than the shared project checkout. */
    const char *session_id = (cJSON_IsString(jsid) && jsid->valuestring) ? jsid->valuestring : NULL;
-   /* text_arg is the commit message (commit) or target branch (checkout). */
+   /* text_arg is the commit message (commit), target branch (checkout), or the
+    * PR title (pr; optional — empty → gh --fill from the branch's commits). */
    const char *text = NULL;
-   if (op && strcmp(op, "commit") == 0)
+   if (op && (strcmp(op, "commit") == 0 || strcmp(op, "pr") == 0))
       text = (cJSON_IsString(jmsg) && jmsg->valuestring) ? jmsg->valuestring : NULL;
    else if (op && strcmp(op, "checkout") == 0)
       text = (cJSON_IsString(jbranch) && jbranch->valuestring) ? jbranch->valuestring : NULL;
@@ -1194,6 +1313,8 @@ static int rh_workspace_git(const route_req_t *rq, char *resp, int cap)
 static int rh_workspace_projects(const route_req_t *rq, char *resp, int cap)
 {
    (void)rq;
+   if (!git_surface_enabled())
+      return err_json(resp, cap, 503, "the git surface is disabled on this server");
    const char *principal = server_http_identity_principal();
    if (!principal || strncmp(principal, "webuser:", 8) != 0)
       return err_json(resp, cap, 403, "git projects require a webchat user");
@@ -1275,6 +1396,8 @@ static int rh_chat_live(const route_req_t *rq, char *resp, int cap)
  * session's agent edits. Identity is the attested webuser principal. */
 static int rh_workspace_session_dir(const route_req_t *rq, char *resp, int cap)
 {
+   if (!git_surface_enabled())
+      return err_json(resp, cap, 503, "the git surface is disabled on this server");
    const char *principal = server_http_identity_principal();
    if (!principal || strncmp(principal, "webuser:", 8) != 0)
       return err_json(resp, cap, 403, "git projects require a webchat user");
@@ -1341,6 +1464,8 @@ static int rh_workspace_editor(const route_req_t *rq, char *resp, int cap)
  * tokens. Identity is the attested X-Aimee-Webuser principal. */
 static int rh_git_credentials(const route_req_t *rq, char *resp, int cap)
 {
+   if (!git_surface_enabled())
+      return err_json(resp, cap, 503, "the git surface is disabled on this server");
    const char *principal = server_http_identity_principal();
    if (!principal || strncmp(principal, "webuser:", 8) != 0)
       return err_json(resp, cap, 403, "git credentials require a webchat user");
@@ -1385,7 +1510,25 @@ static int rh_git_credentials(const route_req_t *rq, char *resp, int cap)
 
    int rc;
    if (strcmp(rq->method, "DELETE") == 0)
+   {
       rc = git_host_cred_delete(host);
+      /* Revocation must leave no live credential handle behind (G5): the user's
+       * running code-server baked the now-removed token into its env at spawn,
+       * and the ssh-agent may hold a key loaded from the vault. Drop both AFTER
+       * the vault entry is gone — order matters: deleting first means a /vscode
+       * request that respawns the editor between these two steps re-reads an
+       * already-empty vault, so it cannot pick the token back up. Both stop
+       * functions are void + idempotent (no-op if nothing is running) so a
+       * concurrent double-revoke is safe; webuser_editor_stop reaps the child
+       * synchronously (bounded ~500ms), git_ssh_agent_stop only signals+unlinks.
+       * Recycling is cheap — the editor respawns lazily on the next /vscode
+       * request with a freshly-built (credential-free) env. */
+      if (rc == 0)
+      {
+         webuser_editor_stop(principal);
+         git_ssh_agent_stop(principal);
+      }
+   }
    else /* POST → set */
    {
       if (!token || !token[0])
@@ -1403,11 +1546,98 @@ static int rh_git_credentials(const route_req_t *rq, char *resp, int cap)
               : err_json(resp, cap, 500, "too large");
 }
 
+/* Per-webuser SSH private key for git over SSH. Stored in the caller's OWN
+ * encrypted vault under (webuser:<name>, "git", "ssh_key") — dual-wrapped so the
+ * server can load it into the user's in-memory ssh-agent autonomously
+ * (git_ssh_agent_ensure → git_forge_vault_sshkey), while the key never reaches
+ * the browser (write-only) and never lands on disk. Storing needs the caller's
+ * vault unlocked (the per-principal KEK); a locked vault returns 423 so the UI
+ * can prompt an unlock. The secret is never logged. */
+static int rh_git_sshkey(const route_req_t *rq, char *resp, int cap)
+{
+   if (!git_surface_enabled())
+      return err_json(resp, cap, 503, "the git surface is disabled on this server");
+   const char *principal = server_http_identity_principal();
+   if (!principal || strncmp(principal, "webuser:", 8) != 0)
+      return err_json(resp, cap, 403, "ssh keys require a webchat user");
+
+   if (strcmp(rq->method, "DELETE") == 0)
+   {
+      /* Remove the stored key and drop any live agent handle (mirrors revoke). A
+       * missing entry is success — DELETE is idempotent. git_ssh_agent_stop runs
+       * only on a clean delete: on a real vault error the persisted key still
+       * exists, so tearing the agent down would just force a reload — leaving it
+       * is the less-inconsistent state. */
+      vault_status_t st =
+          vault_service_delete(principal, GIT_FORGE_VAULT_AGENT, GIT_FORGE_SSHKEY_CRED);
+      if (st != VAULT_OK && st != VAULT_NO_ENTRY)
+         return err_json(resp, cap, 500, "vault delete failed");
+      git_ssh_agent_stop(principal);
+      return snprintf(resp, (size_t)cap, "{\"ok\":true}") < cap
+                 ? 200
+                 : err_json(resp, cap, 500, "too large");
+   }
+   if (strcmp(rq->method, "POST") != 0)
+      return err_json(resp, cap, 405, "method not allowed");
+
+   /* Bound the body before parsing: a private key is a few KB, so anything past
+    * 64 KiB is abuse — fail fast rather than parse + re-wrap a huge blob. */
+   if (rq->body_len > 65536)
+      return err_json(resp, cap, 413, "ssh key too large");
+
+   cJSON *body = (rq->body && rq->body[0]) ? cJSON_Parse(rq->body) : NULL;
+   if (!body || !cJSON_IsObject(body))
+   {
+      cJSON_Delete(body);
+      return err_json(resp, cap, 400, "invalid JSON body");
+   }
+   const cJSON *jkey = cJSON_GetObjectItemCaseSensitive(body, "ssh_key");
+   const char *key = (cJSON_IsString(jkey) && jkey->valuestring) ? jkey->valuestring : NULL;
+   /* Cheap shape check so an obviously-wrong paste fails fast with a clear
+    * message; ssh-add is still the authority at load time. Anchor on the PEM/
+    * OpenSSH armor ("-----BEGIN … PRIVATE KEY-----") rather than a loose
+    * substring so arbitrary text containing the words can't slip through. We do
+    * NOT accept a passphrase-encrypted key — the agent loads non-interactively. */
+   if (!key || strncmp(key, "-----BEGIN", 10) != 0 || !strstr(key, "PRIVATE KEY-----"))
+   {
+      cJSON_Delete(body);
+      return err_json(resp, cap, 400, "an unencrypted OpenSSH/PEM private key is required");
+   }
+   if (strstr(key, "ENCRYPTED") || strstr(key, "Proc-Type:"))
+   {
+      cJSON_Delete(body);
+      return err_json(resp, cap, 400,
+                      "passphrase-encrypted keys are not supported; provide an unencrypted key");
+   }
+
+   vault_status_t st = vault_service_set(principal, GIT_FORGE_VAULT_AGENT, GIT_FORGE_SSHKEY_CRED,
+                                         key, (long)time(NULL));
+   /* Zero our parsed copy of the secret before freeing the JSON tree. */
+   if (jkey && jkey->valuestring)
+   {
+      volatile char *p = (volatile char *)jkey->valuestring;
+      for (size_t i = 0; p[i]; i++)
+         p[i] = 0;
+   }
+   cJSON_Delete(body);
+   if (st == VAULT_ERR_LOCKED)
+      return err_json(resp, cap, 423, "vault is locked — unlock it, then add the key");
+   if (st != VAULT_OK)
+      return err_json(resp, cap, 500, "vault store failed");
+   /* A freshly stored key supersedes any agent already running with the old one. */
+   git_ssh_agent_stop(principal);
+   return snprintf(resp, (size_t)cap, "{\"ok\":true}") < cap
+              ? 200
+              : err_json(resp, cap, 500, "too large");
+}
+
 /* POST /v1/git/oauth/github/start — begin GitHub device-flow sign-in. Returns
  * {ok, user_code, verification_uri, interval}; 503 if not configured. */
 static int rh_git_oauth_github_start(const route_req_t *rq, char *resp, int cap)
 {
    (void)rq;
+   if (!git_surface_enabled())
+      return err_json(resp, cap, 503, "the git surface is disabled on this server");
    const char *principal = server_http_identity_principal();
    if (!principal || strncmp(principal, "webuser:", 8) != 0)
       return err_json(resp, cap, 403, "git sign-in requires a webchat user");
@@ -1437,6 +1667,8 @@ static int rh_git_oauth_github_start(const route_req_t *rq, char *resp, int cap)
 static int rh_git_oauth_github_poll(const route_req_t *rq, char *resp, int cap)
 {
    (void)rq;
+   if (!git_surface_enabled())
+      return err_json(resp, cap, 503, "the git surface is disabled on this server");
    const char *principal = server_http_identity_principal();
    if (!principal || strncmp(principal, "webuser:", 8) != 0)
       return err_json(resp, cap, 403, "git sign-in requires a webchat user");
@@ -1459,6 +1691,8 @@ static int rh_git_oauth_github_poll(const route_req_t *rq, char *resp, int cap)
  * button can be configured without touching env vars. */
 static int rh_git_oauth_github_config(const route_req_t *rq, char *resp, int cap)
 {
+   if (!git_surface_enabled())
+      return err_json(resp, cap, 503, "the git surface is disabled on this server");
    const char *principal = server_http_identity_principal();
    if (!principal || strncmp(principal, "webuser:", 8) != 0)
       return err_json(resp, cap, 403, "git sign-in requires a webchat user");
@@ -1636,6 +1870,8 @@ static const http_route_t g_v1_routes[] = {
     {"POST", "/v1/index/list", NULL, RM_EXACT, "index.list", 0, rh_dispatch_op},
     {"POST", "/v1/index/structure", NULL, RM_EXACT, "index.structure", 0, rh_dispatch_op},
     {"POST", "/v1/index/find_callers", NULL, RM_EXACT, "index.find_callers", 0, rh_dispatch_op},
+    {"POST", "/v1/index/deps", NULL, RM_EXACT, "index.deps", 0, rh_dispatch_op},
+    {"POST", "/v1/repo/trust", NULL, RM_EXACT, "repo.trust", 0, rh_dispatch_op},
     {"POST", "/v1/index/blast_radius", NULL, RM_EXACT, "index.blast_radius", 0, rh_dispatch_op},
 
     /* Skill + work-queue read families (hub-migration P1), same dispatch-backed
@@ -1992,6 +2228,8 @@ static const http_route_t g_v1_routes[] = {
     {"GET", "/v1/git/credentials", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_git_credentials},
     {"POST", "/v1/git/credentials", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_git_credentials},
     {"DELETE", "/v1/git/credentials", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_git_credentials},
+    {"POST", "/v1/git/sshkey", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_git_sshkey},
+    {"DELETE", "/v1/git/sshkey", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE, rh_git_sshkey},
     {"POST", "/v1/git/oauth/github/start", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE,
      rh_git_oauth_github_start},
     {"POST", "/v1/git/oauth/github/poll", NULL, RM_EXACT, NULL, CAP_TOOL_EXECUTE,

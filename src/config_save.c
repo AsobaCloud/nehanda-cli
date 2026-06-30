@@ -807,8 +807,31 @@ int config_save(const config_t *cfg)
       cJSON_AddBoolToObject(root, "require_session_worktree", 1);
    if (cfg->typed_facts_enabled)
       cJSON_AddBoolToObject(root, "typed_facts_enabled", 1);
+   if (cfg->kb_pdf_ingest_enabled) /* default-off: persist only when enabled */
+      cJSON_AddBoolToObject(root, "kb_pdf_ingest_enabled", 1);
+   if (cfg->kb_pdf_vector_enabled) /* default-off: persist only when enabled */
+      cJSON_AddBoolToObject(root, "kb_pdf_vector_enabled", 1);
+   if (cfg->kb_pdf_tsr_enabled) /* default-off: persist only when enabled */
+      cJSON_AddBoolToObject(root, "kb_pdf_tsr_enabled", 1);
+   if (cfg->tsr_command[0])
+      cJSON_AddStringToObject(root, "tsr_command", cfg->tsr_command);
+   if (cfg->kb_pdf_assets_enabled) /* default-off: persist only when enabled */
+      cJSON_AddBoolToObject(root, "kb_pdf_assets_enabled", 1);
+   if (cfg->kb_pdf_blob_dir[0])
+      cJSON_AddStringToObject(root, "kb_pdf_blob_dir", cfg->kb_pdf_blob_dir);
+   if (cfg->kb_pdf_blob_recon_secs != 3600) /* persist only a non-default */
+      cJSON_AddNumberToObject(root, "kb_pdf_blob_recon_secs", cfg->kb_pdf_blob_recon_secs);
+   if (cfg->kb_pdf_blob_orphan_alarm_mb != 1024)
+      cJSON_AddNumberToObject(root, "kb_pdf_blob_orphan_alarm_mb",
+                              cfg->kb_pdf_blob_orphan_alarm_mb);
+   if (cfg->kb_pdf_ocr_enabled) /* default-off: persist only when enabled */
+      cJSON_AddBoolToObject(root, "kb_pdf_ocr_enabled", 1);
+   if (cfg->ocr_command[0])
+      cJSON_AddStringToObject(root, "ocr_command", cfg->ocr_command);
    if (!cfg->css_style_graph_enabled) /* default-on: persist only the opt-out */
       cJSON_AddBoolToObject(root, "css_style_graph_enabled", 0);
+   if (cfg->wfe_live_forge_enabled) /* default-off: persist only the opt-in (enable) */
+      cJSON_AddBoolToObject(root, "wfe_live_forge_enabled", 1);
    /* default-on render backend: persist only a non-default value (a custom command
     * OR an empty string to disable) so both round-trip; the default isn't written. */
    if (strcmp(cfg->css_render_command, CONFIG_DEFAULT_CSS_RENDER_COMMAND) != 0)
@@ -901,7 +924,9 @@ int config_save(const config_t *cfg)
 
    /* Tool result compaction (only save non-default values) */
    if (!cfg->compact_enabled || cfg->compact_threshold || cfg->compact_head_bytes ||
-       cfg->compact_tail_bytes || cfg->compact_per_tool_count)
+       cfg->compact_tail_bytes || cfg->compact_per_tool_count || cfg->coord_closet_enabled ||
+       cfg->coord_closet_budget_bytes || cfg->coord_closet_max_ratio_pct ||
+       cfg->coord_closet_denylist[0])
    {
       cJSON *cmpct = cJSON_AddObjectToObject(root, "compact");
       cJSON_AddBoolToObject(cmpct, "enabled", cfg->compact_enabled);
@@ -922,6 +947,50 @@ int config_save(const config_t *cfg)
             if (sscanf(cfg->compact_per_tool[i], "%63[^=]=%d", tool, &thresh) == 2)
                cJSON_AddNumberToObject(pt, tool, thresh);
          }
+      }
+      /* Coordinate Closet (fold §2), nested under "compact". */
+      if (cfg->coord_closet_enabled || cfg->coord_closet_budget_bytes ||
+          cfg->coord_closet_max_ratio_pct || cfg->coord_closet_denylist[0])
+      {
+         cJSON *closet = cJSON_AddObjectToObject(cmpct, "coord_closet");
+         cJSON_AddBoolToObject(closet, "enabled", cfg->coord_closet_enabled);
+         if (cfg->coord_closet_budget_bytes)
+            cJSON_AddNumberToObject(closet, "budget_bytes", cfg->coord_closet_budget_bytes);
+         if (cfg->coord_closet_max_ratio_pct)
+            cJSON_AddNumberToObject(closet, "max_ratio_pct", cfg->coord_closet_max_ratio_pct);
+         if (cfg->coord_closet_denylist[0])
+            cJSON_AddStringToObject(closet, "denylist", cfg->coord_closet_denylist);
+      }
+   }
+
+   /* Rolling context fold (fold §1/§3/§4/§6, only save if non-default) */
+   if (cfg->fold_enabled || cfg->fold_retained_msgs || cfg->fold_min_fold_msgs ||
+       cfg->fold_excerpt_bytes || cfg->fold_register_enabled || cfg->fold_freeze_enabled ||
+       cfg->fold_freeze_tail_cap_msgs || cfg->fold_recall_enabled || cfg->fold_recall_ttl_turns)
+   {
+      cJSON *fold = cJSON_AddObjectToObject(root, "fold");
+      cJSON_AddBoolToObject(fold, "enabled", cfg->fold_enabled);
+      if (cfg->fold_retained_msgs)
+         cJSON_AddNumberToObject(fold, "retained_msgs", cfg->fold_retained_msgs);
+      if (cfg->fold_min_fold_msgs)
+         cJSON_AddNumberToObject(fold, "min_fold_msgs", cfg->fold_min_fold_msgs);
+      if (cfg->fold_excerpt_bytes)
+         cJSON_AddNumberToObject(fold, "excerpt_bytes", cfg->fold_excerpt_bytes);
+      if (cfg->fold_register_enabled)
+         cJSON_AddBoolToObject(fold, "register_enabled", cfg->fold_register_enabled);
+      if (cfg->fold_freeze_enabled || cfg->fold_freeze_tail_cap_msgs)
+      {
+         cJSON *freeze = cJSON_AddObjectToObject(fold, "freeze");
+         cJSON_AddBoolToObject(freeze, "enabled", cfg->fold_freeze_enabled);
+         if (cfg->fold_freeze_tail_cap_msgs)
+            cJSON_AddNumberToObject(freeze, "tail_cap_msgs", cfg->fold_freeze_tail_cap_msgs);
+      }
+      if (cfg->fold_recall_enabled || cfg->fold_recall_ttl_turns)
+      {
+         cJSON *recall = cJSON_AddObjectToObject(fold, "recall");
+         cJSON_AddBoolToObject(recall, "enabled", cfg->fold_recall_enabled);
+         if (cfg->fold_recall_ttl_turns)
+            cJSON_AddNumberToObject(recall, "ttl_turns", cfg->fold_recall_ttl_turns);
       }
    }
 
