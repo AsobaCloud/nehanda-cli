@@ -1241,6 +1241,83 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /index/deps:
+    post:
+      summary: Cross-repo dependency edges for a registered repo
+      description: >-
+        Proxies the kb cross-repo dependency query. Returns confidence-tiered
+        edges with evidence + a version stamp, or the AMBIGUOUS review queue when
+        status=ambiguous. The canonical query is OUT-only today (S4a); direction
+        in/both is rejected with 400 until reverse traversal lands.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project]
+              properties:
+                project: { type: string }
+                direction: { type: string, enum: [out], default: out }
+                min_tier: { type: string, enum: [high, medium, tentative] }
+                status: { type: string, enum: [ambiguous] }
+      responses:
+        "200":
+          description: Cross-repo dependency edges or ambiguous review queue
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing project or invalid body
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "502":
+          description: Index backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /repo/trust:
+    post:
+      summary: Set a registered repo's cross-repo trust (admin)
+      description: >-
+        Proxies the audited kb trust write (CAP_INDEX_ADMIN; local/owner-only over
+        TCP). Sets projects.trust, bumps trust_epoch on a real transition, audits
+        the change, and recomputes the blocked_symbols frequency model. actor is
+        caller-asserted (single-tenant P1).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project, trust]
+              properties:
+                project: { type: string }
+                trust: { type: string, enum: [trusted, untrusted] }
+                actor: { type: string }
+                request_id: { type: string }
+      responses:
+        "200":
+          description: Trust applied (status, project, prior_trust, new_trust, changed)
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing project or invalid trust value
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "404":
+          description: No such project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "502":
+          description: Index backend (aimee-kb) unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /index/blast_radius:
     post:
       summary: Dependency blast radius for an indexed file
@@ -3947,6 +4024,73 @@ paths:
               required: [host]
               properties:
                 host: { type: string }
+      responses:
+        "200":
+          description: Removed (or absent)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+        "403":
+          description: Not a webchat user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /git/sshkey:
+    post:
+      summary: Store (or replace) the caller's SSH private key for git over SSH
+      description: >
+        Persist an unencrypted OpenSSH/PEM private key in the CALLER's own
+        encrypted vault under (`webuser:<name>`, `git`, `ssh_key`), dual-wrapped so
+        the server can load it into the user's in-memory ssh-agent autonomously
+        (it never touches disk and is never returned to the browser). Storing
+        requires the caller's vault to be unlocked; a locked vault returns 423.
+        Capability: tool:execute.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ssh_key]
+              properties:
+                ssh_key:
+                  type: string
+                  description: Unencrypted OpenSSH/PEM private key (write-only)
+      responses:
+        "200":
+          description: Stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+        "400":
+          description: Missing or passphrase-encrypted key
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "403":
+          description: Not a webchat user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "413":
+          description: Key too large (> 64 KiB)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "423":
+          description: Vault is locked — unlock it, then retry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    delete:
+      summary: Remove the caller's stored SSH private key
+      description: >
+        Delete the SSH key from the caller's vault and drop any live ssh-agent
+        handle holding it. Idempotent. Capability: tool:execute.
       responses:
         "200":
           description: Removed (or absent)

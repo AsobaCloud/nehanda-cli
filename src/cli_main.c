@@ -14,7 +14,10 @@
 #include "cli_profile.h"
 #include "client_constants.h"
 #include "client_integrations.h"
-#include "code_collect.h" /* code_index_install_branch_hook (index watch) */
+#include "code_collect.h"          /* code_index_install_branch_hook (index watch) */
+#include "harness_memory_audit.h"  /* hmem_audit (diagnostic when project unresolved) */
+#include "harness_memory_common.h" /* hmem_resolve_project (client-side project key) */
+#include "harness_memory_watch.h"  /* harness_memory_watch_run (real-time backstop) */
 #include "delegate_plan.h"
 #include "cli_tui.h"
 #include "platform.h"
@@ -705,6 +708,30 @@ static int handle_hooks(int argc, char **argv, int json_output)
    cJSON_AddStringToObject(req, "cwd", cwd);
    if (sid && sid[0])
       cJSON_AddStringToObject(req, "session_id", sid);
+
+   /* Forward THIS client's identity so the (possibly shared) server scopes memory
+    * interception to the right agent — the server must not assume its own
+    * AIMEE_HOOK_CLIENT when many agents hook into one server. */
+   const char *hook_client = getenv("AIMEE_HOOK_CLIENT");
+   if (hook_client && hook_client[0])
+      cJSON_AddStringToObject(req, "harness_client", hook_client);
+
+   /* Resolve the harness-memory project key HERE, on the client, against the real
+    * cwd / git repo / AIMEE_PROJECT_ID, and forward it: a remote server's
+    * filesystem has none of those, so it could not resolve the key itself. Only
+    * the pre phase intercepts memory writes, so skip the git fork on post. */
+   if (strcmp(phase, "pre") == 0 && cwd[0])
+   {
+      char hproject[256], hroot[4096];
+      if (hmem_resolve_project(cwd, hproject, sizeof(hproject), hroot, sizeof(hroot)) == 0 &&
+          hproject[0])
+         cJSON_AddStringToObject(req, "harness_project", hproject);
+      else
+         /* Couldn't resolve client-side: the server falls back to cwd resolution,
+          * which fails on a remote server (memory interception then no-ops). Audit
+          * so this is observable rather than a silent miss. */
+         hmem_audit("project-unresolved", NULL, NULL, "hooks pre");
+   }
 
    cJSON *resp = cli_v1_dispatch_local(req, 5000);
    cJSON_Delete(req);
@@ -1720,6 +1747,17 @@ int main(int argc, char **argv)
    if (strcmp(cmd, "session-start") == 0)
       return handle_session_start(json_output);
 
+   /* Real-time agent-memory backstop: watch this project's memory dir and import
+    * memory-file writes into the central store as they happen (catches below-the-
+    * tool writes). Long-lived; an operator/session manager launches it. */
+   if (strcmp(cmd, "harness-memory-watch") == 0)
+   {
+      char wcwd[4096];
+      if (!getcwd(wcwd, sizeof(wcwd)))
+         wcwd[0] = '\0';
+      return harness_memory_watch_run(wcwd) == 0 ? 0 : 1;
+   }
+
    /* UserPromptSubmit hook (P1 per-turn context pre-injection for Claude Code;
     * settings.json wires it as `aimee user-prompt-submit`). */
    if (strcmp(cmd, "user-prompt-submit") == 0)
@@ -1807,6 +1845,10 @@ int main(int argc, char **argv)
    /* agent setup: two-step OAuth device flow, needs special client orchestration */
    if (strcmp(cmd, "agent") == 0 && sub_argc >= 1 && strcmp(sub_argv[0], "setup") == 0)
       return handle_agent_setup_cmd(sub_argc - 1, sub_argv + 1, json_output);
+
+   /* `aimee codex reauth` — re-authenticate codex after a rejected refresh (D6). */
+   if (strcmp(cmd, "codex") == 0)
+      return handle_codex_cmd(sub_argc, sub_argv, json_output);
 
    /* workspace serve: a long-running client-side loop (poll -> run -> respond),
     * not a single forwarded /v1 call, so it is driven here rather than via a route. */

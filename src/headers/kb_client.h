@@ -1069,6 +1069,19 @@ int kb_client_index_structure(const char *project, const char *file_path, defini
 int kb_client_index_find_callers(const char *project, const char *symbol, caller_hit_t *out,
                                  int max);
 
+/* S6: cross-repo dependency edges for `project` (required). `direction`
+ * (out|in|both), `min_tier` (high|medium|tentative) may be NULL/empty for the kb
+ * defaults; status_ambiguous!=0 requests the AMBIGUOUS review queue instead of
+ * edges. Returns the raw kb JSON body (caller frees) or NULL if kb unreachable. */
+char *kb_client_index_cross_repo_deps_json(const char *project, const char *direction,
+                                           const char *min_tier, int status_ambiguous);
+
+/* S7: POST a per-repo trust change to the kb (project + trust required, actor +
+ * request_id optional). Returns the raw kb JSON body on 2xx (caller frees); NULL
+ * otherwise with *http_status (optional) set to the kb HTTP status. */
+char *kb_client_repo_trust_json(const char *project, const char *trust, const char *actor,
+                                const char *request_id, int *http_status);
+
 /* Full-text code search across indexed file contents.  `project` may be
  * NULL/empty to search all projects.  Returns count, or 0 if kb is
  * unreachable.  Uses /v1 over remote HTTP or local UDS.
@@ -1091,6 +1104,14 @@ char *kb_client_pdf_open_page(const char *project, const char *document_key, int
 char *kb_client_pdf_open_neighbors(const char *project, long long chunk_id, int *status_out);
 char *kb_client_pdf_inspect_structure(const char *project, const char *document_key,
                                       int *status_out);
+/* Phase B: GET /v1/pdf/lookup_table — structured table cells for a document (page_no < 0 =
+ * all pages). Returns the route JSON body verbatim. */
+char *kb_client_pdf_lookup_table(const char *project, const char *document_key, int page_no,
+                                 int *status_out);
+/* Phase C: GET /v1/pdf/assets (list a doc's crop assets) + GET /v1/pdf/open_asset (stream one
+ * crop's bytes, base64, for an opaque asset id). Route JSON body verbatim. */
+char *kb_client_pdf_list_assets(const char *project, const char *document_key, int *status_out);
+char *kb_client_pdf_open_asset(const char *project, long long asset_id, int *status_out);
 
 /* Code-graph retrieval + analytics routes (see kb_client_code_graph.c). Forward
  * the route's JSON body verbatim (nested fused/ranked shapes the agent consumes

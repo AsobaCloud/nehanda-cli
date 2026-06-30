@@ -17,7 +17,7 @@ TEST_RUN_JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/n
 TEST_CORE_OBJS = $(OBJDIR)/db1/db.o $(OBJDIR)/db1/db_schema.o $(OBJDIR)/db1/maintenance.o $(OBJDIR)/tests/aimee_pg_sqlite_shim.o $(OBJDIR)/db2/db2_test_shim.o $(OBJDIR)/config.o $(OBJDIR)/config_sections.o $(OBJDIR)/config_database.o $(OBJDIR)/config_learning.o $(OBJDIR)/config_memory.o $(OBJDIR)/config_charter.o $(OBJDIR)/config_trigger.o $(OBJDIR)/config_kb_maintenance.o $(OBJDIR)/config_kb_curator.o $(OBJDIR)/config_server_api.o $(OBJDIR)/config_skills.o $(OBJDIR)/config_save.o $(OBJDIR)/config_mode.o $(OBJDIR)/config_fields.o $(OBJDIR)/yaml.o $(OBJDIR)/dstr.o $(OBJDIR)/util.o $(OBJDIR)/text.o \
                  $(OBJDIR)/platform_random.o $(PLATFORM_BASIC_OBJS) \
                  $(OBJDIR)/aimee_home.o $(OBJDIR)/shared/kb_paths.o \
-                 $(OBJDIR)/log.o $(OBJDIR)/shutdown_forensics.o $(OBJDIR)/cJSON.o $(OBJDIR)/util_url.o $(OBJDIR)/report_enrichment.o $(OBJDIR)/compact.o $(OBJDIR)/slop_detect.o $(OBJDIR)/proxy_bootstrap.o \
+                 $(OBJDIR)/log.o $(OBJDIR)/shutdown_forensics.o $(OBJDIR)/cJSON.o $(OBJDIR)/util_url.o $(OBJDIR)/report_enrichment.o $(OBJDIR)/compact.o $(OBJDIR)/coord_closet.o $(OBJDIR)/context_fold.o $(OBJDIR)/fold_register.o $(OBJDIR)/fold_recall.o $(OBJDIR)/slop_detect.o $(OBJDIR)/proxy_bootstrap.o \
                  $(OBJDIR)/json_fluent.o $(OBJDIR)/markdown.o
 # Extended set for tests that need workspace/worktree/guardrails functions (pulls in agents).
 TEST_WORKSPACE_OBJS_EXTRA = $(OBJDIR)/workspace.o $(DB1_OBJS) \
@@ -77,7 +77,7 @@ TEST_DATA_OBJS = $(TEST_CORE_OBJS) $(OBJDIR)/rel_types.o $(OBJDIR)/memory_fact_g
 # linking both would produce duplicate-symbol errors.
 TEST_DATA_OBJS_MOCK = $(TEST_DATA_OBJS) $(OBJDIR)/tests/support/mock_agent_http.o
 
-TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPREFIX)/unit-test-harness-memory $(TESTPREFIX)/unit-test-db2 $(TESTPREFIX)/unit-test-schema-subst $(TESTPREFIX)/unit-test-code-index-ops $(TESTPREFIX)/unit-test-curator-version $(TESTPREFIX)/unit-test-curator-invalidate $(TESTPREFIX)/unit-test-curator-notify $(TESTPREFIX)/unit-test-pgvec $(TESTPREFIX)/unit-test-rules \
+TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPREFIX)/unit-test-harness-memory $(TESTPREFIX)/unit-test-memory-redirect $(TESTPREFIX)/unit-test-harness-memory-scope $(TESTPREFIX)/unit-test-harness-memory-spill $(TESTPREFIX)/unit-test-harness-memory-audit $(TESTPREFIX)/unit-test-harness-memory-hydrate $(TESTPREFIX)/unit-test-harness-memory-watch $(TESTPREFIX)/unit-test-roundtable-brief $(TESTPREFIX)/unit-test-db2 $(TESTPREFIX)/unit-test-schema-subst $(TESTPREFIX)/unit-test-code-index-ops $(TESTPREFIX)/unit-test-curator-version $(TESTPREFIX)/unit-test-curator-invalidate $(TESTPREFIX)/unit-test-curator-notify $(TESTPREFIX)/unit-test-pgvec $(TESTPREFIX)/unit-test-rules \
                $(TESTPREFIX)/unit-test-guardrails $(TESTPREFIX)/unit-test-memory $(TESTPREFIX)/unit-test-tasks \
                $(TESTPREFIX)/unit-test-cmd-hooks-scope \
                $(TESTPREFIX)/unit-test-agent $(TESTPREFIX)/unit-test-agent-repair $(TESTPREFIX)/unit-test-agent-apikey $(TESTPREFIX)/unit-test-script-runner $(TESTPREFIX)/unit-test-provider-cli-adapter $(TESTPREFIX)/unit-test-cli-acp $(TESTPREFIX)/unit-test-acp-server $(TESTPREFIX)/unit-test-extractors \
@@ -87,6 +87,14 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-memory-ranker-boundary \
                $(TESTPREFIX)/unit-test-memory-lanes \
                $(TESTPREFIX)/unit-test-workspace \
+               $(TESTPREFIX)/unit-test-cross-repo-deps \
+               $(TESTPREFIX)/unit-test-cross-repo-stats \
+               $(TESTPREFIX)/unit-test-cross-repo-deps-orch \
+               $(TESTPREFIX)/unit-test-cross-repo-acceptance \
+               $(TESTPREFIX)/unit-test-cross-repo-identity \
+               $(TESTPREFIX)/unit-test-cross-repo-route \
+               $(TESTPREFIX)/unit-test-cross-repo-build \
+               $(TESTPREFIX)/unit-test-cross-repo-review \
                $(TESTPREFIX)/unit-test-primary-session-adapter \
                $(TESTPREFIX)/unit-test-webchat-claude-sessions \
                $(TESTPREFIX)/unit-test-turn-registry \
@@ -115,6 +123,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-wfe-random-delegate \
                $(TESTPREFIX)/unit-test-wfe-gate-reject \
                $(TESTPREFIX)/unit-test-wfe-gate-apply \
+               $(TESTPREFIX)/unit-test-wfe-submitter \
                $(TESTPREFIX)/unit-test-workflow-gate-caps \
                $(TESTPREFIX)/unit-test-wfe-webapi \
                $(TESTPREFIX)/unit-test-cli-profile \
@@ -139,6 +148,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-cmd-core $(TESTPREFIX)/unit-test-cmd-work \
                $(TESTPREFIX)/unit-test-client-integrations $(TESTPREFIX)/unit-test-mcp-git \
                $(TESTPREFIX)/unit-test-git-verify-select \
+               $(TESTPREFIX)/unit-test-git-verify-contract \
                $(TESTPREFIX)/unit-test-cli-mcp-serve \
                $(TESTPREFIX)/unit-test-cli-v1-delegate \
                $(TESTPREFIX)/unit-test-cli-server-compat \
@@ -199,6 +209,13 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-web-search \
                $(TESTPREFIX)/unit-test-tdd \
                $(TESTPREFIX)/unit-test-compact \
+               $(TESTPREFIX)/unit-test-coord-closet \
+               $(TESTPREFIX)/unit-test-fold-budget \
+               $(TESTPREFIX)/unit-test-context-fold \
+               $(TESTPREFIX)/unit-test-fold-register \
+               $(TESTPREFIX)/unit-test-fold-recall \
+               $(TESTPREFIX)/unit-test-task-rail \
+               $(TESTPREFIX)/unit-test-episode-seal \
                $(TESTPREFIX)/unit-test-token-audit \
                $(TESTPREFIX)/unit-test-token-audit-load \
                $(TESTPREFIX)/unit-test-windows \
@@ -237,6 +254,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-vault-kek-cache \
                $(TESTPREFIX)/unit-test-vault-store \
                $(TESTPREFIX)/unit-test-vault-service \
+               $(TESTPREFIX)/unit-test-vault-master-rotate \
                $(TESTPREFIX)/unit-test-git-forge-vault \
                $(TESTPREFIX)/unit-test-git-host-resolve \
                $(TESTPREFIX)/unit-test-git-cred-inject \
@@ -250,6 +268,8 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-aimee-tls-clientcert \
                $(TESTPREFIX)/unit-test-vault-server-key \
                $(TESTPREFIX)/unit-test-vault-capability \
+               $(TESTPREFIX)/unit-test-agent-key-import \
+               $(TESTPREFIX)/unit-test-vault-audit \
                $(TESTPREFIX)/unit-test-prompts \
                $(TESTPREFIX)/unit-test-cmd-session \
                $(TESTPREFIX)/unit-test-model-registry \
@@ -301,6 +321,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-clarify \
                $(TESTPREFIX)/unit-test-collab-rules \
                $(TESTPREFIX)/unit-test-oauth-pkce \
+               $(TESTPREFIX)/unit-test-oauth-reauth \
                $(TESTPREFIX)/unit-test-mcp-client \
                $(TESTPREFIX)/unit-test-mcp-client-sse \
                $(TESTPREFIX)/unit-test-mcp-client-integration \
@@ -434,6 +455,27 @@ $(TESTPREFIX)/unit-test-db: $(OBJDIR)/tests/test_db.o $(OBJDIR)/db1/db.o $(OBJDI
                     $(OBJDIR)/log.o $(PLATFORM_BASIC_OBJS) $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
+$(TESTPREFIX)/unit-test-harness-memory-hydrate: $(OBJDIR)/tests/test_harness_memory_hydrate.o $(OBJDIR)/harness_memory_hydrate.o $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-roundtable-brief: $(OBJDIR)/tests/test_roundtable_brief.o $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-harness-memory-watch: $(OBJDIR)/tests/test_harness_memory_watch.o $(OBJDIR)/harness_memory_watch.o $(OBJDIR)/harness_memory_hydrate.o $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-harness-memory-spill: $(OBJDIR)/tests/test_harness_memory_spill.o $(OBJDIR)/harness_memory_spill.o $(OBJDIR)/harness_memory_common.o $(OBJDIR)/aimee_home.o $(OBJDIR)/posix/platform_path.o $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-harness-memory-audit: $(OBJDIR)/tests/test_harness_memory_audit.o $(OBJDIR)/harness_memory_audit.o $(OBJDIR)/aimee_home.o $(OBJDIR)/posix/platform_path.o $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-harness-memory-scope: $(OBJDIR)/tests/test_harness_memory_scope.o $(OBJDIR)/harness_memory_scope.o $(OBJDIR)/aimee_home.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-memory-redirect: $(OBJDIR)/tests/test_memory_redirect.o $(OBJDIR)/memory_redirect.o $(OBJDIR)/harness_memory_scope.o $(OBJDIR)/aimee_home.o $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
 $(TESTPREFIX)/unit-test-harness-memory: $(OBJDIR)/tests/test_harness_memory.o $(OBJDIR)/db1/harness_memory.o $(OBJDIR)/harness_memory_common.o $(OBJDIR)/db1/db.o $(OBJDIR)/db1/db_schema.o $(OBJDIR)/db2/db_schema.o $(OBJDIR)/db1/db1_init.o $(OBJDIR)/db1/db1_write.o $(OBJDIR)/db1/db1_trigger.o $(OBJDIR)/db1/db1_cron_jobs.o $(OBJDIR)/db1/model_catalog.o $(OBJDIR)/db1/maintenance.o $(OBJDIR)/db1/eval.o $(OBJDIR)/tests/aimee_pg_sqlite_shim.o $(OBJDIR)/db2/db2_test_shim.o $(OBJDIR)/config.o $(OBJDIR)/config_sections.o $(OBJDIR)/config_database.o $(OBJDIR)/config_learning.o $(OBJDIR)/config_memory.o $(OBJDIR)/config_charter.o $(OBJDIR)/config_trigger.o $(OBJDIR)/config_kb_maintenance.o $(OBJDIR)/config_kb_curator.o $(OBJDIR)/config_server_api.o $(OBJDIR)/config_skills.o $(OBJDIR)/config_save.o \
                     $(OBJDIR)/yaml.o $(OBJDIR)/dstr.o \
                     $(OBJDIR)/util.o $(OBJDIR)/text.o $(OBJDIR)/platform_random.o \
@@ -457,6 +499,82 @@ $(TESTPREFIX)/unit-test-schema-subst: $(OBJDIR)/tests/test_schema_subst.o \
 $(TESTPREFIX)/unit-test-code-index-ops: \
                                        $(OBJDIR)/tests/test_code_index_ops.o \
                                        $(OBJDIR)/db2/code_index_ops.o \
+                                       $(OBJDIR)/db2/code_index.o \
+                                       $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
+                                       $(OBJDIR)/db2/db_schema.o \
+                                       $(TEST_CORE_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS) -lzstd
+
+# Cross-repo dependency graph S3: DB stats layer over the sqlite shim (portable
+# SQL). Links the db2 init/pool/schema + the shim core like code-index-ops.
+$(TESTPREFIX)/unit-test-cross-repo-stats: \
+                                       $(OBJDIR)/tests/test_cross_repo_stats.o \
+                                       $(OBJDIR)/db2/cross_repo_stats.o \
+                                       $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
+                                       $(OBJDIR)/db2/db_schema.o \
+                                       $(TEST_CORE_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS) -lzstd
+
+# S4a orchestration over the sqlite shim (portable candidate-gen + pure core).
+$(TESTPREFIX)/unit-test-cross-repo-deps-orch: \
+                                       $(OBJDIR)/tests/test_cross_repo_deps_orch.o \
+                                       $(OBJDIR)/db2/cross_repo_deps.o \
+                                       $(OBJDIR)/db2/cross_repo_stats.o \
+                                       $(OBJDIR)/db2/cross_repo_resolver.o \
+                                       $(OBJDIR)/db2/cross_repo_classify.o \
+                                       $(OBJDIR)/db2/cross_repo_review.o \
+                                       $(OBJDIR)/db2/cross_repo_identity.o \
+                                       $(OBJDIR)/db2/cross_repo_route.o \
+                                       $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
+                                       $(OBJDIR)/db2/db_schema.o \
+                                       $(TEST_CORE_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS) -lzstd
+
+$(TESTPREFIX)/unit-test-cross-repo-identity: \
+                                       $(OBJDIR)/tests/test_cross_repo_identity.o \
+                                       $(OBJDIR)/db2/cross_repo_identity.o \
+                                       $(OBJDIR)/db2/cross_repo_deps.o \
+                                       $(OBJDIR)/db2/cross_repo_stats.o \
+                                       $(OBJDIR)/db2/cross_repo_resolver.o \
+                                       $(OBJDIR)/db2/cross_repo_classify.o \
+                                       $(OBJDIR)/db2/cross_repo_review.o \
+                                       $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
+                                       $(OBJDIR)/db2/db_schema.o \
+                                       $(TEST_CORE_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS) -lzstd
+
+$(TESTPREFIX)/unit-test-cross-repo-route: \
+                                       $(OBJDIR)/tests/test_cross_repo_route.o \
+                                       $(OBJDIR)/db2/cross_repo_route.o \
+                                       $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
+                                       $(OBJDIR)/db2/db_schema.o \
+                                       $(TEST_CORE_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS) -lzstd
+
+$(TESTPREFIX)/unit-test-cross-repo-build: \
+                                       $(OBJDIR)/tests/test_cross_repo_build.o \
+                                       $(OBJDIR)/db2/cross_repo_build.o \
+                                       $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
+                                       $(OBJDIR)/db2/db_schema.o \
+                                       $(TEST_CORE_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS) -lzstd
+
+$(TESTPREFIX)/unit-test-cross-repo-acceptance: \
+                                       $(OBJDIR)/tests/test_cross_repo_acceptance.o \
+                                       $(OBJDIR)/db2/cross_repo_deps.o \
+                                       $(OBJDIR)/db2/cross_repo_stats.o \
+                                       $(OBJDIR)/db2/cross_repo_resolver.o \
+                                       $(OBJDIR)/db2/cross_repo_classify.o \
+                                       $(OBJDIR)/db2/cross_repo_review.o \
+                                       $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
+                                       $(OBJDIR)/db2/db_schema.o \
+                                       $(TEST_CORE_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS) -lzstd
+
+# S4b review queue + adjudication over the sqlite shim.
+$(TESTPREFIX)/unit-test-cross-repo-review: \
+                                       $(OBJDIR)/tests/test_cross_repo_review.o \
+                                       $(OBJDIR)/db2/cross_repo_review.o \
                                        $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
                                        $(OBJDIR)/db2/db_schema.o \
                                        $(TEST_CORE_OBJS)
@@ -486,6 +604,7 @@ $(TESTPREFIX)/unit-test-css-graph: \
                                        $(OBJDIR)/db2/css_graph.o \
                                        $(OBJDIR)/css_analyze.o \
                                        $(OBJDIR)/db2/code_index.o \
+                                       $(OBJDIR)/db2/cross_repo_resolver.o \
                                        $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
                                        $(OBJDIR)/db2/db_schema.o \
                                        $(TEST_CORE_OBJS)
@@ -498,6 +617,7 @@ $(TESTPREFIX)/unit-test-css-insights: \
                                        $(OBJDIR)/db2/css_graph.o \
                                        $(OBJDIR)/css_analyze.o \
                                        $(OBJDIR)/db2/code_index.o \
+                                       $(OBJDIR)/db2/cross_repo_resolver.o \
                                        $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
                                        $(OBJDIR)/db2/db_schema.o \
                                        $(TEST_CORE_OBJS)
@@ -529,6 +649,7 @@ $(TESTPREFIX)/unit-test-css-migration: \
                                        $(OBJDIR)/db2/typed_facts.o \
                                        $(OBJDIR)/css_analyze.o \
                                        $(OBJDIR)/db2/code_index.o \
+                                       $(OBJDIR)/db2/cross_repo_resolver.o \
                                        $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
                                        $(OBJDIR)/db2/db_schema.o \
                                        $(TEST_CORE_OBJS)
@@ -545,6 +666,7 @@ $(TESTPREFIX)/unit-test-css-render: \
                                        $(OBJDIR)/db2/typed_facts.o \
                                        $(OBJDIR)/css_analyze.o \
                                        $(OBJDIR)/db2/code_index.o \
+                                       $(OBJDIR)/db2/cross_repo_resolver.o \
                                        $(OBJDIR)/db2/db2_init.o $(OBJDIR)/db2/db2_pool.o \
                                        $(OBJDIR)/db2/db_schema.o \
                                        $(OBJDIR)/cJSON.o \
@@ -857,7 +979,8 @@ $(TESTPREFIX)/unit-test-markdown: $(OBJDIR)/tests/test_markdown.o $(OBJDIR)/mark
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 $(TESTPREFIX)/unit-test-index: $(OBJDIR)/tests/test_index.o $(TEST_DATA_OBJS_MOCK) \
-                               $(OBJDIR)/db2/canonical_index.o
+                               $(OBJDIR)/db2/canonical_index.o \
+                               $(OBJDIR)/db2/cross_repo_resolver.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 $(TESTPREFIX)/unit-test-memory-advanced: $(OBJDIR)/tests/test_memory_advanced.o $(TEST_DATA_OBJS_MOCK)
@@ -1010,6 +1133,7 @@ $(TESTPREFIX)/unit-test-acp-server: $(OBJDIR)/tests/test_acp_server.o \
 
 $(TESTPREFIX)/unit-test-server-dispatch: $(OBJDIR)/tests/test_server_dispatch.o $(OBJDIR)/server/server.o \
                       $(OBJDIR)/server/harness_memory_routes.o $(OBJDIR)/db1/harness_memory.o $(OBJDIR)/harness_memory_common.o \
+                      $(OBJDIR)/memory_redirect.o $(OBJDIR)/harness_memory_scope.o $(OBJDIR)/harness_memory_audit.o \
                       $(OBJDIR)/tests/support/delegate_child_env_export_stub.o \
 	                                $(OBJDIR)/server/server_config.o $(OBJDIR)/config_fields.o \
 	                                $(OBJDIR)/server/skill_review.o $(OBJDIR)/tests/support/skill_jobs_stub.o \
@@ -1206,6 +1330,13 @@ $(TESTPREFIX)/unit-test-wfe-gate-apply: $(OBJDIR)/tests/test_wfe_gate_apply.o \
                                     $(OBJDIR)/dstr.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
+# intake-auth: per-principal submitter binding + concurrency/rate count helpers.
+$(TESTPREFIX)/unit-test-wfe-submitter: $(OBJDIR)/tests/test_wfe_submitter.o \
+                                    $(OBJDIR)/db1/db1_init.o $(OBJDIR)/db1/db_schema.o \
+                                    $(OBJDIR)/db1/wfe_store.o $(OBJDIR)/aimee_home.o \
+                                    $(OBJDIR)/dstr.o $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
 # Capability invariant for the gate route (compile-time _Static_assert).
 $(TESTPREFIX)/unit-test-workflow-gate-caps: $(OBJDIR)/tests/test_workflow_gate_caps.o
 	$(TESTLINK) -o $@ $^ $(L_MINIMAL)
@@ -1297,6 +1428,13 @@ $(TESTPREFIX)/unit-test-git-verify-select: $(OBJDIR)/tests/test_git_verify_selec
                         $(TEST_DATA_OBJS) $(TEST_WORKSPACE_OBJS_EXTRA)
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
+$(TESTPREFIX)/unit-test-git-verify-contract: $(OBJDIR)/tests/test_git_verify_contract.o \
+                        $(OBJDIR)/git_verify.o $(OBJDIR)/git_verify_config.o \
+                        $(OBJDIR)/git_verify_jobs.o $(OBJDIR)/git_verify_hook.o $(OBJDIR)/git_verify_ops.o \
+                        $(OBJDIR)/git_verify_select.o $(OBJDIR)/git_verify_step.o $(OBJDIR)/server/compute_pool.o \
+                        $(TEST_DATA_OBJS) $(TEST_WORKSPACE_OBJS_EXTRA)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
 $(TESTPREFIX)/unit-test-interaction-events: $(OBJDIR)/tests/test_interaction_events.o \
                                $(OBJDIR)/db1/db1_init.o $(OBJDIR)/db1/db_schema.o \
                                $(OBJDIR)/db1/maintenance.o $(OBJDIR)/db1/interaction_events.o \
@@ -1377,10 +1515,23 @@ $(OBJDIR)/code_treesitter.o: C_FLAGS += -DAIMEE_TREESITTER -Ivendor/tree-sitter/
 $(OBJDIR)/code_treesitter.o: | vendor/tree-sitter/lib/src/lib.c
 $(TESTPREFIX)/unit-test-code-treesitter: $(OBJDIR)/tests/test_code_treesitter.o \
                                          $(OBJDIR)/code_treesitter.o \
+                                         $(OBJDIR)/extractors.o \
+                                         $(OBJDIR)/extractors_extra.o \
+                                         $(OBJDIR)/extractors_new_langs.o \
                                          $(TS_VENDOR_OBJS) \
                                          $(PLATFORM_BASIC_OBJS)
 	$(TESTLINK) -o $@ $^ $(L_CORE)
 endif
+
+# Cross-repo dependency graph S2a/S2b: pure resolver core (import resolution +
+# distinctiveness) and tier classification (multiplicity + pipeline). DB-free, so
+# it links only the resolver + classify objects. The TEST_TARGETS membership is
+# declared in the initial := block above (before the unit-tests rule) so the
+# binary is built, not just run.
+$(TESTPREFIX)/unit-test-cross-repo-deps: $(OBJDIR)/tests/test_cross_repo_deps.o \
+                                         $(OBJDIR)/db2/cross_repo_resolver.o \
+                                         $(OBJDIR)/db2/cross_repo_classify.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 $(TESTPREFIX)/unit-test-aimee-client: $(OBJDIR)/tests/test_aimee_client.o $(OBJDIR)/aimee_client.o \
                                       $(OBJDIR)/posix/platform_net.o $(OBJDIR)/http_uds_client.o \
@@ -1823,6 +1974,36 @@ $(TESTPREFIX)/unit-test-compact: $(OBJDIR)/tests/test_compact.o $(OBJDIR)/compac
                                   $(OBJDIR)/cJSON.o $(PLATFORM_BASIC_OBJS)
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
+$(TESTPREFIX)/unit-test-coord-closet: $(OBJDIR)/tests/test_coord_closet.o $(OBJDIR)/coord_closet.o \
+                                  $(PLATFORM_BASIC_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-fold-budget: $(OBJDIR)/tests/test_fold_budget.o $(OBJDIR)/fold_budget.o \
+                                  $(OBJDIR)/model_registry.o $(OBJDIR)/models_dev.o \
+                                  $(OBJDIR)/models_dev_cache.o $(OBJDIR)/cJSON.o $(PLATFORM_BASIC_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-context-fold: $(OBJDIR)/tests/test_context_fold.o $(OBJDIR)/context_fold.o $(OBJDIR)/fold_register.o \
+                                  $(OBJDIR)/coord_closet.o $(OBJDIR)/dstr.o $(OBJDIR)/cJSON.o \
+                                  $(PLATFORM_BASIC_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-fold-register: $(OBJDIR)/tests/test_fold_register.o $(OBJDIR)/fold_register.o \
+                                  $(PLATFORM_BASIC_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-fold-recall: $(OBJDIR)/tests/test_fold_recall.o $(OBJDIR)/fold_recall.o \
+                                  $(OBJDIR)/dstr.o $(PLATFORM_BASIC_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-task-rail: $(OBJDIR)/tests/test_task_rail.o $(OBJDIR)/task_rail.o \
+                                  $(OBJDIR)/cJSON.o $(PLATFORM_BASIC_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-episode-seal: $(OBJDIR)/tests/test_episode_seal.o $(OBJDIR)/episode_seal.o \
+                                  $(OBJDIR)/cJSON.o $(PLATFORM_BASIC_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
 $(TESTPREFIX)/unit-test-compact-prune: $(OBJDIR)/tests/test_compact_prune.o \
                                           $(OBJDIR)/server/compact_prune.o \
                                           $(OBJDIR)/server/session_compact.o $(OBJDIR)/server/compact_prune.o \
@@ -1917,6 +2098,11 @@ $(TESTPREFIX)/unit-test-fact-ingest: $(OBJDIR)/tests/test_fact_ingest.o \
 
 $(TESTPREFIX)/unit-test-kb-doc-pdf: $(OBJDIR)/tests/test_kb_doc_pdf.o \
                                $(OBJDIR)/kb/kb_doc_pdf.o \
+                               $(OBJDIR)/kb/kb_tsr_sidecar.o \
+                               $(OBJDIR)/kb/kb_ocr_sidecar.o \
+                               $(OBJDIR)/kb/kb_blob_store.o \
+                               $(OBJDIR)/kb/kb_blob_reconcile.o \
+                               $(OBJDIR)/kb/kb_doc_hash.o \
                                $(OBJDIR)/kb/http/kb_http_pdf.o \
                                $(TEST_DATA_OBJS_MOCK)
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
@@ -2377,7 +2563,7 @@ $(TESTPREFIX)/unit-test-vault-store: $(OBJDIR)/tests/test_vault_store.o \
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 $(TESTPREFIX)/unit-test-git-ops: $(OBJDIR)/tests/test_git_ops.o \
-                              $(OBJDIR)/server/git_ops.o $(OBJDIR)/server/git_cred_inject.o $(OBJDIR)/server/git_ssh_agent.o $(OBJDIR)/server/webuser_runtime.o \
+                              $(OBJDIR)/server/git_ops.o $(OBJDIR)/tests/support/git_pr_api_stub.o $(OBJDIR)/server/git_cred_inject.o $(OBJDIR)/server/git_ssh_agent.o $(OBJDIR)/server/webuser_runtime.o \
                               $(OBJDIR)/server/git_forge_vault.o $(OBJDIR)/server/git_host_cred.o $(OBJDIR)/server/git_host_resolve.o $(OBJDIR)/server/workspace_scope.o \
                               $(OBJDIR)/forge_credentials.o $(OBJDIR)/config.o $(OBJDIR)/aimee_home.o $(OBJDIR)/util_url.o \
                               $(OBJDIR)/posix/util.o $(OBJDIR)/util.o \
@@ -2461,6 +2647,18 @@ $(TESTPREFIX)/unit-test-vault-service: $(OBJDIR)/tests/test_vault_service.o \
                               $(TEST_CORE_OBJS)
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
+$(TESTPREFIX)/unit-test-vault-master-rotate: $(OBJDIR)/tests/test_vault_master_rotate.o \
+                              $(OBJDIR)/server/vault_service.o $(OBJDIR)/server/vault_store.o \
+                              $(OBJDIR)/server/vault_crypto.o $(OBJDIR)/server/vault_kek_cache.o \
+                              $(OBJDIR)/server/vault_server_key.o \
+                              $(TEST_CORE_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-agent-key-import: $(OBJDIR)/tests/test_agent_key_import.o \
+                              $(OBJDIR)/cli_agent_keys.o \
+                              $(TEST_CORE_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
 $(TESTPREFIX)/unit-test-vault-bootstrap: $(OBJDIR)/tests/test_vault_bootstrap.o \
                               $(OBJDIR)/server/server_vault_bootstrap.o \
                               $(OBJDIR)/server/vault_service.o $(OBJDIR)/server/vault_store.o \
@@ -2488,6 +2686,14 @@ $(TESTPREFIX)/unit-test-aimee-tls-clientcert: $(OBJDIR)/tests/test_aimee_tls_cli
 
 $(TESTPREFIX)/unit-test-vault-capability: $(OBJDIR)/tests/test_vault_capability.o \
                               $(OBJDIR)/server/vault_capability.o \
+                              $(TEST_CORE_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+$(TESTPREFIX)/unit-test-vault-audit: $(OBJDIR)/tests/test_vault_audit.o \
+                              $(OBJDIR)/server/server_vault.o \
+                              $(OBJDIR)/server/vault_service.o $(OBJDIR)/server/vault_store.o \
+                              $(OBJDIR)/server/vault_crypto.o $(OBJDIR)/server/vault_kek_cache.o \
+                              $(OBJDIR)/server/vault_server_key.o $(OBJDIR)/server/vault_capability.o \
                               $(TEST_CORE_OBJS)
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
@@ -2817,6 +3023,19 @@ $(TESTPREFIX)/unit-test-oauth-pkce: $(OBJDIR)/tests/test_oauth_pkce.o \
                      $(TEST_CORE_OBJS)
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
+$(TESTPREFIX)/unit-test-oauth-reauth: $(OBJDIR)/tests/test_oauth_reauth.o \
+                     $(OBJDIR)/server/oauth_pkce.o \
+                     $(OBJDIR)/server/oauth_tokens.o \
+                     $(OBJDIR)/db1/secrets.o \
+                     $(OBJDIR)/server/vault_service.o \
+                     $(OBJDIR)/server/vault_store.o \
+                     $(OBJDIR)/server/vault_crypto.o \
+                     $(OBJDIR)/server/vault_kek_cache.o \
+                     $(OBJDIR)/server/vault_server_key.o \
+                     $(OBJDIR)/platform_random.o \
+                     $(TEST_CORE_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
 $(TESTPREFIX)/unit-test-kb-enroll: $(OBJDIR)/tests/test_kb_enroll.o \
                      $(OBJDIR)/kb/enroll.o \
                      $(OBJDIR)/kb/pki.o \
@@ -3047,6 +3266,7 @@ $(TESTPREFIX)/unit-test-kb-ingest-format: $(OBJDIR)/tests/test_kb_ingest_format.
 
 $(TESTPREFIX)/unit-test-kb-http-routes: $(OBJDIR)/tests/test_kb_http_routes.o \
                      $(OBJDIR)/tests/support/corpus_jobs_http_stub.o \
+                     $(OBJDIR)/tests/support/pdf_route_stubs.o \
                      $(OBJDIR)/kb/http/kb_http.o \
                      $(OBJDIR)/kb/http/kb_http_search.o \
                      $(OBJDIR)/kb/kb_scope.o \

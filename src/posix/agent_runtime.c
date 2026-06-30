@@ -25,6 +25,9 @@
 #include "liveness.h"
 #include "provider_cli_adapter.h"
 #include "config.h"
+#include "context_fold.h"
+#include "fold_recall.h"
+#include "dstr.h"
 #include "cJSON.h"
 #include <ctype.h>
 #include <fcntl.h>
@@ -209,6 +212,130 @@ static void maybe_compact_before_request(const agent_t *agent, cJSON *messages,
       message_history_repair(messages);
       messages_compact_consecutive(messages);
    }
+}
+
+/* Text of the most-recent user message (string or first text block); NULL if none. */
+static const char *newest_user_text(const cJSON *messages)
+{
+   int n = cJSON_GetArraySize((cJSON *)messages);
+   for (int i = n - 1; i >= 0; i--)
+   {
+      cJSON *m = cJSON_GetArrayItem((cJSON *)messages, i);
+      const char *role = cJSON_GetStringValue(cJSON_GetObjectItem(m, "role"));
+      if (!role || strcmp(role, "user") != 0)
+         continue;
+      cJSON *c = cJSON_GetObjectItem(m, "content");
+      if (cJSON_IsString(c))
+         return c->valuestring;
+      if (cJSON_IsArray(c))
+      {
+         cJSON *b;
+         cJSON_ArrayForEach(b, c)
+         {
+            const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(b, "type"));
+            if (t && strcmp(t, "text") == 0)
+               return cJSON_GetStringValue(cJSON_GetObjectItem(b, "text"));
+         }
+      }
+      return NULL;
+   }
+   return NULL;
+}
+
+/* Add the recall-worthy coordinates (paths, handle:/memory: ids) of the folded
+ * prefix messages[0..split) to the recall index for future re-touch detection. */
+static void recall_index_from_fold(const cJSON *messages, int split, fold_recall_index_t *ix)
+{
+   coord_set_t set;
+   coord_set_init(&set);
+   coord_provenance_t prov = {COORD_LANE_AGENT, -1, -1, -1};
+   for (int i = 0; i < split; i++)
+   {
+      cJSON *it = cJSON_GetArrayItem((cJSON *)messages, i);
+      if (!it)
+         continue;
+      char *s = cJSON_PrintUnformatted(it);
+      if (!s)
+         continue;
+      coord_closet_nominate(s, strlen(s), &prov, &set);
+      free(s);
+   }
+   for (size_t i = 0; i < set.count; i++)
+      if (set.items[i].kind == COORD_KIND_PATH || set.items[i].kind == COORD_KIND_HANDLE)
+         fold_recall_index_add(ix, set.items[i].value);
+   coord_set_free(&set);
+}
+
+/* Fold §1/§3/§4 (P2b/P2c/P4): build a rolling-fold view of the Anthropic message
+ * array if the fold is enabled. Populates *out (zeroed on no-fold). The fold's
+ * Coordinate Closet is rendered during this call, so the config's denylist (a
+ * pointer into the local config_t) only needs to be valid here — out holds owned
+ * cJSON that the caller frees with fold_result_free AFTER the request is
+ * serialized. `freeze` (may be NULL) is the per-run fold-freeze state honored only
+ * when fold_freeze_enabled; `recall` (may be NULL) is the per-run recall index for
+ * §4 re-touch hints, honored only when fold_recall_enabled. `turn` is the current
+ * turn index (for recall residency). Returns 1 if a fold view was produced. */
+static int build_fold_view(const cJSON *messages, fold_freeze_t *freeze,
+                           fold_recall_index_t *recall, int turn, fold_result_t *out)
+{
+   memset(out, 0, sizeof(*out));
+   config_t cfg;
+   if (config_load(&cfg) != 0 || !cfg.fold_enabled)
+      return 0;
+   fold_config_t fc;
+   memset(&fc, 0, sizeof(fc));
+   fc.enabled = 1;
+   fc.retained_msgs = cfg.fold_retained_msgs;
+   fc.min_fold_msgs = cfg.fold_min_fold_msgs;
+   fc.reasoning_excerpt_bytes = cfg.fold_excerpt_bytes;
+   fc.register_enabled = cfg.fold_register_enabled;
+   fc.closet.enabled = cfg.coord_closet_enabled;
+   fc.closet.budget_bytes = cfg.coord_closet_budget_bytes;
+   fc.closet.max_ratio_pct = cfg.coord_closet_max_ratio_pct;
+   fc.closet.denylist = cfg.coord_closet_denylist[0] ? cfg.coord_closet_denylist : NULL;
+   fold_freeze_t *fz = NULL;
+   if (cfg.fold_freeze_enabled && freeze)
+   {
+      if (freeze->tail_cap_msgs == 0 && cfg.fold_freeze_tail_cap_msgs > 0)
+         freeze->tail_cap_msgs = cfg.fold_freeze_tail_cap_msgs;
+      fz = freeze;
+   }
+   context_fold_view(messages, &fc, fz, out);
+   if (!out->folded)
+      return 0;
+   aimee_log(LOG_DEBUG, "fold", "folded=%d retained=%d reused_boundary=%d epochs=%d",
+             out->folded_msgs, out->retained_msgs, out->reused_boundary, fz ? fz->epochs : 0);
+
+   /* §4 recall: detect re-touch of a previously-folded coordinate in this turn's
+    * newest user message and surface a hint in the fold preamble; then index this
+    * fold's coordinates for future turns. Detection precedes indexing so a
+    * just-folded key does not trivially match the same turn. */
+   if (cfg.fold_recall_enabled && recall)
+   {
+      const char *uq = newest_user_text(messages);
+      dstr_t hints;
+      dstr_init(&hints);
+      size_t hit = uq ? fold_recall_detect(recall, uq, turn, cfg.fold_recall_ttl_turns, &hints) : 0;
+      if (hit && out->messages)
+      {
+         cJSON *m0 = cJSON_GetArrayItem(out->messages, 0);
+         const char *body = m0 ? cJSON_GetStringValue(cJSON_GetObjectItem(m0, "content")) : NULL;
+         if (m0 && body)
+         {
+            dstr_t merged;
+            dstr_init(&merged);
+            dstr_appendf(&merged, "[fold recall — re-touched coordinates]\n%s\n%s",
+                         dstr_cstr(&hints), body);
+            cJSON *ns = cJSON_CreateString(dstr_cstr(&merged)); /* copies; merged freed below */
+            if (ns) /* on OOM leave the original content intact rather than nulling it */
+               cJSON_ReplaceItemInObjectCaseSensitive(m0, "content", ns);
+            dstr_free(&merged);
+         }
+      }
+      dstr_free(&hints);
+      recall_index_from_fold(messages, out->folded_msgs, recall);
+   }
+   return out->folded;
 }
 
 static void track_anthropic_payload_rewrite(const delegate_driver_t *driver, const agent_t *agent,
@@ -534,6 +661,15 @@ native_provider_http:
 
    int turn = 0;
    int total_calls = 0;
+   /* §3 fold-freeze: per-run boundary state, persisted across turns so the folded
+    * prefix stays byte-identical (warm provider cache). Honored only when
+    * fold_freeze_enabled; ignored otherwise. */
+   fold_freeze_t agent_fold_freeze;
+   memset(&agent_fold_freeze, 0, sizeof(agent_fold_freeze));
+   /* §4 fold recall: per-run page table of folded-away coordinates, for re-touch
+    * hints across turns. Honored only when fold_recall_enabled. */
+   fold_recall_index_t agent_fold_recall;
+   fold_recall_index_init(&agent_fold_recall);
    int api_call_count = 0;    /* cumulative provider API calls; published via heartbeat */
    int write_calls_total = 0; /* cumulative write/edit tool calls; used by write_enforce */
    int final_instruction_added = 0;
@@ -691,12 +827,18 @@ native_provider_http:
 
       /* Build request (use fb_agent which may have fallback model after turn 0) */
       cJSON *req;
+      fold_result_t fold_view; /* §1 rolling fold; freed after req is serialized */
+      memset(&fold_view, 0, sizeof(fold_view));
       if (chatgpt)
          req = agent_build_request_responses(&fb_agent, messages, active_tools, sys);
       else if (anthropic)
       {
-         track_anthropic_payload_rewrite(driver, &fb_agent, messages, sys);
-         req = agent_build_request_anthropic(&fb_agent, messages, active_tools, sys, tok,
+         /* Fold first so payload-rewrite tracking and the request both observe the
+          * actually-sent (possibly folded) message array. */
+         build_fold_view(messages, &agent_fold_freeze, &agent_fold_recall, turn, &fold_view);
+         cJSON *anth_msgs = fold_view.folded ? fold_view.messages : messages;
+         track_anthropic_payload_rewrite(driver, &fb_agent, anth_msgs, sys);
+         req = agent_build_request_anthropic(&fb_agent, anth_msgs, active_tools, sys, tok,
                                              temperature);
       }
       else if (gemini)
@@ -716,11 +858,16 @@ native_provider_http:
       {
          snprintf(out->error, sizeof(out->error), "gateway request pipeline failed");
          cJSON_Delete(req);
+         fold_result_free(&fold_view);
          break;
       }
 
       char *body = cJSON_PrintUnformatted(req);
+      /* Order matters: req may hold a non-owning reference into fold_view.messages
+       * (agent_build_request_anthropic's AddItemReference fallback), so req must be
+       * deleted before the fold view is freed. */
       cJSON_Delete(req);
+      fold_result_free(&fold_view);
       if (!body)
       {
          snprintf(out->error, sizeof(out->error), "failed to build request");
@@ -785,12 +932,16 @@ native_provider_http:
          snprintf(out->served_model, MAX_MODEL_LEN, "%s", fb_agent.model);
 
          cJSON *fb_req;
+         fold_result_t fb_fold_view; /* §1 rolling fold; freed after fb_req serialized */
+         memset(&fb_fold_view, 0, sizeof(fb_fold_view));
          if (chatgpt)
             fb_req = agent_build_request_responses(&fb_agent, messages, active_tools, sys);
          else if (anthropic)
          {
-            track_anthropic_payload_rewrite(driver, &fb_agent, messages, sys);
-            fb_req = agent_build_request_anthropic(&fb_agent, messages, active_tools, sys, tok,
+            build_fold_view(messages, &agent_fold_freeze, NULL, turn, &fb_fold_view);
+            cJSON *fb_anth_msgs = fb_fold_view.folded ? fb_fold_view.messages : messages;
+            track_anthropic_payload_rewrite(driver, &fb_agent, fb_anth_msgs, sys);
+            fb_req = agent_build_request_anthropic(&fb_agent, fb_anth_msgs, active_tools, sys, tok,
                                                    temperature);
          }
          else if (gemini)
@@ -800,7 +951,9 @@ native_provider_http:
             fb_req =
                 agent_build_request_openai(&fb_agent, messages, active_tools, tok, temperature);
          char *fb_body = cJSON_PrintUnformatted(fb_req);
+         /* delete fb_req before freeing the fold view (req may reference it) */
          cJSON_Delete(fb_req);
+         fold_result_free(&fb_fold_view);
          if (fb_body)
          {
             {
@@ -1525,6 +1678,8 @@ native_provider_http:
          db1_agent_job_heartbeat_ext(durable_job_id, "", api_call_count);
       }
    }
+
+   fold_recall_index_free(&agent_fold_recall);
 
    /* If we exhausted turns without a final response, set a clear error */
    if (!out->success && !out->response && turn >= max_t)

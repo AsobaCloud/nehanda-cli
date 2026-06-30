@@ -12,6 +12,7 @@
 
 #include "canonical_index.h"
 #include "code_index.h"
+#include "cross_repo_resolver.h" /* H0b: xrepo_lang_name / xrepo_path_is_vendored */
 #include "config.h"
 #include "css_graph.h" /* CSS migration assistant: style graph + component join (WP-C/D) */
 #include "db2.h"
@@ -127,10 +128,15 @@ static int64_t ci_upsert_file(void *conn, int64_t project_id, const char *rel_pa
                               const char *scanned_at)
 {
    char err[CI_ERRBUF] = "";
+   /* H0b: per-file language + vendored flag, derived from the path at index time. */
+   const char *language = xrepo_lang_name(xrepo_lang_from_path(rel_path));
+   int vendored = xrepo_path_is_vendored(rel_path);
    aimee_pg_stmt_t *st = aimee_pg_prepare(
        conn,
-       "INSERT INTO files (project_id, path, scanned_at) VALUES (?1, ?2, ?3) "
-       "ON CONFLICT (project_id, path) DO UPDATE SET scanned_at = EXCLUDED.scanned_at "
+       "INSERT INTO files (project_id, path, scanned_at, language, vendored) "
+       "VALUES (?1, ?2, ?3, ?4, ?5) "
+       "ON CONFLICT (project_id, path) DO UPDATE SET scanned_at = EXCLUDED.scanned_at, "
+       "language = EXCLUDED.language, vendored = EXCLUDED.vendored "
        "RETURNING id",
        err, sizeof(err));
    if (!st)
@@ -138,6 +144,8 @@ static int64_t ci_upsert_file(void *conn, int64_t project_id, const char *rel_pa
    aimee_pg_bind_int64(st, "?1", project_id);
    aimee_pg_bind_text(st, "?2", rel_path);
    aimee_pg_bind_text(st, "?3", scanned_at);
+   aimee_pg_bind_text(st, "?4", language);
+   aimee_pg_bind_int(st, "?5", vendored);
    int64_t id = -1;
    if (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
       id = aimee_pg_column_int64(st, 0);
@@ -254,18 +262,25 @@ static void ci_replace_file_data(void *conn, int64_t file_id, const char *ext, c
          aimee_pg_finalize(st);
    }
 
-   /* Imports. */
+   /* Imports. H6: also persist is_system (C/C++ angle `#include <...>`) so the
+    * cross-repo route builder can apply prefer-local to quoted includes only. */
    {
-      char *imports[128];
-      int n = extract_imports(ext, content, imports, 128);
+      /* 256 (was 128): H6 also captures angle <lib.h> includes, so include-heavy
+       * C/C++ files have more imports (system headers are skipped at extraction,
+       * but real ones can still be many) — headroom so a real dep is not truncated. */
+      char *imports[256];
+      int imp_sys[256] = {0}; /* defensive: extract_imports_sys also zeroes it */
+      int n = extract_imports_sys(ext, content, imports, imp_sys, 256);
       aimee_pg_stmt_t *st = aimee_pg_prepare(
-          conn, "INSERT INTO file_imports (file_id, name) VALUES (?1, ?2)", err, sizeof(err));
+          conn, "INSERT INTO file_imports (file_id, name, is_system) VALUES (?1, ?2, ?3)", err,
+          sizeof(err));
       for (int i = 0; i < n; i++)
       {
          if (st)
          {
             aimee_pg_bind_int64(st, "?1", file_id);
             aimee_pg_bind_text(st, "?2", imports[i]);
+            aimee_pg_bind_int64(st, "?3", imp_sys[i]);
             aimee_pg_step(st, err, sizeof(err));
             aimee_pg_reset(st);
          }
@@ -301,9 +316,16 @@ static void ci_replace_file_data(void *conn, int64_t file_id, const char *ext, c
    {
       definition_t defs[CI_MAX_DEFS];
       int n = extract_definitions(ext, content, defs, CI_MAX_DEFS);
+      /* H0a: coarse kind stays 'definition' (the ~10 kind='definition' consumers are
+       * unchanged); the extractor's granular kind goes to the new def_kind column,
+       * which the cross-repo resolver reads for §5 kind-eligibility. The extractor
+       * emits a granular kind for C today and 'definition' (treated as unknown ->
+       * eligible) for languages not yet upgraded. */
       aimee_pg_stmt_t *st = aimee_pg_prepare(
-          conn, "INSERT INTO terms (file_id, name, kind, line) VALUES (?1, ?2, ?3, ?4)", err,
-          sizeof(err));
+          conn,
+          "INSERT INTO terms (file_id, name, kind, def_kind, line) VALUES (?1, ?2, "
+          "'definition', ?3, ?4)",
+          err, sizeof(err));
       for (int i = 0; i < n; i++)
       {
          if (st)
@@ -435,6 +457,54 @@ static int ci_path_has_hidden_component(const char *path)
    return 0;
 }
 
+/* Build manifests whose filename legitimately starts with '.' (currently only
+ * .gitmodules — git submodule declarations). A thin-client push sends these (the
+ * client's code_file_wanted accepts them); the kb must not drop them as "hidden"
+ * the way it drops files inside .git/.aimee/etc. dirs (recall §2.2). */
+static int ci_is_dotfile_manifest(const char *component, size_t len)
+{
+   return len == 11 && strncmp(component, ".gitmodules", 11) == 0;
+}
+
+/* Like ci_path_has_hidden_component, but a hidden FINAL (filename) component is
+ * allowed when it is a wanted dotfile build manifest (ci_is_dotfile_manifest).
+ * For thin-client file ingest: the client already gated the file set, and a
+ * .gitmodules must be ingested; interior hidden DIRECTORY components (.git/,
+ * .github/, ...) are still rejected. The exemption is for the FINAL component at
+ * ANY depth (a/b/.gitmodules), not just repo-root — the client gates which paths
+ * it sends, so the kb need not second-guess depth. (Leading slashes are tolerated
+ * for parity with ci_path_has_hidden_component, though the sole caller already
+ * rejects a leading '/'.) */
+static int ci_path_ingest_excluded(const char *path)
+{
+   const char *p = path;
+   while (*p == '/')
+      p++;
+
+   const char *start = p;
+   for (;;)
+   {
+      if (*p == '/' || *p == '\0')
+      {
+         size_t len = (size_t)(p - start);
+         int is_final = (*p == '\0');
+         if (ci_path_component_is_hidden(start, len) &&
+             !(is_final && ci_is_dotfile_manifest(start, len)))
+            return 1;
+         if (is_final)
+            break;
+         p++;
+         start = p;
+      }
+      else
+      {
+         p++;
+      }
+   }
+
+   return 0;
+}
+
 static int ci_file_list_append(ci_file_list_t *list, const char *path)
 {
    if (list->count >= list->max)
@@ -456,8 +526,11 @@ static int ci_file_list_append(ci_file_list_t *list, const char *path)
 
 static void ci_purge_hidden_paths(int64_t project_id)
 {
-   (void)db2_code_index_purge_files_matching(project_id, ".%");
-   (void)db2_code_index_purge_files_matching(project_id, "%/.%");
+   /* Purge hidden-path files but SPARE a wanted dotfile build manifest
+    * (.gitmodules with all non-hidden ancestors) — recall §2.2. The purge mirrors
+    * the ingest allowlist (ci_path_ingest_excluded), so a re-scan does not delete a
+    * legitimately-ingested submodule declaration back out. */
+   (void)db2_code_index_purge_hidden_except_manifests(project_id);
 }
 
 static void ci_purge_build_exclusions(int64_t project_id, const ci_exclusion_list_t *exclusions)
@@ -1077,7 +1150,7 @@ int canonical_index_scan_files(const char *name, const char *root_label,
    {
       const char *rel = files[i].rel_path;
       const char *content = files[i].content;
-      if (!rel || !rel[0] || rel[0] == '/' || ci_path_has_hidden_component(rel) || !content)
+      if (!rel || !rel[0] || rel[0] == '/' || ci_path_ingest_excluded(rel) || !content)
          continue;
 
       inspected++;

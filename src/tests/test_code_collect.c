@@ -227,6 +227,68 @@ static void test_non_git_uses_worktree(void)
    printf("  test_non_git_uses_worktree: ok\n");
 }
 
+/* R2: build manifests (CMakeLists.txt, *.cmake, .gitmodules, meson.build) are
+ * collected so the build-declared-edge pass can read their content; a non-manifest
+ * .txt is NOT collected. */
+static void test_build_manifests_collected(void)
+{
+   make_root("buildman");
+   write_file("CMakeLists.txt", "FetchContent_Declare(dep GIT_REPOSITORY x)");
+   write_file("cmake/deps.cmake", "find_package(foo)");
+   write_file(".gitmodules", "[submodule \"x\"]");
+   write_file("meson.build", "project('p')");
+   write_file("src/a.cpp", "int a(){return 0;}");
+   write_file("README.txt", "not a manifest");
+   /* a CMakeLists.txt under a build-output dir must NOT be collected (the walk skips
+    * build/ at directory recursion, so FetchContent'd _deps manifests never enter). */
+   write_file("build/_deps/dep-src/CMakeLists.txt", "FetchContent_Declare(other GIT_REPOSITORY y)");
+
+   reset();
+   code_collect_files_cb(g_root, rec_cb, NULL);
+   assert(has("CMakeLists.txt"));
+   assert(has("cmake/deps.cmake"));
+   assert(has(".gitmodules"));
+   assert(has("meson.build"));
+   assert(has("src/a.cpp"));
+   assert(!has("README.txt"));                         /* plain .txt is not a build manifest */
+   assert(!has("build/_deps/dep-src/CMakeLists.txt")); /* build-output subtree skipped */
+   printf("  test_build_manifests_collected: ok\n");
+}
+
+/* R2: build manifests are collected via the GIT-TRACKED path too (the second
+ * collection site), and a build/ manifest stays excluded there as well. */
+static void test_build_manifests_collected_git(void)
+{
+   make_root("buildman_git");
+   git("init -q -b main");
+   git("config user.email t@t");
+   git("config user.name t");
+   write_file("CMakeLists.txt", "FetchContent_Declare(dep GIT_REPOSITORY x)");
+   write_file("src/a.cpp", "int a(){return 0;}");
+   /* recall §2.2 regression: a repo-root .gitmodules is a wanted manifest whose
+    * filename starts with '.'. The git-tracked path must collect it (the worktree
+    * path already does) — code_path_skipped must not dir-skip the FINAL component. */
+   write_file(".gitmodules", "[submodule \"x\"]\n\turl = https://h/o/dep.git\n");
+   write_file("build/CMakeLists.txt", "generated");
+   /* a checked-in vendor/ tree is still dir-skipped on the git path. */
+   write_file("vendor/dep/CMakeLists.txt", "FetchContent_Declare(y GIT_REPOSITORY z)");
+   /* a leading-dot NON-final directory component is still dir-skipped: only the
+    * trailing filename is exempt from code_dir_skip, not interior hidden dirs. */
+   write_file(".config/dep.cmake", "find_package(q)");
+   git("add -A -f"); /* -f: build/ may be gitignored in some setups; force-track for the test */
+   git("commit -qm c");
+
+   reset();
+   code_collect_files_cb(g_root, rec_cb, NULL);
+   assert(has("CMakeLists.txt"));
+   assert(has("src/a.cpp"));
+   assert(has(".gitmodules"));                /* dotfile manifest collected on the git path */
+   assert(!has("build/CMakeLists.txt"));      /* build-output dir excluded on the git path too */
+   assert(!has("vendor/dep/CMakeLists.txt")); /* vendor dir still dir-skipped */
+   assert(!has(".config/dep.cmake")); /* interior hidden dir still dir-skipped (non-final) */
+   printf("  test_build_manifests_collected_git: ok\n");
+}
+
 /* §6 live: the default-branch tree SHA tracks commits, and the pure change-gate
  * decides when a re-index is warranted. */
 static void test_default_branch_sha_tracks_commits(void)
@@ -360,6 +422,30 @@ static void test_default_branch_sha_non_git(void)
    printf("  test_default_branch_sha_non_git: ok\n");
 }
 
+/* C++ public headers (.hpp/.hh/.hxx) are collected — they are the dominant C++
+ * public-API extension; dropping them left a library's include/ tree (its class/
+ * method symbols + the includes that form cross-repo routes) unindexed. */
+static void test_cpp_headers_collected(void)
+{
+   make_root("cpphdr");
+   write_file("include/lib/api.hpp", "namespace lib { class Api { void run(); }; }");
+   write_file("src/impl.hh", "struct Impl {};");
+   write_file("src/legacy.hxx", "struct Legacy {};");
+   write_file("src/main.cpp", "int main(){return 0;}");
+   write_file("src/c_api.h", "int c_api(void);");
+   write_file("README.txt", "doc");
+
+   reset();
+   code_collect_files_cb(g_root, rec_cb, NULL);
+   assert(has("include/lib/api.hpp")); /* the regression: .hpp under include/ collected */
+   assert(has("src/impl.hh"));
+   assert(has("src/legacy.hxx"));
+   assert(has("src/main.cpp"));
+   assert(has("src/c_api.h"));
+   assert(!has("README.txt"));
+   printf("  test_cpp_headers_collected: ok\n");
+}
+
 int main(void)
 {
    printf("test_code_collect:\n");
@@ -374,6 +460,9 @@ int main(void)
    test_clone_resolves_origin_head();
    test_no_default_branch_skips();
    test_non_git_uses_worktree();
+   test_build_manifests_collected();
+   test_build_manifests_collected_git();
+   test_cpp_headers_collected();
    test_default_branch_sha_tracks_commits();
    test_default_branch_sha_quote_in_ref();
    test_index_source_is_worktree();

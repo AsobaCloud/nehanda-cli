@@ -324,12 +324,10 @@ static int json_escape(const char *src, char *buf, int pos, int cap)
    return pos;
 }
 
-/* printf-append into buf at pos, returning the new pos clamped to [0, cap].
- * snprintf returns the would-be length, so the raw `pos += snprintf(...)` idiom
- * can run pos PAST cap; a later (cap - pos) then wraps to a huge size_t and the
- * next write lands out of bounds. The per-record headroom guards in the JSON
- * builders below (pos + 64 < cap) are far smaller than a max escaped record, so
- * every builder routes its appends through this clamp. */
+/* printf-append into buf at pos, returning the new pos clamped to [0, cap]. snprintf returns
+ * the would-be length, so the raw `pos += snprintf(...)` idiom can run pos PAST cap; a later
+ * (cap - pos) then wraps to a huge size_t and the next write lands out of bounds. The JSON
+ * builders' per-record headroom guards (pos + 64 < cap) route every append through this clamp. */
 static int js_appendf(char *buf, int pos, int cap, const char *fmt, ...)
 {
    if (pos < 0)
@@ -583,6 +581,12 @@ static void path_seg(const char *path, int n, char *out, size_t out_cap)
    out[i] = '\0';
 }
 
+/* Shared 403 for owner-credential-only mutations (a scoped token must not reach them). */
+static int kb_http_owner_required(char *out, int cap, const char *what)
+{
+   snprintf(out, (size_t)cap, "{\"error\":\"forbidden: %s requires the owner credential\"}", what);
+   return 403;
+}
 /* ── Phase 5 extended routing ────────────────────────────────────────────── */
 
 int kb_http_route_ex(const char *method, const char *path, const char *query_string,
@@ -637,13 +641,11 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
       return 200;
    }
 
-   /* Auth + scope authorization, routed through the pluggable Verifier seam
-    * (kb_verifier.h). The built-in kb-token verifier validates the configured
-    * bearer (which may be self-describing "scope:<kind>:<id>:<secret>") and
-    * yields the verified scope. Per verify-then-trust, the scope used for the
-    * cross-scope check comes from that verified result, never from the caller.
-    * `vr` is function-scoped so owner-only routes (e.g. /v1/enroll) can tell an
-    * unscoped owner credential (empty scope_kind) from a scoped one. */
+   /* Auth + scope authorization via the pluggable Verifier seam (kb_verifier.h): the built-in
+    * kb-token verifier validates the configured bearer (which may be self-describing
+    * "scope:<kind>:<id>:<secret>") and yields the verified scope. Per verify-then-trust, the
+    * cross-scope check uses that verified scope, never the caller's. `vr` is function-scoped so
+    * owner-only routes (e.g. /v1/enroll) tell an unscoped owner credential from a scoped one. */
    kb_verify_result_t vr;
    memset(&vr, 0, sizeof(vr));
    if (bearer_token && bearer_token[0])
@@ -684,11 +686,7 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
          return 405;
       }
       if (vr.scope_kind[0])
-      {
-         snprintf(out_buf, (size_t)out_cap,
-                  "{\"error\":\"forbidden: enrollment minting requires the owner credential\"}");
-         return 403;
-      }
+         return kb_http_owner_required(out_buf, out_cap, "enrollment minting");
       cJSON *req = body ? cJSON_Parse(body) : NULL;
       const cJSON *jhost = req ? cJSON_GetObjectItemCaseSensitive(req, "host") : NULL;
       const cJSON *jport = req ? cJSON_GetObjectItemCaseSensitive(req, "port") : NULL;
@@ -885,12 +883,9 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
          snprintf(out_buf, (size_t)out_cap, "{\"error\":\"method not allowed\"}");
          return 405;
       }
-      /* Escape hatch: force-clear a stuck reembed_in_progress marker. Non-destructive
-       * (only clears the maintenance flag so search resumes), so it is available even
-       * when kb.reembed_on_dim_change is off — an operator must be able to recover a
-       * store wedged in maintenance regardless of the reset toggle's current state.
-       * Refuses (409) when the recorded schema dim disagrees with the running dim
-       * (clearing would resume search mid-transition) unless force makes it explicit. */
+      /* Escape hatch: force-clear a stuck reembed_in_progress marker (non-destructive, resumes
+       * search; available even when reembed_on_dim_change is off). 409 on dim mismatch unless
+       * force. */
       if (json_bool(body, "clear_maintenance", 0))
       {
          int was = 0, recorded = 0, running = 0;
@@ -1301,22 +1296,25 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
       return handle_get_pdf_neighbors_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/pdf/structure") == 0)
       return handle_get_pdf_structure_route(method, query_string, out_buf, out_cap);
+   if (strcmp(path, "/v1/pdf/lookup_table") == 0)
+      return handle_get_pdf_lookup_table_route(method, query_string, out_buf, out_cap);
+   if (strcmp(path, "/v1/pdf/assets") == 0)
+      return handle_get_pdf_assets_route(method, query_string, out_buf, out_cap);
+   if (strcmp(path, "/v1/pdf/open_asset") == 0)
+      return handle_get_pdf_open_asset_route(method, query_string, out_buf, out_cap);
    /* POST /v1/pdf/quarantine: owner-only release/purge; auth checked here (scope vr lives here). */
    if (strcmp(path, "/v1/pdf/quarantine") == 0)
    {
       if (vr.scope_kind[0])
-      {
-         snprintf(out_buf, (size_t)out_cap,
-                  "{\"error\":\"forbidden: quarantine actions require the owner credential\"}");
-         return 403;
-      }
+         return kb_http_owner_required(out_buf, out_cap, "quarantine actions");
       return handle_post_pdf_quarantine_route(method, body, body_len, out_buf, out_cap);
    }
    if (strcmp(path, "/v1/code/callers") == 0)
       return handle_get_code_callers_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/code/project-stats") == 0)
       return handle_get_code_project_stats_route(method, query_string, out_buf, out_cap);
-
+   if (strcmp(path, "/v1/code/cross-repo-deps") == 0)
+      return handle_get_code_cross_repo_deps_route(method, query_string, out_buf, out_cap);
    /* POST /v1/code/build */
    if (strcmp(path, "/v1/code/build") == 0)
    {
@@ -1441,6 +1439,8 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
 
    if (strcmp(path, "/v1/code/scan") == 0)
       return handle_post_code_scan_route(method, body, out_buf, out_cap);
+   if (strcmp(path, "/v1/code/repo-trust") == 0) /* S7: admin; owner gate in handler */
+      return handle_post_code_repo_trust_route(method, body, out_buf, out_cap, !vr.scope_kind[0]);
    /* POST /v1/ingest */
    if (strcmp(path, "/v1/ingest") == 0)
    {

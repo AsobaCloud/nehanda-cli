@@ -419,7 +419,19 @@ static void config_set_defaults(config_t *cfg)
    snprintf(cfg->db1_path, sizeof(cfg->db1_path), "%s", config_default_db1_path());
    snprintf(cfg->guardrail_mode, sizeof(cfg->guardrail_mode), "%s", MODE_APPROVE);
    snprintf(cfg->provider, sizeof(cfg->provider), "claude");
-   cfg->compact_enabled = 1; /* default on; set before no-config early returns */
+   cfg->compact_enabled = 1;      /* default on; set before no-config early returns */
+   cfg->coord_closet_enabled = 0; /* fold §2: default-off */
+   cfg->coord_closet_budget_bytes = 0;
+   cfg->coord_closet_max_ratio_pct = 0;
+   cfg->fold_enabled = 0; /* fold §1: default-off */
+   cfg->fold_retained_msgs = 0;
+   cfg->fold_min_fold_msgs = 0;
+   cfg->fold_excerpt_bytes = 0;
+   cfg->fold_register_enabled = 0; /* fold §6: default-off */
+   cfg->fold_freeze_enabled = 0;   /* fold §3: default-off */
+   cfg->fold_freeze_tail_cap_msgs = 0;
+   cfg->fold_recall_enabled = 0; /* fold §4: default-off */
+   cfg->fold_recall_ttl_turns = 0;
    snprintf(cfg->memory_citations_mode, sizeof(cfg->memory_citations_mode), "%s", "off");
    snprintf(cfg->memory_coref_mode, sizeof(cfg->memory_coref_mode), "%s", "off");
    cfg->memory_cognify_async_enabled = 0;
@@ -434,6 +446,11 @@ static void config_set_defaults(config_t *cfg)
    cfg->memory_fetch_budget_base = 128;
    cfg->memory_fetch_budget_shape_aware = 1;
    cfg->kb_search_max_results = 50;
+   /* structured-pdf Phase C blob reconciliation: default hourly sweep, alarm at 1 GiB of
+    * reclaimable orphan bytes (config_t is memset-0 above, so these explicit values are the
+    * defaults). The sweep is still a no-op until kb_pdf_assets_enabled is on. */
+   cfg->kb_pdf_blob_recon_secs = 3600;
+   cfg->kb_pdf_blob_orphan_alarm_mb = 1024;
    /* Embedding dimension. 0 = UNSET (the operator did not pin a dim): readers fall
     * back to 1024 (db2_embedding_dim(), kb_main, kb_ingest_workers), and — crucially
     * — config_embedding_dim_is_pinned() reports NOT-pinned, so §2a's recorded-dim
@@ -506,6 +523,20 @@ static void config_set_defaults(config_t *cfg)
    cfg->learning_implicit_workflow_repetition = 0;
    cfg->integrity_enabled = 0;
    cfg->integrity_dry_run = 1;
+   /* Ingress envelope DEFAULT-ON (operator decision 2026-06-28): inject the
+    * <aimee-context> memory/code preview on primary ingress turns, fold code hits
+    * to recoverable file:line refs (recover via code_span_get), and place the
+    * envelope after the stable prefix for cache survival. TURN OFF (per-request
+    * `X-Aimee-Compress: 0`, or set these false) for agentic ingress where recovery
+    * round-trips can erase the saving. Rationale, metrics + the honest-benchmark
+    * framing: proposal §8.0 (docs/proposals/done/ingress-compression-and-cache-
+    * alignment.md). The compress<-preinject dependency is enforced by control flow
+    * (ingress_preinject_build returns early when neither preinject nor typed-facts
+    * is on, before the compress flag is read — so compress alone is a safe no-op).
+    * Anthropic injection + failure-mining stay opt-in (separate gates). */
+   cfg->ingress_preinject_enabled = 1;
+   cfg->ingress_compress_enabled = 1;
+   cfg->ingress_cache_placement_enabled = 1;
    cfg->ingress_preinject_assembly_budget = 6144;
    cfg->ingress_max_raw_scans = 0;
    cfg->code_span_max_lines = 400;
@@ -594,6 +625,9 @@ static void config_set_defaults(config_t *cfg)
    cfg->css_style_graph_enabled = 1; /* default-on: the indexer builds the CSS style
                                         graph so the read-only css signals/report work
                                         out of the box (set false to opt out) */
+   cfg->wfe_live_forge_enabled = 0;  /* default-OFF (security): the autonomous live
+                                        forge stays unregistered until an operator
+                                        explicitly enables it (F4) */
    snprintf(cfg->css_render_command, sizeof(cfg->css_render_command), "%s",
             CONFIG_DEFAULT_CSS_RENDER_COMMAND); /* default-on render backend (inert
                                                    until the sidecar is up); set empty
@@ -884,6 +918,10 @@ int config_load(config_t *cfg)
    if (cJSON_IsBool(item))
       cfg->css_style_graph_enabled = cJSON_IsTrue(item);
 
+   item = cJSON_GetObjectItemCaseSensitive(root, "wfe_live_forge_enabled");
+   if (cJSON_IsBool(item))
+      cfg->wfe_live_forge_enabled = cJSON_IsTrue(item);
+
    item = cJSON_GetObjectItemCaseSensitive(root, "css_render_command");
    if (cJSON_IsString(item) && item->valuestring)
       snprintf(cfg->css_render_command, sizeof(cfg->css_render_command), "%s", item->valuestring);
@@ -907,6 +945,46 @@ int config_load(config_t *cfg)
    item = cJSON_GetObjectItemCaseSensitive(root, "typed_facts_enabled");
    if (cJSON_IsBool(item))
       cfg->typed_facts_enabled = cJSON_IsTrue(item);
+
+   /* structured-PDF gates. These have config_fields[] rows (CLI/server-settable) but
+    * historically lacked a file parse, so a value set in aimee.yaml never loaded back on a
+    * fresh process. Parse them here as top-level bools so both the Phase-1/2 ingest gate
+    * and the Phase-A vector gate are durably configurable. */
+   item = cJSON_GetObjectItemCaseSensitive(root, "kb_pdf_ingest_enabled");
+   if (cJSON_IsBool(item))
+      cfg->kb_pdf_ingest_enabled = cJSON_IsTrue(item);
+
+   item = cJSON_GetObjectItemCaseSensitive(root, "kb_pdf_vector_enabled");
+   if (cJSON_IsBool(item))
+      cfg->kb_pdf_vector_enabled = cJSON_IsTrue(item);
+
+   item = cJSON_GetObjectItemCaseSensitive(root, "kb_pdf_tsr_enabled");
+   if (cJSON_IsBool(item))
+      cfg->kb_pdf_tsr_enabled = cJSON_IsTrue(item);
+
+   item = cJSON_GetObjectItemCaseSensitive(root, "tsr_command");
+   if (cJSON_IsString(item) && item->valuestring)
+      snprintf(cfg->tsr_command, sizeof(cfg->tsr_command), "%s", item->valuestring);
+
+   item = cJSON_GetObjectItemCaseSensitive(root, "kb_pdf_assets_enabled");
+   if (cJSON_IsBool(item))
+      cfg->kb_pdf_assets_enabled = cJSON_IsTrue(item);
+   item = cJSON_GetObjectItemCaseSensitive(root, "kb_pdf_blob_dir");
+   if (cJSON_IsString(item) && item->valuestring)
+      snprintf(cfg->kb_pdf_blob_dir, sizeof(cfg->kb_pdf_blob_dir), "%s", item->valuestring);
+   item = cJSON_GetObjectItemCaseSensitive(root, "kb_pdf_blob_recon_secs");
+   if (cJSON_IsNumber(item))
+      cfg->kb_pdf_blob_recon_secs = (int)item->valuedouble;
+   item = cJSON_GetObjectItemCaseSensitive(root, "kb_pdf_blob_orphan_alarm_mb");
+   if (cJSON_IsNumber(item))
+      cfg->kb_pdf_blob_orphan_alarm_mb = (int)item->valuedouble;
+
+   item = cJSON_GetObjectItemCaseSensitive(root, "kb_pdf_ocr_enabled");
+   if (cJSON_IsBool(item))
+      cfg->kb_pdf_ocr_enabled = cJSON_IsTrue(item);
+   item = cJSON_GetObjectItemCaseSensitive(root, "ocr_command");
+   if (cJSON_IsString(item) && item->valuestring)
+      snprintf(cfg->ocr_command, sizeof(cfg->ocr_command), "%s", item->valuestring);
 
    item = cJSON_GetObjectItemCaseSensitive(root, "kb_evidence_emit_enabled");
    if (cJSON_IsBool(item))
@@ -960,6 +1038,7 @@ int config_load(config_t *cfg)
    config_parse_memory_maintenance_section(cfg, root);
 
    config_parse_worktree_gc_section(cfg, root);
+   config_parse_fold_section(cfg, root);
 
    config_parse_memory_section(cfg, root);
    config_apply_learning_settings(cfg, root);

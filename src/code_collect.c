@@ -2,6 +2,7 @@
 #include "platform.h" /* AIMEE_POSIX */
 #include "code_collect.h"
 #include "client_constants.h" /* MAX_PATH_LEN */
+#include "util.h"             /* GIT_SAFE_ENV */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,10 +18,18 @@
 
 static int code_ext_ok(const char *name)
 {
-   static const char *const exts[] = {".c",    ".h",   ".cc",    ".cpp",  ".cxx", ".m",    ".py",
-                                      ".go",   ".rs",  ".ts",    ".tsx",  ".js",  ".jsx",  ".md",
-                                      ".yaml", ".yml", ".toml",  ".json", ".sh",  ".bash", ".rb",
-                                      ".java", ".kt",  ".swift", NULL};
+   /* C++ headers (.hpp/.hh/.hxx) were missing — they are the dominant public-API
+    * header extension, so a C++ library's include/ tree (and thus its class/method
+    * symbols and the includes that form cross-repo routes) was never collected. The
+    * kb-side extractor parses them as LANG_C (extractors.c c_exts, which this change
+    * extends in lockstep so the collector never sends an extension the extractor
+    * can't parse). `.inc` is intentionally NOT collected: c_exts lists it, but in
+    * this corpus it is high-volume ambiguous/generated C-include fragments (e.g.
+    * aimee's own *_gen.inc), not a cross-repo API surface. */
+   static const char *const exts[] = {".c",   ".h",    ".cc", ".cpp",  ".cxx", ".hpp",   ".hh",
+                                      ".hxx", ".m",    ".py", ".go",   ".rs",  ".ts",    ".tsx",
+                                      ".js",  ".jsx",  ".md", ".yaml", ".yml", ".toml",  ".json",
+                                      ".sh",  ".bash", ".rb", ".java", ".kt",  ".swift", NULL};
    const char *dot = strrchr(name, '.');
    if (!dot || dot == name)
       return 0;
@@ -28,6 +37,34 @@ static int code_ext_ok(const char *name)
       if (strcmp(dot, exts[i]) == 0)
          return 1;
    return 0;
+}
+
+/* Build manifests (R2): not code by extension, but their CONTENT declares cross-repo
+ * dependencies (CMake FetchContent/target_link_libraries, git submodules, …) that the
+ * build-declared-edge pass reads from file_contents. Indexed (content stored) even
+ * though no language extractor runs on them (detect_lang is extension-based, so these
+ * yield only file_contents, no terms/imports — meson.build is NOT sniffed as Python).
+ * Matched on the trailing component so it works for a bare basename (worktree walk) or
+ * a path (git-tracked list). build/_deps/.git/.aimee subtrees are still excluded by the
+ * dir walk (code_dir_skip) / code_path_skipped, so only the repo's OWN manifests are
+ * collected (top-level + subdirs); R2b's extraction restricts attribution to the
+ * top-level per design §2.2 and STRIPS any URL userinfo (https://user:token@…) so
+ * credentials are never persisted into routes. */
+static int code_build_manifest(const char *name)
+{
+   const char *slash = strrchr(name, '/');
+   const char *base = slash ? slash + 1 : name;
+   if (strcmp(base, "CMakeLists.txt") == 0 || strcmp(base, ".gitmodules") == 0 ||
+       strcmp(base, "meson.build") == 0)
+      return 1;
+   const char *dot = strrchr(base, '.');
+   return dot && strcmp(dot, ".cmake") == 0;
+}
+
+/* A file is wanted if it is code by extension OR a build manifest by name. */
+static int code_file_wanted(const char *name)
+{
+   return code_ext_ok(name) || code_build_manifest(name);
 }
 
 /* .git classification (defined below): 0 = not a repo, 1 = real checkout,
@@ -96,7 +133,7 @@ static int code_collect_walk(const char *root, const char *rel, code_collect_fil
       }
       else if (S_ISREG(st.st_mode))
       {
-         if (!code_ext_ok(ent->d_name))
+         if (!code_file_wanted(ent->d_name))
             continue;
          if (st.st_size <= 0 || st.st_size > CODE_COLLECT_MAX_FILE_BYTES)
             continue;
@@ -152,13 +189,11 @@ static int code_collect_walk(const char *root, const char *rel, code_collect_fil
  * THIS change touch" — e.g. blast-radius — read the working tree via their own
  * reader and deliberately do NOT route through here.) */
 
-/* Prefix for every git invocation. This runs in an automated indexing path, so a
- * git command must NEVER block on an interactive credential or SSH-passphrase
- * prompt (GIT_TERMINAL_PROMPT=0 makes git fail fast instead), and a network-bound
- * step like `remote set-head -a` must time out rather than hang the drain
- * (BatchMode=yes + a short ConnectTimeout). Local repos never hit the network. */
-#define GIT_SAFE_ENV                                                                               \
-   "GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=5' "
+/* Every git invocation here runs in an automated indexing path, so it must never
+ * block on an interactive credential / SSH-passphrase prompt or hang on a
+ * network-bound step like `remote set-head -a`. The shared GIT_SAFE_ENV prefix
+ * (util.h) supplies GIT_TERMINAL_PROMPT=0 + a BatchMode/ConnectTimeout
+ * GIT_SSH_COMMAND. Local repos never hit the network. */
 
 /* Quote one argument for /bin/sh: wrap in single quotes, escaping any embedded
  * single quote as '\''. Returns 0 on success, -1 if it doesn't fit. */
@@ -407,15 +442,19 @@ int code_default_branch_changed(const char *stored_sha, const char *current_sha)
    return strcmp(stored_sha, current_sha) != 0;
 }
 
-/* Skip a tracked path whose any component is a VCS/build/vendor/hidden dir, so a
- * checked-in node_modules/vendor tree is filtered exactly like the worktree walk
- * filters it (code_dir_skip). */
+/* Skip a tracked path whose any DIRECTORY component is a VCS/build/vendor/hidden
+ * dir, so a checked-in node_modules/vendor tree is filtered exactly like the
+ * worktree walk filters it (code_dir_skip on dirs only). The FINAL component (the
+ * filename) is NOT dir-skipped: its suitability is decided by code_file_wanted.
+ * code_dir_skip rejects any leading-'.' name, so testing it against the filename
+ * would wrongly drop a wanted dotfile manifest (e.g. a repo-root .gitmodules),
+ * diverging from the worktree walk which collects it (recall §2.2). */
 static int code_path_skipped(const char *rel)
 {
    const char *seg = rel;
    for (const char *p = rel;; p++)
    {
-      if (*p == '/' || *p == '\0')
+      if (*p == '/')
       {
          size_t len = (size_t)(p - seg);
          char comp[256];
@@ -426,10 +465,10 @@ static int code_path_skipped(const char *rel)
             if (code_dir_skip(comp))
                return 1;
          }
-         if (*p == '\0')
-            break;
          seg = p + 1;
       }
+      else if (*p == '\0')
+         break; /* trailing segment = filename; gated by code_file_wanted, not dir-skip */
    }
    return 0;
 }
@@ -544,7 +583,7 @@ static int code_collect_from_git(const char *root, const char *ref, code_collect
       const char *oid = sp2 + 1;
       if (strcmp(type, "blob") != 0)
          continue;
-      if (!code_ext_ok(path) || code_path_skipped(path))
+      if (!code_file_wanted(path) || code_path_skipped(path))
          continue;
       if (n == cap)
       {
