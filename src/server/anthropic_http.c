@@ -182,7 +182,10 @@ static void translate_request(const cJSON *req, const delegate_driver_t *driver,
    *out_messages =
        anthropic_messages_to_openai(cJSON_GetObjectItemCaseSensitive(req, "messages"),
                                     driver_consumes_system_prompt(driver, ag) ? NULL : *out_system);
-   *out_tools = anthropic_tools_to_openai(cJSON_GetObjectItemCaseSensitive(req, "tools"));
+   *out_tools = driver && strcmp(driver->name, "chatgpt") == 0
+                    ? anthropic_tools_to_responses(
+                          cJSON_GetObjectItemCaseSensitive(req, "tools"))
+                    : anthropic_tools_to_openai(cJSON_GetObjectItemCaseSensitive(req, "tools"));
 }
 
 /* ---- Gateway request pipeline (universal-gateway P2a) -------------------------
