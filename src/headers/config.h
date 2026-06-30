@@ -298,6 +298,13 @@ typedef struct config
     * assistant's style-graph write path during indexing (WP-C). When off, the
     * indexer keeps only the legacy lexical CSS class-name scan. */
    int css_style_graph_enabled;
+   /* wfe_live_forge_enabled: gate (default 0, OFF) for the autonomous live forge
+    * (full-autonomous-development F4). When OFF the wfe forge provider is not
+    * registered and every forge op fails closed, so an autonomous run can never
+    * open or merge a real PR. Turning it ON is a deliberate operator deployment
+    * action (branch protection + scoped creds + break-glass) — never a code default,
+    * per the security-roundtable deviation. */
+   int wfe_live_forge_enabled;
    /* css_render_command: the render backend for the #4-full computed-style oracle.
     * A shell command (like embedding_command) that reads a {"html","css"} JSON
     * object on stdin and writes a computed-style snapshot JSON on stdout. It runs
@@ -377,9 +384,31 @@ typedef struct config
     * model, P1). Single-model Anthropic-compatible shims (llama.cpp/vLLM) enable
     * this so an arbitrary client model name is not forwarded and rejected upstream. */
    int gateway_pin_model;
-   int typed_facts_enabled;      /* typed-fact knowledge layer master gate (default off) */
-   int kb_pdf_ingest_enabled;    /* structured-pdf: route PDF uploads through the geometry
-                                    extractor (kb_doc_pdf) instead of plain pdftotext (default off) */
+   int typed_facts_enabled;         /* typed-fact knowledge layer master gate (default off) */
+   int kb_pdf_ingest_enabled;       /* structured-pdf: route PDF uploads through the geometry
+                                       extractor (kb_doc_pdf) instead of plain pdftotext (default off) */
+   int kb_pdf_vector_enabled;       /* structured-pdf Phase A: embed PDF chunks into the isolated
+                                       kb_pdf_embeddings relation + add the vector leg to
+                                       search_chunks (default off; degrades to lexical when absent) */
+   int kb_pdf_tsr_enabled;          /* structured-pdf Phase B: run the TSR sidecar at ingest to turn
+                                       table regions into kb_table_cells (default off; degrades to
+                                       text-only + tsr_status='unavailable' when the sidecar absent) */
+   char tsr_command[1024];          /* structured-pdf Phase B: TSR sidecar endpoint/command
+                                       (resolves like embedding_command; AIMEE_TSR_URL env fallback) */
+   int kb_pdf_assets_enabled;       /* structured-pdf Phase C: render figure/table crops to the
+                                       content-addressed blob store + kb_doc_assets at ingest, served
+                                       via open_asset (default off; needs pdftoppm) */
+   char kb_pdf_blob_dir[1024];      /* structured-pdf Phase C: blob store root override (default
+                                       <kb_default_config_dir()>/kb-blobs) */
+   int kb_pdf_blob_recon_secs;      /* structured-pdf Phase C: orphan-blob reconciliation interval
+                                       seconds (default 3600; <=0 disables the sweep) */
+   int kb_pdf_blob_orphan_alarm_mb; /* structured-pdf Phase C: warn when reclaimable orphan bytes
+                                       exceed this many MB (default 1024; <=0 disables the alarm) */
+   int kb_pdf_ocr_enabled;       /* structured-pdf Phase D: OCR a scanned/no-text-layer PDF via the
+                                    OCR sidecar at ingest (default off; without it a scanned PDF is
+                                    asset-only) */
+   char ocr_command[1024];       /* structured-pdf Phase D: OCR sidecar endpoint/command (resolves
+                                    like embedding_command; AIMEE_OCR_URL env fallback) */
    int kb_evidence_emit_enabled; /* auditable-correctness: emit per-turn retrieval_event (default
                                     off) */
    int fidelity_check_enabled; /* auditable-correctness P3: run the fidelity judge on terminal-text
@@ -843,6 +872,40 @@ typedef struct config
    int compact_tail_bytes;
    char compact_per_tool[CONFIG_COMPACT_MAX_PER_TOOL][128]; /* "tool_name=threshold" */
    int compact_per_tool_count;
+
+   /* Coordinate Closet (fold §2): conserve verbatim identifiers from compacted
+    * tool results. Nested under the "compact" config section. Default-off.
+    * coord_closet_enabled: 0 = off (default), 1 = on.
+    * coord_closet_budget_bytes: hard byte cap for the conserved block (0 = default).
+    * coord_closet_max_ratio_pct: closet <= raw_len * pct/100 (0 = default 100).
+    * coord_closet_denylist: extra secret patterns (comma/space separated). */
+   int coord_closet_enabled;
+   int coord_closet_budget_bytes;
+   int coord_closet_max_ratio_pct;
+   char coord_closet_denylist[256];
+
+   /* Rolling context fold (fold §1, P2b). Folds a prefix of old turns into a
+    * skeleton + Coordinate Closet on the delegate request path. Default-off.
+    * The fold's closet reuses the coord_closet_* settings above (one policy).
+    * fold_enabled: 0 = off (default), 1 = on.
+    * fold_retained_msgs / fold_min_fold_msgs / fold_excerpt_bytes: 0 = module
+    *   defaults (see context_fold.h). */
+   int fold_enabled;
+   int fold_retained_msgs;
+   int fold_min_fold_msgs;
+   int fold_excerpt_bytes;
+   int fold_register_enabled; /* §6: annotate folded assistant lines with their register */
+   /* Fold-freeze (§3): pin the fold boundary across turns so the folded prefix
+    * stays byte-identical and the provider cache stays warm. Default-off.
+    * fold_freeze_tail_cap_msgs: re-epoch (advance the boundary) when the un-folded
+    * tail exceeds this many messages (0 = module default). */
+   int fold_freeze_enabled;
+   int fold_freeze_tail_cap_msgs;
+   /* Fold recall (§4): when the agent re-touches a folded-away path/handle, emit a
+    * recall hint so the body can be paged back in on demand. Default-off.
+    * fold_recall_ttl_turns: don't re-surface the same key within this many turns. */
+   int fold_recall_enabled;
+   int fold_recall_ttl_turns;
 
    /* Session/worktree cleanup policy.
     * worktree_stale_secs: inactivity threshold before a session is pruned

@@ -4,7 +4,13 @@
  * upload-route wiring are the next increment); this is exercised by its unit tests only. */
 #include "kb_doc_pdf.h"
 
+#include "cJSON.h"
+#include "config.h"
 #include "db2/kb_payload.h"
+#include "kb_blob_store.h"
+#include "kb_doc_hash.h"
+#include "kb_ocr_sidecar.h"
+#include "kb_tsr_sidecar.h"
 #include "log.h"
 
 #include <ctype.h>
@@ -25,6 +31,8 @@
  * hit (partial extraction, logged) rather than erroring. */
 #define KB_PDF_MAX_PAGES 20000
 #define KB_PDF_MAX_LINES 500000
+/* Phase C: cap page crops per document (a runaway page count cannot fill the blob store). */
+#define KB_PDF_RENDER_MAX_PAGES 200
 
 /* ---- small XML scanning helpers (poppler's bbox output is regular, not arbitrary XML) ---- */
 
@@ -718,6 +726,387 @@ int kb_pdf_sensitivity_valid(const char *s)
           (strcmp(s, "public") == 0 || strcmp(s, "internal") == 0 || strcmp(s, "restricted") == 0);
 }
 
+/* Remove the per-render private scratch: the input PDF, pdftoppm's output PNG, and the 0700
+ * directory itself. Best-effort + idempotent (a missing file/dir is fine). */
+static void render_dir_cleanup(const char *inpath, const char *outpng, const char *dir)
+{
+   unlink(inpath);
+   unlink(outpng);
+   rmdir(dir);
+}
+
+/* Phase C: render one PDF page to a PNG via pdftoppm, over the SAME hardened-exec harness as
+ * pdftotext — pdftoppm is a DIFFERENT untrusted byte-consuming parser (it decodes the page's
+ * images), so it gets its own scratch + the same RLIMIT_CPU/AS/FSIZE (RLIMIT_AS bounds in-
+ * memory image decompression before output is written), wall-clock deadline, setsid +
+ * process-group kill, and 0600 mkstemp scratch unlinked on every exit. On success *png_out/
+ * *png_len receive a heap buffer (caller frees). Returns 0 on success, -1 on error/absent
+ * binary/timeout, 1 if the page does not exist (pdftoppm produced no file). */
+static int kb_pdf_exec_render(const unsigned char *bytes, int n, int page_no,
+                              unsigned char **png_out, int *png_len, int timeout_ms)
+{
+   if (png_out)
+      *png_out = NULL;
+   if (png_len)
+      *png_len = 0;
+   if (!bytes || n <= 0 || page_no < 1 || !png_out || !png_len)
+      return -1;
+
+   /* Render inside a PRIVATE 0700 directory (mkdtemp), not bare /tmp files: pdftoppm creates
+    * <outbase>.png itself, and a 0700 dir we own closes the /tmp symlink/TOCTOU race where an
+    * attacker could pre-create that path to redirect the output or inject bytes. Both the input
+    * and the output live in this dir; render_dir_cleanup() removes them + the dir on EVERY exit
+    * path below. */
+   char scratch[] = "/tmp/aimee_pdf_render_XXXXXX";
+   if (!mkdtemp(scratch))
+      return -1;
+   char inpath[sizeof(scratch) + 8], outbase[sizeof(scratch) + 8], outpng[sizeof(scratch) + 12];
+   snprintf(inpath, sizeof(inpath), "%s/in.pdf", scratch);
+   snprintf(outbase, sizeof(outbase), "%s/page", scratch);
+   snprintf(outpng, sizeof(outpng), "%s/page.png", scratch);
+
+   int ifd = open(inpath, O_WRONLY | O_CREAT | O_EXCL, 0600);
+   if (ifd < 0)
+   {
+      rmdir(scratch);
+      return -1;
+   }
+   {
+      size_t off = 0;
+      int ok = 1;
+      while (off < (size_t)n)
+      {
+         ssize_t w = write(ifd, bytes + off, (size_t)n - off);
+         if (w < 0)
+         {
+            if (errno == EINTR)
+               continue;
+            ok = 0;
+            break;
+         }
+         off += (size_t)w;
+      }
+      close(ifd);
+      if (!ok)
+      {
+         render_dir_cleanup(inpath, outpng, scratch);
+         return -1;
+      }
+   }
+
+   char page_arg[16];
+   snprintf(page_arg, sizeof(page_arg), "%d", page_no);
+
+   pid_t pid = fork();
+   if (pid < 0)
+   {
+      render_dir_cleanup(inpath, outpng, scratch);
+      return -1;
+   }
+   if (pid == 0)
+   {
+      setsid();
+      int devnull = open("/dev/null", O_WRONLY);
+      if (devnull >= 0)
+      {
+         dup2(devnull, STDOUT_FILENO);
+         dup2(devnull, STDERR_FILENO);
+         close(devnull);
+      }
+      struct rlimit rl;
+      rl.rlim_cur = rl.rlim_max = KB_PDF_CHILD_CPU_SECS;
+      setrlimit(RLIMIT_CPU, &rl);
+      rl.rlim_cur = rl.rlim_max = KB_PDF_CHILD_AS_BYTES;
+      setrlimit(RLIMIT_AS, &rl);
+      rl.rlim_cur = rl.rlim_max = KB_PDF_CHILD_FSIZE_BYTES;
+      setrlimit(RLIMIT_FSIZE, &rl);
+      execlp("pdftoppm", "pdftoppm", "-png", "-r", "100", "-f", page_arg, "-l", page_arg,
+             "-singlefile", inpath, outbase, (char *)NULL);
+      _exit(127);
+   }
+
+   struct timespec start;
+   clock_gettime(CLOCK_MONOTONIC, &start);
+   int status = 0, timed_out = 0, reaped = 0;
+   for (;;)
+   {
+      pid_t w = waitpid(pid, &status, WNOHANG);
+      if (w == pid)
+      {
+         reaped = 1;
+         break;
+      }
+      if (w < 0 && errno != EINTR)
+      {
+         /* Unexpected waitpid error (not ECHILD/EINTR): make sure the child cannot linger as a
+          * zombie or a runaway — kill its group and do one best-effort blocking reap. */
+         if (errno != ECHILD)
+         {
+            kill(pid, SIGKILL);
+            kill(-pid, SIGKILL);
+            while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+               ;
+         }
+         break;
+      }
+      if (ms_since(&start) > timeout_ms)
+      {
+         kill(pid, SIGKILL);
+         kill(-pid, SIGKILL);
+         timed_out = 1;
+         /* blocking reap to avoid a zombie */
+         while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+            ;
+         break;
+      }
+      struct timespec ts = {0, 5 * 1000 * 1000};
+      nanosleep(&ts, NULL);
+   }
+
+   int rc = -1;
+   if (!timed_out && reaped && WIFEXITED(status) && WEXITSTATUS(status) == 0)
+   {
+      int rfd = open(outpng, O_RDONLY);
+      if (rfd < 0)
+      {
+         /* exit 0 but no file → the page does not exist (past the last page). */
+         rc = 1;
+      }
+      else
+      {
+         struct stat stt;
+         if (fstat(rfd, &stt) == 0 && stt.st_size > 0 &&
+             (unsigned long)stt.st_size <= KB_PDF_CHILD_FSIZE_BYTES)
+         {
+            size_t sz = (size_t)stt.st_size;
+            unsigned char *buf = malloc(sz);
+            if (buf)
+            {
+               size_t off = 0;
+               int ok = 1;
+               while (off < sz)
+               {
+                  ssize_t r = read(rfd, buf + off, sz - off);
+                  if (r < 0)
+                  {
+                     if (errno == EINTR)
+                        continue;
+                     ok = 0;
+                     break;
+                  }
+                  if (r == 0)
+                     break;
+                  off += (size_t)r;
+               }
+               if (ok && off == sz)
+               {
+                  *png_out = buf;
+                  *png_len = (int)sz;
+                  rc = 0;
+               }
+               else
+                  free(buf);
+            }
+         }
+         close(rfd);
+      }
+   }
+   else if (timed_out)
+      LOG_WARN("kb_doc_pdf", "pdftoppm timed out rendering page %d", page_no);
+   else
+      LOG_WARN("kb_doc_pdf", "pdftoppm failed for page %d (exit status %d)", page_no, status);
+   render_dir_cleanup(inpath, outpng, scratch);
+   return rc;
+}
+
+int kb_doc_pdf_render_assets(const char *project, const char *file_path,
+                             const char *sensitivity_class, const unsigned char *pdf_bytes, int n)
+{
+   if (!project || !*project || !file_path || !*file_path || !pdf_bytes || n <= 0)
+      return 0;
+   int created = 0;
+   for (int page = 1; page <= KB_PDF_RENDER_MAX_PAGES; page++)
+   {
+      unsigned char *png = NULL;
+      int png_len = 0;
+      int rc = kb_pdf_exec_render(pdf_bytes, n, page, &png, &png_len, 30000);
+      if (rc == 1)
+         break; /* no more pages */
+      if (rc != 0 || !png)
+      {
+         /* render error for this page (pdftoppm absent / decode failure): best-effort, skip. */
+         free(png);
+         if (page == 1)
+            break; /* binary absent or doc unrenderable → no assets at all */
+         continue;
+      }
+      /* Blob is written + fsync-durable BEFORE the row is inserted, so a crash can only leave a
+       * harmless orphan blob (reclaimed by reconciliation), never a row pointing at no blob. */
+      char sha[KB_DOC_HASH_HEX_LEN + 1] = "";
+      if (kb_blob_store_put(png, (size_t)png_len, sha, sizeof(sha)) == 0)
+      {
+         /* Full-page crop: bbox is the whole page [0,1]. kind='page'. */
+         if (db2_kb_doc_asset_insert(file_path, page, 0.0, 0.0, 1.0, 1.0, "page", "", "image/png",
+                                     sha, sensitivity_class) > 0)
+            created++;
+      }
+      free(png);
+   }
+   if (created)
+      LOG_INFO("kb_doc_pdf", "rendered %d page asset(s) for %s", created, file_path);
+   return created;
+}
+
+/* Phase D: OCR a scanned PDF (no extractable text layer). Renders each page to a PNG (the same
+ * hardened pdftoppm harness), sends it to the OCR sidecar, and builds a kb_pdf_doc_t from the
+ * returned text + per-line geometry — already normalized to [0,1] — so it flows through the
+ * EXACT same kb_doc_pdf_ingest path as native text (citations work identically). Returns the
+ * ingested chunk count (>0), 0 if no text was recognised on any page (caller falls back to
+ * asset-only), or -1 on a DB error. */
+int kb_doc_pdf_ingest_ocr(const char *project, const char *file_path, const char *file_hash,
+                          const char *sensitivity_class, const unsigned char *pdf_bytes, int n,
+                          const char *ocr_endpoint, kb_pdf_ingest_stats_t *stats)
+{
+   if (stats)
+      memset(stats, 0, sizeof(*stats));
+   if (!project || !*project || !file_path || !*file_path || !pdf_bytes || n <= 0 ||
+       !ocr_endpoint || !ocr_endpoint[0])
+      return 0;
+
+   kb_pdf_doc_t doc;
+   memset(&doc, 0, sizeof(doc));
+   doc.normalized = 1; /* OCR geometry is already [0,1] — do NOT re-normalize. */
+
+   for (int page = 1; page <= KB_PDF_RENDER_MAX_PAGES; page++)
+   {
+      unsigned char *png = NULL;
+      int png_len = 0;
+      int rc = kb_pdf_exec_render(pdf_bytes, n, page, &png, &png_len, 30000);
+      if (rc == 1)
+      {
+         free(png);
+         break; /* no more pages */
+      }
+      if (rc != 0 || !png)
+      {
+         free(png);
+         if (page == 1)
+            break; /* pdftoppm absent / unrenderable → nothing to OCR */
+         continue;
+      }
+      kb_ocr_line_t *lines = NULL;
+      int nlines = 0;
+      int orc = kb_ocr_recognize(ocr_endpoint, page, png, png_len, &lines, &nlines);
+      free(png);
+      if (orc <= 0 || nlines == 0)
+      {
+         kb_ocr_free_lines(lines, nlines); /* no text on this page (or sidecar gone) */
+         continue;
+      }
+      /* One doc-page per OCR'd page; each line carries the real page_no so citations + the
+       * page-boundary chunker resolve to the correct page. */
+      if (doc.n_pages >= doc.cap_pages)
+      {
+         int ncap = doc.cap_pages ? doc.cap_pages * 2 : 8;
+         kb_pdf_page_t *np = realloc(doc.pages, (size_t)ncap * sizeof(*np));
+         if (!np)
+         {
+            kb_ocr_free_lines(lines, nlines);
+            kb_pdf_free_doc(&doc);
+            return -1;
+         }
+         doc.pages = np;
+         doc.cap_pages = ncap;
+      }
+      kb_pdf_page_t *pg = &doc.pages[doc.n_pages++];
+      memset(pg, 0, sizeof(*pg));
+      pg->width = 1.0;
+      pg->height = 1.0;
+      for (int i = 0; i < nlines; i++)
+      {
+         char *txt = strdup(lines[i].text);
+         if (!txt)
+            continue;
+         if (page_add_line(pg, page, lines[i].x0, lines[i].y0, lines[i].x1, lines[i].y1, txt) != 0)
+            free(txt); /* OOM growing the page's line array — drop this line, keep going */
+      }
+      kb_ocr_free_lines(lines, nlines);
+   }
+
+   int rc = 0;
+   if (doc.n_pages > 0)
+      rc = kb_doc_pdf_ingest(project, file_path, file_hash, &doc, sensitivity_class, stats);
+   if (rc > 0)
+      LOG_INFO("kb_doc_pdf", "OCR ingested %d page(s) for %s", doc.n_pages, file_path);
+   kb_pdf_free_doc(&doc);
+   return rc;
+}
+
+/* Phase B: run the TSR sidecar over one chunk's (page's) regions and persist any recognised
+ * cells, linking each cell to its source kb_doc_regions row via line_index (falling back to
+ * the page's first region so every cell carries provenance). Best-effort: a sidecar failure
+ * returns 0 and never aborts the ingest — the page stays text-only. Returns 1 if a table was
+ * recognised + cells stored, else 0. */
+static int kb_pdf_tsr_chunk(const char *file_path, const kb_pdf_chunk_t *c,
+                            const int64_t *region_ids, int n_region_ids, const char *endpoint,
+                            const char *sensitivity_class)
+{
+   if (!endpoint || !endpoint[0] || c->n_lines <= 0 || n_region_ids <= 0)
+      return 0;
+   int page_no = c->lines[0] ? c->lines[0]->page_no : c->page_start;
+
+   cJSON *regions = cJSON_CreateArray();
+   if (!regions)
+      return 0;
+   for (int j = 0; j < c->n_lines; j++)
+   {
+      const kb_pdf_line_t *ln = c->lines[j];
+      cJSON *r = cJSON_CreateObject();
+      cJSON_AddStringToObject(r, "text", ln->text ? ln->text : "");
+      cJSON_AddNumberToObject(r, "x0", ln->x0);
+      cJSON_AddNumberToObject(r, "y0", ln->y0);
+      cJSON_AddNumberToObject(r, "x1", ln->x1);
+      cJSON_AddNumberToObject(r, "y1", ln->y1);
+      cJSON_AddNumberToObject(r, "line_index", j);
+      cJSON_AddItemToArray(regions, r);
+   }
+   char *page_json = cJSON_PrintUnformatted(regions);
+   cJSON_Delete(regions);
+   if (!page_json)
+      return 0;
+
+   kb_tsr_cell_t *cells = NULL;
+   int n_cells = 0;
+   int rc = kb_tsr_recognize(endpoint, page_no, page_json, &cells, &n_cells);
+   free(page_json);
+   if (rc <= 0)
+   {
+      kb_tsr_free_cells(cells, n_cells);
+      return 0;
+   }
+   for (int k = 0; k < n_cells; k++)
+   {
+      int li = cells[k].line_index;
+      int64_t rid;
+      if (li < 0)
+         rid = region_ids[0]; /* sidecar gave no source line → honest page-level provenance */
+      else if (li < n_region_ids)
+         rid = region_ids[li]; /* mapped to the exact source line */
+      else
+         continue; /* out-of-range line_index from an untrusted sidecar → skip, not false-attribute
+                    */
+      if (rid <= 0)
+         continue;
+      if (db2_kb_table_cell_insert(rid, file_path, page_no, cells[k].row, cells[k].col,
+                                   cells[k].text, cells[k].subject, cells[k].relation,
+                                   cells[k].object, cells[k].confidence, sensitivity_class) < 0)
+         LOG_WARN("kb_tsr", "table cell insert failed (%s p%d r%d c%d)", file_path, page_no,
+                  cells[k].row, cells[k].col);
+   }
+   kb_tsr_free_cells(cells, n_cells);
+   return 1;
+}
+
 int kb_doc_pdf_ingest(const char *project, const char *file_path, const char *file_hash,
                       const kb_pdf_doc_t *doc, const char *sensitivity_class,
                       kb_pdf_ingest_stats_t *stats)
@@ -731,6 +1120,27 @@ int kb_doc_pdf_ingest(const char *project, const char *file_path, const char *fi
    if (!kb_pdf_sensitivity_valid(sensitivity_class))
       return -1;
    const char *quarantine = strcmp(sensitivity_class, "restricted") == 0 ? "pending" : "";
+
+   /* Phase A1: when the PDF-vector capability is on, enqueue an embed_pdf job per
+    * chunk so it lands in the isolated kb_pdf_embeddings relation. We do NOT embed
+    * quarantined-pending (restricted) docs — they are withheld until an owner
+    * confirms, at which point the confirm path enqueues their embed_pdf jobs. */
+   config_t pdf_cfg;
+   int cfg_ok = (config_load(&pdf_cfg) == 0);
+   int vector_enabled = cfg_ok && pdf_cfg.kb_pdf_vector_enabled;
+   int embed_pdf_vec = vector_enabled && quarantine[0] == '\0';
+
+   /* Phase B: resolve the TSR sidecar endpoint when the capability is on. Unlike embed_pdf,
+    * TSR runs even for a withheld (pending/restricted) doc: its cells are gated at READ time
+    * by lookup_table's join to kb_documents.quarantine_state, so they stay invisible until an
+    * owner confirms — at which point they (and tsr_status='ran') become visible with no
+    * re-ingest needed. The TSR HTTP call + cell inserts run AFTER the ingest txn commits, so
+    * a slow/failing sidecar never holds the txn open or poisons it (best-effort, the page
+    * stays text-only on failure). tsr_attempted drives the per-document tsr_state marker
+    * (ran | no_table | '' when off/absent). */
+   const char *tsr_ep = (cfg_ok && pdf_cfg.kb_pdf_tsr_enabled) ? kb_tsr_endpoint(&pdf_cfg) : "";
+   int tsr_attempted = (tsr_ep[0] != '\0');
+   int tsr_found_table = 0;
 
    kb_pdf_chunk_t *chunks = NULL;
    int n_chunks = 0;
@@ -746,6 +1156,24 @@ int kb_doc_pdf_ingest(const char *project, const char *file_path, const char *fi
       return 0;
    }
 
+   /* Per-chunk source-region ids, retained across commit so the post-commit TSR pass can link
+    * cells back to their kb_doc_regions rows without re-querying. */
+   int64_t **chunk_rids = NULL;
+   int *chunk_nrids = NULL;
+   if (tsr_attempted)
+   {
+      chunk_rids = calloc((size_t)n_chunks, sizeof(*chunk_rids));
+      chunk_nrids = calloc((size_t)n_chunks, sizeof(*chunk_nrids));
+      if (!chunk_rids || !chunk_nrids)
+      {
+         free(chunk_rids);
+         free(chunk_nrids);
+         chunk_rids = NULL;
+         chunk_nrids = NULL;
+         tsr_attempted = 0; /* OOM on the retention arrays → degrade to text-only */
+      }
+   }
+
    /* The whole re-ingest is one transaction: the delete (regions cascade via the
     * kb_doc_regions FK ON DELETE CASCADE), every chunk + region insert, the neighbour
     * links, and the embed enqueues are all-or-nothing — a mid-loop failure rolls back so
@@ -758,6 +1186,13 @@ int kb_doc_pdf_ingest(const char *project, const char *file_path, const char *fi
       return -1;
    }
 
+   /* Phase C: a re-ingest drops this document's prior visual asset rows too (they are NOT a
+    * relational cascade off kb_documents — document_key is logical). Done BEFORE the
+    * kb_documents delete because the asset-scope check joins on the still-present kb_documents
+    * file_path. The now-unreferenced blobs are reclaimed by the periodic reconciliation sweep,
+    * so a shared/deduped blob survives until its last referrer is gone. New crops are rendered +
+    * inserted by the upload route after this. */
+   (void)db2_kb_doc_assets_delete_for_doc(project, file_path);
    db2_kb_documents_delete_for_file(project, file_path); /* void; covered by the txn */
 
    int n_regions = 0;
@@ -774,25 +1209,72 @@ int kb_doc_pdf_ingest(const char *project, const char *file_path, const char *fi
          goto fail;
       db2_kb_documents_link_neighbours(id, prev_id); /* void; covered by the txn */
 
+      int64_t region_ids[KB_PDF_MAX_CHUNK_LINES];
+      int n_region_ids = 0;
       for (int j = 0; j < c->n_lines; j++)
       {
          const kb_pdf_line_t *ln = c->lines[j];
-         if (db2_kb_doc_regions_insert(id, file_path, ln->page_no, ln->x0, ln->y0, ln->x1, ln->y1,
-                                       ln->text ? ln->text : "", j, "text", sensitivity_class) <= 0)
+         int64_t rid =
+             db2_kb_doc_regions_insert(id, file_path, ln->page_no, ln->x0, ln->y0, ln->x1, ln->y1,
+                                       ln->text ? ln->text : "", j, "text", sensitivity_class);
+         if (rid <= 0)
             goto fail;
+         if (j < KB_PDF_MAX_CHUNK_LINES)
+            region_ids[n_region_ids++] = rid;
          n_regions++;
       }
 
-      /* PDF chunks are NOT embedded: Phase 2 retrieval (search_chunks) is lexical over the
-       * chunk content, and leaving PDFs out of the vector index keeps them out of the
-       * vector-only /v1/search by construction. (Vector retrieval for PDFs is a follow-up;
-       * when it lands, the kb_fetch_doc_row doc_kind exclusion already keeps embedded PDFs
-       * out of general search.) */
+      /* Phase B: retain this page's region ids for the post-commit TSR pass (the TSR HTTP call
+       * is deliberately NOT made inside this transaction). */
+      if (tsr_attempted && chunk_rids)
+      {
+         chunk_rids[i] = malloc((size_t)n_region_ids * sizeof(int64_t));
+         if (chunk_rids[i])
+         {
+            memcpy(chunk_rids[i], region_ids, (size_t)n_region_ids * sizeof(int64_t));
+            chunk_nrids[i] = n_region_ids;
+         }
+      }
+
+      /* Phase A1: enqueue the embed into the ISOLATED kb_pdf_embeddings relation
+       * (kind='embed_pdf'), inside this same ingest transaction. Because the job
+       * row only becomes visible to the drainer at commit — by which point this
+       * chunk's kb_doc_regions are committed too — a vector-retrievable PDF chunk
+       * always has its citations (the §A2 LEFT JOIN is the backstop if that ever
+       * races). When the capability is off the chunk stays lexical-only, exactly
+       * as Phase 2 behaved, and is invisible to the vector-only /v1/search by
+       * construction (PDF vectors never enter kb_embeddings). */
+      if (embed_pdf_vec && db2_kb_async_enqueue("embed_pdf", id, project) != 0)
+         LOG_WARN("kb_pdf", "ingest: embed_pdf enqueue failed for chunk %lld (%s)", (long long)id,
+                  file_path); /* best-effort; the chunk stays lexical-only + cited */
       prev_id = id;
    }
 
    if (db2_kb_txn_commit() != 0)
       goto fail;
+
+   /* Phase B: TSR runs HERE — after the text/regions are durably committed — so the sidecar
+    * HTTP call never holds the ingest txn open, and a per-cell insert failure cannot roll back
+    * the document's text (cells are best-effort derived data; a crash before this leaves the
+    * doc text-indexed and re-ingest re-derives the cells). Each cell insert is its own
+    * autocommit statement, so a sidecar/SQL error here never poisons a transaction. */
+   if (tsr_attempted && chunk_rids)
+   {
+      for (int i = 0; i < n_chunks; i++)
+      {
+         if (chunk_rids[i] && kb_pdf_tsr_chunk(file_path, &chunks[i], chunk_rids[i], chunk_nrids[i],
+                                               tsr_ep, sensitivity_class))
+            tsr_found_table = 1;
+      }
+      /* Record the per-document TSR outcome so lookup_table can report tsr_status
+       * (ran | no_table); left '' when the capability is off/absent → 'unavailable'. */
+      db2_kb_documents_set_tsr_state(project, file_path, tsr_found_table ? "ran" : "no_table");
+   }
+   if (chunk_rids)
+      for (int i = 0; i < n_chunks; i++)
+         free(chunk_rids[i]);
+   free(chunk_rids);
+   free(chunk_nrids);
 
    if (stats)
    {
@@ -804,6 +1286,11 @@ int kb_doc_pdf_ingest(const char *project, const char *file_path, const char *fi
 
 fail:
    db2_kb_txn_rollback();
+   if (chunk_rids)
+      for (int i = 0; i < n_chunks; i++)
+         free(chunk_rids[i]);
+   free(chunk_rids);
+   free(chunk_nrids);
    kb_pdf_free_chunks(chunks, n_chunks);
    return -1;
 }

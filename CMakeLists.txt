@@ -437,6 +437,14 @@ set(DB2_SRCS
     ${AIMEE_SRC_DIR}/db2/corpus_jobs.c
     ${AIMEE_SRC_DIR}/db2/curator_terms.c
     ${AIMEE_SRC_DIR}/db2/curator_gaps.c
+    ${AIMEE_SRC_DIR}/db2/cross_repo_resolver.c
+    ${AIMEE_SRC_DIR}/db2/cross_repo_classify.c
+    ${AIMEE_SRC_DIR}/db2/cross_repo_stats.c
+    ${AIMEE_SRC_DIR}/db2/cross_repo_deps.c
+    ${AIMEE_SRC_DIR}/db2/cross_repo_review.c
+    ${AIMEE_SRC_DIR}/db2/cross_repo_identity.c
+    ${AIMEE_SRC_DIR}/db2/cross_repo_route.c
+    ${AIMEE_SRC_DIR}/db2/cross_repo_build.c
     ${AIMEE_SRC_DIR}/db2/mining.c
     ${AIMEE_SRC_DIR}/db2/calibration.c
     ${AIMEE_SRC_DIR}/db2/demotion.c
@@ -501,6 +509,9 @@ set(CORE_SRCS
     ${AIMEE_SRC_DIR}/plugin_loader.c
     ${AIMEE_SRC_DIR}/memory_provider.c
     ${AIMEE_SRC_DIR}/harness_memory_common.c
+    ${AIMEE_SRC_DIR}/harness_memory_scope.c
+    ${AIMEE_SRC_DIR}/harness_memory_audit.c
+    ${AIMEE_SRC_DIR}/harness_memory_spill.c
     ${AIMEE_SRC_DIR}/plugin_c_hook.c
     ${AIMEE_SRC_DIR}/config_plugin.c
     ${AIMEE_SRC_DIR}/code_collect.c
@@ -712,6 +723,7 @@ set(CMD_SRCS
     ${AIMEE_SRC_DIR}/cmd_diagnose.c
     ${AIMEE_SRC_DIR}/cmd_hooks.c
     ${AIMEE_SRC_DIR}/cmd_hooks_scope.c
+    ${AIMEE_SRC_DIR}/memory_redirect.c
     ${AIMEE_SRC_DIR}/cmd_agent.c
     ${AIMEE_SRC_DIR}/cmd_agent_setup.c
     ${AIMEE_SRC_DIR}/cmd_agent_trace.c
@@ -760,6 +772,16 @@ set(CLI_SRCS
     ${AIMEE_SRC_DIR}/cli_main.c
     ${AIMEE_SRC_DIR}/cli_agent_setup.c
     ${AIMEE_SRC_DIR}/cli_session_start.c
+    ${AIMEE_SRC_DIR}/harness_memory_hydrate.c
+    ${AIMEE_SRC_DIR}/harness_memory_watch.c
+    # hydrate calls hmem_resolve_project/_scope_for_client/_spill_dir/_audit; the
+    # standalone `aimee` CLI does not link aimee-core, so their definers must build
+    # into the CLI directly (the make build links them via L_CLIENT). Without these
+    # the macOS/Windows CMake link fails with undefined hmem_* symbols.
+    ${AIMEE_SRC_DIR}/harness_memory_common.c
+    ${AIMEE_SRC_DIR}/harness_memory_scope.c
+    ${AIMEE_SRC_DIR}/harness_memory_audit.c
+    ${AIMEE_SRC_DIR}/harness_memory_spill.c
     ${AIMEE_SRC_DIR}/cli_attention_guard.c
     ${AIMEE_SRC_DIR}/cli_code_audit.c
     ${AIMEE_SRC_DIR}/cli_css.c
@@ -807,6 +829,7 @@ set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/server/vault_capability.c
     ${AIMEE_SRC_DIR}/server/server_vault.c
     ${AIMEE_SRC_DIR}/server/server_state.c
+    ${AIMEE_SRC_DIR}/server/server_state_index.c
     ${AIMEE_SRC_DIR}/server/harness_memory_routes.c
     ${AIMEE_SRC_DIR}/server/server_plugin.c
     ${AIMEE_SRC_DIR}/server/server_work.c
@@ -1380,6 +1403,10 @@ add_executable(aimee-server
     ${SERVER_CORE_SRCS}
     ${DB1_SRCS}
     ${GIT_SRCS}
+    # server.c's hooks.pre handler intercepts agent memory writes via the
+    # transport-free helpers in memory_redirect.c (classify/bash/rematerialize);
+    # it lives in CMD_SRCS, which the server does not otherwise link.
+    ${AIMEE_SRC_DIR}/memory_redirect.c
 )
 add_dependencies(aimee-server agent_help_header tool_prompts_header schema_data_header)
 target_include_directories(aimee-server PRIVATE

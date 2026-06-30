@@ -110,6 +110,8 @@ OPENAPI_EXTRA_ENDPOINTS = {
     "DELETE /v1/docs/{id}",
     "GET /v1/code/callers",
     "GET /v1/code/project-stats",
+    "GET /v1/code/cross-repo-deps",
+    "POST /v1/code/repo-trust",
     "GET /v1/code/projects",
     "GET /v1/code/search",
     "GET /v1/intelligence/bandit/export",

@@ -2,15 +2,52 @@
 #include <stdio.h>
 #include <string.h>
 #include "aimee.h"
+#include "extractors_extra.h" /* c_def_ctx_t, for_each_line, c_macro_def_line */
 
 /* Declared in index.h */
 int extract_imports(const char *ext, const char *content, char **out, int max);
+int extract_imports_sys(const char *ext, const char *content, char **out, int *sys, int max);
 int extract_exports(const char *ext, const char *content, char **out, int max);
 int extract_definitions(const char *ext, const char *content, definition_t *out, int max);
 
 int main(void)
 {
    printf("extractors_extra: ");
+
+   /* --- C/C++ includes: H6 captures quoted (is_system=0) + real-lib angle (=1);
+    * stdlib/system angle (<stdio.h>) is dropped at extraction. --- */
+   {
+      const char *c = "#include \"local.h\"\n"
+                      "#include <Limelight.h>\n"
+                      "#include <stdio.h>\n";
+      char *imports[16];
+      int sys[16];
+      int count = extract_imports_sys(".c", c, imports, sys, 16);
+      int q = 0, a = 0, sysdrop = 1;
+      for (int i = 0; i < count; i++)
+      {
+         if (strcmp(imports[i], "local.h") == 0)
+         {
+            q++;
+            assert(sys[i] == 0); /* quoted */
+         }
+         if (strcmp(imports[i], "Limelight.h") == 0)
+         {
+            a++;
+            assert(sys[i] == 1); /* angle, real lib */
+         }
+         if (strcmp(imports[i], "stdio.h") == 0)
+            sysdrop = 0; /* must NOT appear */
+         free(imports[i]);
+      }
+      assert(q == 1 && a == 1 && sysdrop); /* local.h + Limelight.h; stdio.h dropped */
+      /* the non-sys wrapper still works (flags simply not reported) */
+      char *imp2[16];
+      int c2 = extract_imports(".c", c, imp2, 16);
+      assert(c2 == count);
+      for (int i = 0; i < c2; i++)
+         free(imp2[i]);
+   }
 
    /* --- JavaScript imports --- */
    {
@@ -316,6 +353,35 @@ int main(void)
       char *imports[4];
       int count = extract_imports(".xyz", "some content", imports, 4);
       assert(count == 0);
+   }
+
+   /* c_macro_def_line: the macro-only scan that preserves #define macros when the
+    * tree-sitter front-end (which emits none) handles a C/C++ file. It must emit
+    * ONLY macros (def_kind='macro'), be comment-aware (block + line), and ignore
+    * functions/types. */
+   {
+      definition_t defs[16];
+      c_def_ctx_t ctx = {defs, 0, 16, 0};
+      const char *src = "#define FOO 1\n"
+                        "/* #define INCMT 9 */\n"
+                        "// #define LINECMT 8\n"
+                        "int realfn(void) { return 0; }\n"
+                        "#define BAR(x) ((x) + 1)\n";
+      for_each_line(src, c_macro_def_line, &ctx);
+      int foo = 0, bar = 0, other = 0;
+      for (int i = 0; i < ctx.count; i++)
+      {
+         if (!strcmp(defs[i].name, "FOO") && !strcmp(defs[i].kind, "macro"))
+            foo = 1;
+         else if (!strcmp(defs[i].name, "BAR") && !strcmp(defs[i].kind, "macro"))
+            bar = 1;
+         else
+            other = 1;
+      }
+      assert(foo && bar);     /* both real #defines captured */
+      assert(ctx.count == 2); /* ONLY them — comment-wrapped #defines + the function excluded */
+      assert(!other);
+      printf("  c_macro_def_line: macros only, comment-aware: ok\n");
    }
 
    printf("all tests passed\n");

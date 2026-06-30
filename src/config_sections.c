@@ -666,8 +666,73 @@ void config_parse_compact_section(config_t *cfg, cJSON *root)
             cfg->compact_per_tool_count++;
          }
       }
+
+      /* Coordinate Closet (fold §2), nested under "compact". Default-off. */
+      cJSON *closet = cJSON_GetObjectItemCaseSensitive(cmpct, "coord_closet");
+      if (cJSON_IsObject(closet))
+      {
+         item = cJSON_GetObjectItemCaseSensitive(closet, "enabled");
+         if (cJSON_IsBool(item))
+            cfg->coord_closet_enabled = cJSON_IsTrue(item) ? 1 : 0;
+
+         item = cJSON_GetObjectItemCaseSensitive(closet, "budget_bytes");
+         if (cJSON_IsNumber(item) && item->valuedouble > 0)
+            cfg->coord_closet_budget_bytes = (int)item->valuedouble;
+
+         item = cJSON_GetObjectItemCaseSensitive(closet, "max_ratio_pct");
+         if (cJSON_IsNumber(item) && item->valuedouble > 0)
+            cfg->coord_closet_max_ratio_pct = (int)item->valuedouble;
+
+         item = cJSON_GetObjectItemCaseSensitive(closet, "denylist");
+         if (cJSON_IsString(item) && item->valuestring)
+            snprintf(cfg->coord_closet_denylist, sizeof(cfg->coord_closet_denylist), "%s",
+                     item->valuestring);
+      }
    }
 }
+
+void config_parse_fold_section(config_t *cfg, cJSON *root)
+{
+   cJSON *fold = cJSON_GetObjectItemCaseSensitive(root, "fold");
+   if (!cJSON_IsObject(fold))
+      return;
+   cJSON *item = cJSON_GetObjectItemCaseSensitive(fold, "enabled");
+   if (cJSON_IsBool(item))
+      cfg->fold_enabled = cJSON_IsTrue(item) ? 1 : 0;
+   item = cJSON_GetObjectItemCaseSensitive(fold, "retained_msgs");
+   if (cJSON_IsNumber(item) && item->valuedouble > 0)
+      cfg->fold_retained_msgs = (int)item->valuedouble;
+   item = cJSON_GetObjectItemCaseSensitive(fold, "min_fold_msgs");
+   if (cJSON_IsNumber(item) && item->valuedouble > 0)
+      cfg->fold_min_fold_msgs = (int)item->valuedouble;
+   item = cJSON_GetObjectItemCaseSensitive(fold, "excerpt_bytes");
+   if (cJSON_IsNumber(item) && item->valuedouble > 0)
+      cfg->fold_excerpt_bytes = (int)item->valuedouble;
+   item = cJSON_GetObjectItemCaseSensitive(fold, "register_enabled");
+   if (cJSON_IsBool(item))
+      cfg->fold_register_enabled = cJSON_IsTrue(item) ? 1 : 0;
+   cJSON *freeze = cJSON_GetObjectItemCaseSensitive(fold, "freeze");
+   if (cJSON_IsObject(freeze))
+   {
+      item = cJSON_GetObjectItemCaseSensitive(freeze, "enabled");
+      if (cJSON_IsBool(item))
+         cfg->fold_freeze_enabled = cJSON_IsTrue(item) ? 1 : 0;
+      item = cJSON_GetObjectItemCaseSensitive(freeze, "tail_cap_msgs");
+      if (cJSON_IsNumber(item) && item->valuedouble > 0)
+         cfg->fold_freeze_tail_cap_msgs = (int)item->valuedouble;
+   }
+   cJSON *recall = cJSON_GetObjectItemCaseSensitive(fold, "recall");
+   if (cJSON_IsObject(recall))
+   {
+      item = cJSON_GetObjectItemCaseSensitive(recall, "enabled");
+      if (cJSON_IsBool(item))
+         cfg->fold_recall_enabled = cJSON_IsTrue(item) ? 1 : 0;
+      item = cJSON_GetObjectItemCaseSensitive(recall, "ttl_turns");
+      if (cJSON_IsNumber(item) && item->valuedouble > 0)
+         cfg->fold_recall_ttl_turns = (int)item->valuedouble;
+   }
+}
+
 void config_parse_sessions_section(config_t *cfg, cJSON *root)
 {
    cJSON *item = NULL;

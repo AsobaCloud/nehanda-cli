@@ -1,6 +1,7 @@
 /* extractors_extra.c: language extractors for C#, Shell, CSS, Dart, C/C++, Lua */
 #include "aimee.h"
 #include "extractors_extra.h"
+#include "c_system_headers.h"
 #include <ctype.h>
 
 /* --- C# --- */
@@ -367,17 +368,47 @@ void c_import_line(const char *line, int lineno, void *ctx)
 
    (void)lineno;
 
-   /* #include "local.h" (skip system <...> includes) */
+   /* Capture BOTH #include "local.h" (is_system=0) and #include <lib.h>
+    * (is_system=1). H6: angle includes are no longer dropped — a `<Foo.h>` is how
+    * an INSTALLED external lib is included, so dropping it lost real cross-repo
+    * deps (e.g. moonlight-qt -> moonlight-common-c via <Limelight.h>). The route
+    * builder keys on is_system to skip prefer-local for angle includes (angle does
+    * not resolve to the caller's own dir); system headers that match no repo file
+    * still produce no route. */
    if (strncmp(p, "#include", 8) != 0)
       return;
    p += 8;
    p = skip_ws(p);
-   if (*p != '"')
-      return;
 
    char buf[512];
-   if (extract_quoted(p, buf, sizeof(buf)))
-      ic->count = add_str(ic->out, ic->count, ic->max, buf);
+   int is_sys = 0;
+   if (*p == '"')
+   {
+      if (!extract_quoted(p, buf, sizeof(buf)))
+         return;
+   }
+   else if (*p == '<')
+   {
+      const char *e = strchr(p + 1, '>');
+      if (!e)
+         return;
+      size_t len = (size_t)(e - (p + 1));
+      if (len == 0 || len >= sizeof(buf))
+         return;
+      memcpy(buf, p + 1, len);
+      buf[len] = '\0';
+      is_sys = 1;
+      /* Drop C/C++ stdlib/system angle includes up front (never cross-repo). */
+      if (aimee_c_system_header_is(buf))
+         return;
+   }
+   else
+      return;
+
+   int before = ic->count;
+   ic->count = add_str(ic->out, ic->count, ic->max, buf);
+   if (ic->sys && ic->count > before)
+      ic->sys[before] = is_sys;
 }
 
 void c_export_line(const char *line, int lineno, void *ctx)
@@ -493,6 +524,36 @@ static void c_scan_env_vars(const char *line, int lineno, c_def_ctx_t *dc)
    }
 }
 
+/* Macro-only scan (see header): preserve `#define NAME` macros when tree-sitter
+ * handles a C/C++ file. Comment-aware so a #define inside a block/line comment is
+ * not captured — mirrors c_def_line's comment handling exactly. */
+void c_macro_def_line(const char *line, int lineno, void *ctx)
+{
+   c_def_ctx_t *dc = (c_def_ctx_t *)ctx;
+   const char *p = skip_ws(line);
+
+   if (dc->in_block_comment)
+   {
+      if (strstr(line, "*/"))
+         dc->in_block_comment = 0;
+      return;
+   }
+   if (strstr(p, "/*") && !strstr(p, "*/"))
+   {
+      dc->in_block_comment = 1;
+      return;
+   }
+   if (p[0] == '/' && p[1] == '/')
+      return;
+
+   if (strncmp(p, "#define ", 8) == 0)
+   {
+      char name[256];
+      if (extract_ident(p + 8, name, sizeof(name)))
+         dc->count = add_def(dc->out, dc->count, dc->max, name, "macro", lineno);
+   }
+}
+
 void c_def_line(const char *line, int lineno, void *ctx)
 {
    c_def_ctx_t *dc = (c_def_ctx_t *)ctx;
@@ -525,7 +586,8 @@ void c_def_line(const char *line, int lineno, void *ctx)
    {
       char name[256];
       if (extract_ident(p + 8, name, sizeof(name)))
-         dc->count = add_def(dc->out, dc->count, dc->max, name, "definition", lineno);
+         /* H0a: macro (SDK-prone, e.g. DEFINE_GUID) — ineligible HIGH definer (§5). */
+         dc->count = add_def(dc->out, dc->count, dc->max, name, "macro", lineno);
       return;
    }
 
@@ -533,8 +595,9 @@ void c_def_line(const char *line, int lineno, void *ctx)
    if (*p == '#')
       return;
 
-   /* struct/enum/union name */
+   /* struct/enum/union name (H0a: keep the keyword as the granular kind). */
    static const char *type_kw[] = {"struct ", "enum ", "union ", NULL};
+   static const char *type_kind[] = {"struct", "enum", "union", NULL};
    for (int i = 0; type_kw[i]; i++)
    {
       const char *kp = strstr(p, type_kw[i]);
@@ -543,7 +606,7 @@ void c_def_line(const char *line, int lineno, void *ctx)
          const char *np = kp + strlen(type_kw[i]);
          char name[256];
          if (extract_ident(np, name, sizeof(name)) && name[0] != '{')
-            dc->count = add_def(dc->out, dc->count, dc->max, name, "definition", lineno);
+            dc->count = add_def(dc->out, dc->count, dc->max, name, type_kind[i], lineno);
          return;
       }
    }
@@ -566,7 +629,8 @@ void c_def_line(const char *line, int lineno, void *ctx)
             char name[256];
             memcpy(name, start, nlen);
             name[nlen] = '\0';
-            dc->count = add_def(dc->out, dc->count, dc->max, name, "definition", lineno);
+            /* H0a: typedef (SDK-prone, e.g. EGLDisplay) — ineligible HIGH definer (§5). */
+            dc->count = add_def(dc->out, dc->count, dc->max, name, "typedef", lineno);
          }
       }
       return;
@@ -606,7 +670,8 @@ void c_def_line(const char *line, int lineno, void *ctx)
    {
       np += strlen(name);
       if (*np == '(')
-         dc->count = add_def(dc->out, dc->count, dc->max, name, "definition", lineno);
+         /* H0a: function — a real first-party API surface, eligible HIGH definer (§5). */
+         dc->count = add_def(dc->out, dc->count, dc->max, name, "function", lineno);
    }
 }
 

@@ -9,6 +9,7 @@
 #include "wfe_store.h"
 #include "wfe_approval.h"
 #include "wfe_autonomy.h"
+#include "wfe_blocks.h"
 #include "wfe_engine.h"
 #include "wfe_iface.h"
 #include "wfe_roundtable.h"
@@ -64,6 +65,16 @@ static const char *RT = "name: rta\n"
                         "    block: merge\n"
                         "    in:\n"
                         "      pr: pr.out\n";
+
+/* This stub-executor test does not link wfe_blocks.o (it uses register_stub); the
+ * autonomy driver's terminal cleanup calls wfe_worktree_cleanup, so provide a no-op
+ * (the real helper is exercised in test_wfe_delegate_seam over a git fixture). */
+int wfe_worktree_cleanup(const char *worktree, const char *repo_local)
+{
+   (void)worktree;
+   (void)repo_local;
+   return 0;
+}
 
 static void write_wf(const char *dir, const char *name, const char *body)
 {
@@ -161,6 +172,63 @@ int main(void)
       db1_work_item_t wi;
       assert(db1_work_item_get(id, &wi) == 1);
       assert(strcmp(wi.state, "rejected") == 0);
+   }
+
+   /* A6: autonomous merge-target rail (WP-5) — protected branches are refused;
+    * the configured base must be non-protected for pr.open/merge to proceed. */
+   {
+      assert(wfe_base_is_protected("main"));
+      assert(wfe_base_is_protected("master"));
+      assert(wfe_base_is_protected("Main"));   /* case-insensitive */
+      assert(wfe_base_is_protected("MASTER")); /* case-insensitive */
+      assert(wfe_base_is_protected("release-1.2"));
+      assert(wfe_base_is_protected("release/v2.0"));
+      assert(wfe_base_is_protected("")); /* empty -> protected (fail closed) */
+      assert(!wfe_base_is_protected("testing"));
+      assert(!wfe_base_is_protected("aimee/wi/abc"));
+      assert(!wfe_base_is_protected("release-notes-edit")); /* not the release train */
+      unsetenv("AIMEE_AUTONOMY_BASE");
+      assert(strcmp(wfe_autonomous_base(), "testing") == 0);
+      assert(wfe_autonomous_target_ok());
+      setenv("AIMEE_AUTONOMY_BASE", "main", 1); /* misconfig -> guard refuses */
+      assert(!wfe_autonomous_target_ok());
+      setenv("AIMEE_AUTONOMY_BASE", "dev", 1);
+      assert(wfe_autonomous_target_ok());
+      unsetenv("AIMEE_AUTONOMY_BASE");
+   }
+
+   /* A7: per-run turn cap (WP-5) — once the cumulative audit-event count reaches
+    * the cap, an autonomous run parks budget_exceeded BEFORE advancing further
+    * (so a runaway loop can't burn unbounded turns). */
+   {
+      char id[80] = "", err[256] = "";
+      assert(wfe_work_item_create("auto", "cap1", "cap1", "autonomous", id, err, sizeof err) == 0);
+      for (int k = 0; k < 5; k++)
+         db1_lifecycle_event_add(id, "draft", "test", "t", "pad", "", 0);
+      setenv("AIMEE_AUTONOMY_MAX_TURNS", "3", 1);
+      assert(wfe_autonomy_run(id, err, sizeof err) == 0);
+      unsetenv("AIMEE_AUTONOMY_MAX_TURNS");
+      db1_work_item_t wi;
+      assert(db1_work_item_get(id, &wi) == 1);
+      assert(strcmp(wi.state, "active") == 0);
+      assert(strcmp(wi.pause_reason, "budget_exceeded") == 0);
+   }
+
+   /* A8: server-side cost estimate (WP-5) — wall-clock seconds * rate; negative
+    * elapsed clamps to 0; the rate is env-overridable. */
+   {
+      unsetenv("AIMEE_AUTONOMY_USD_PER_SEC");
+      assert(wfe_autonomy_cost_estimate(0.0) == 0.0);
+      assert(wfe_autonomy_cost_estimate(-5.0) == 0.0); /* clamp */
+      double c = wfe_autonomy_cost_estimate(10.0);     /* 10s * 0.0005 = 0.005 */
+      assert(c > 0.0049 && c < 0.0051);
+      setenv("AIMEE_AUTONOMY_USD_PER_SEC", "0.01", 1);
+      c = wfe_autonomy_cost_estimate(10.0); /* 10s * 0.01 = 0.1 */
+      assert(c > 0.099 && c < 0.101);
+      setenv("AIMEE_AUTONOMY_USD_PER_SEC", "junk", 1); /* malformed -> default */
+      c = wfe_autonomy_cost_estimate(10.0);
+      assert(c > 0.0049 && c < 0.0051);
+      unsetenv("AIMEE_AUTONOMY_USD_PER_SEC");
    }
 
    printf("ok\n");

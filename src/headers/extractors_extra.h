@@ -13,6 +13,11 @@ typedef struct
    int count;
    int max;
    int is_ts;
+   /* H6: optional parallel flags array (NULL if not tracked). sys[i] = 1 when out[i]
+    * is a system / angle-bracket include (C/C++ `#include <...>`); 0 otherwise. Used
+    * so the route builder applies prefer-local only to quoted includes (angle
+    * includes do not resolve to the caller's own directory). */
+   int *sys;
 } import_ctx_t;
 
 typedef struct
@@ -80,6 +85,11 @@ void dart_def_line(const char *line, int lineno, void *ctx);
 void c_import_line(const char *line, int lineno, void *ctx);
 void c_export_line(const char *line, int lineno, void *ctx);
 void c_def_line(const char *line, int lineno, void *ctx);
+/* Macro-only C/C++ definition scan: emits ONLY `#define NAME` as def_kind="macro"
+ * (comment-aware, like c_def_line). Used to PRESERVE macros when the tree-sitter
+ * front-end — which does not emit preprocessor macros — handles a C/C++ file: the
+ * tree-sitter defs are appended-to by this pass (cpp-class-method-extraction §3). */
+void c_macro_def_line(const char *line, int lineno, void *ctx);
 
 /* Lua */
 void lua_import_line(const char *line, int lineno, void *ctx);

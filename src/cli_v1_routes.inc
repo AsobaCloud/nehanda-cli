@@ -169,6 +169,8 @@ static const struct
     {"index", "blast-radius", "index.blast_radius", NULL, NULL, 0},
     {"index", "structure", "index.structure", NULL, NULL, 0},
     {"index", "callers", "index.find_callers", NULL, NULL, 0},
+    {"index", "deps", "index.deps", NULL, NULL, 0},
+    {"repo", "trust", "repo.trust", NULL, NULL, 0},
     {"workspace", "add", "workspace.add", NULL, NULL, 300000},
     {"workspace", "list", "workspace.list", NULL, NULL, 0},
     {"workspace", "get", "workspace.get", NULL, NULL, 0},
@@ -693,6 +695,50 @@ static cJSON *marshal_index_find_callers(int argc, char **argv)
       cJSON_AddStringToObject(req, "symbol", argv[0]);
    if (argc > 1)
       cJSON_AddStringToObject(req, "project", argv[1]);
+   return req;
+}
+
+/* Marshal `aimee index deps <project> [--tier T] [--review]` (§B). --tier sets
+ * the minimum emitted tier (high|medium|tentative); --review lists the AMBIGUOUS
+ * queue (status=ambiguous). The kb canonical query is OUT-only today, so
+ * --reverse (direction=in) and --dry-run (per-stage offline inspection) are
+ * deferred to the slices that implement reverse traversal / candidate emission. */
+static cJSON *marshal_index_deps(int argc, char **argv)
+{
+   static const char *bools[] = {"review", NULL};
+   rpc_opts_t opts;
+   rpc_parse(argc, argv, bools, &opts);
+
+   cJSON *req = marshal_no_args("index.deps");
+   if (opts.pos_count > 0)
+      cJSON_AddStringToObject(req, "project", opts.positional[0]);
+   const char *tier = rpc_get(&opts, "tier");
+   if (tier)
+      cJSON_AddStringToObject(req, "min_tier", tier);
+   if (rpc_get(&opts, "review"))
+      cJSON_AddStringToObject(req, "status", "ambiguous");
+   return req;
+}
+
+/* Marshal `aimee repo trust <project> <trusted|untrusted> [--actor NAME]` (§0).
+ * actor defaults to $USER so the audit records who ran it (caller-asserted under
+ * the owner credential; single-tenant P1). The server validates the trust enum. */
+static cJSON *marshal_repo_trust(int argc, char **argv)
+{
+   static const char *bools[] = {NULL};
+   rpc_opts_t opts;
+   rpc_parse(argc, argv, bools, &opts);
+
+   cJSON *req = marshal_no_args("repo.trust");
+   if (opts.pos_count > 0)
+      cJSON_AddStringToObject(req, "project", opts.positional[0]);
+   if (opts.pos_count > 1)
+      cJSON_AddStringToObject(req, "trust", opts.positional[1]);
+   const char *actor = rpc_get(&opts, "actor");
+   if (!actor || !actor[0])
+      actor = getenv("USER");
+   if (actor && actor[0])
+      cJSON_AddStringToObject(req, "actor", actor);
    return req;
 }
 
@@ -3235,6 +3281,10 @@ static cJSON *marshal_request(const char *method, int argc, char **argv)
       return marshal_index_structure(argc, argv);
    if (strcmp(method, "index.find_callers") == 0)
       return marshal_index_find_callers(argc, argv);
+   if (strcmp(method, "index.deps") == 0)
+      return marshal_index_deps(argc, argv);
+   if (strcmp(method, "repo.trust") == 0)
+      return marshal_repo_trust(argc, argv);
    if (strcmp(method, "graph.sync_code") == 0)
       return marshal_graph_sync_code(argc, argv);
    if (strcmp(method, "graph.explain") == 0)
@@ -3459,6 +3509,21 @@ static int git_verify_text_is_failure(const char *text)
 {
    if (!text)
       return 0;
+   /* format=json structured verdict: a JSON payload whose verdict is not "passed"
+    * (i.e. failed or unavailable) is a failure for the CLI exit code, so a scripted
+    * `aimee git verify ... format=json` still exits nonzero. The autonomous driver
+    * reads the verdict field directly and does not rely on the exit code. Only the
+    * leading region is scanned (the top-level verdict is the 2nd key, after
+    * schema_version) so a `"verdict":"failed"` substring inside a step's log tail
+    * cannot spuriously flip the exit code. */
+   if (text[0] == '{')
+   {
+      char head[96];
+      snprintf(head, sizeof head, "%s", text);
+      if (strstr(head, "\"verdict\":\"failed\"") != NULL ||
+          strstr(head, "\"verdict\":\"unavailable\"") != NULL)
+         return 1;
+   }
    return strncmp(text, "FAIL:", 5) == 0 || strncmp(text, "error:", 6) == 0 ||
           strncmp(text, "verify busy:", 12) == 0 || strstr(text, ": FAIL (exit ") != NULL ||
           strstr(text, " step(s) failed -- verified with failures") != NULL;
@@ -4851,6 +4916,66 @@ static void print_index_callers(cJSON *resp)
    }
 }
 
+/* S6: `aimee index deps`. Two response shapes: the AMBIGUOUS review queue
+ * (--review / status=ambiguous) carries an `ambiguous` array + `overflow.dropped`;
+ * the default carries a `deps` edge array + `truncated`. */
+static void print_index_deps(cJSON *resp)
+{
+   cJSON *amb = cJSON_GetObjectItemCaseSensitive(resp, "ambiguous");
+   if (cJSON_IsArray(amb))
+   {
+      if (cJSON_GetArraySize(amb) == 0)
+         printf("No ambiguous candidates in the review queue.\n");
+      cJSON *a;
+      cJSON_ArrayForEach(a, amb)
+      {
+         cJSON *score = cJSON_GetObjectItemCaseSensitive(a, "evidence_score");
+         printf("  %s -> %s  [%s, score %.2f]  %s\n", json_str(a, "caller_repo"),
+                json_str(a, "candidate_definer"), json_str(a, "review_class"),
+                cJSON_IsNumber(score) ? score->valuedouble : 0.0, json_str(a, "symbol"));
+      }
+      cJSON *ov = cJSON_GetObjectItemCaseSensitive(resp, "overflow");
+      cJSON *dropped = ov ? cJSON_GetObjectItemCaseSensitive(ov, "dropped") : NULL;
+      if (cJSON_IsNumber(dropped) && dropped->valuedouble > 0)
+         printf("WARNING: %d ambiguous candidate(s) dropped from the review queue (overflow); "
+                "tune distinctiveness or widen review_queue_max.\n",
+                (int)dropped->valuedouble);
+      return;
+   }
+
+   cJSON *deps = cJSON_GetObjectItemCaseSensitive(resp, "deps");
+   if (!cJSON_IsArray(deps) || cJSON_GetArraySize(deps) == 0)
+   {
+      printf("No cross-repo dependencies found.\n");
+      return;
+   }
+   cJSON *d;
+   cJSON_ArrayForEach(d, deps)
+   {
+      cJSON *sc = cJSON_GetObjectItemCaseSensitive(d, "symbol_count");
+      cJSON *cc = cJSON_GetObjectItemCaseSensitive(d, "call_site_count");
+      cJSON *ex = cJSON_GetObjectItemCaseSensitive(d, "example");
+      const char *etype = json_str(d, "evidence_type");
+      const char *bkind = json_str(d, "build_kind");
+      char evtag[48] = "";
+      if (etype[0] && strcmp(etype, "symbol_resolved") != 0)
+         snprintf(evtag, sizeof(evtag), "  [%s%s%s]", etype, bkind[0] ? ":" : "", bkind);
+      printf("  %s -> %s  %-7s  (%d symbol(s), %d call site(s))%s\n", json_str(d, "caller_repo"),
+             json_str(d, "definer_repo"), json_str(d, "tier"),
+             cJSON_IsNumber(sc) ? (int)sc->valuedouble : 0,
+             cJSON_IsNumber(cc) ? (int)cc->valuedouble : 0, evtag);
+      if (ex && json_str(ex, "symbol")[0])
+      {
+         cJSON *line = cJSON_GetObjectItemCaseSensitive(ex, "line");
+         printf("      e.g. %s at %s:%d\n", json_str(ex, "symbol"), json_str(ex, "file"),
+                cJSON_IsNumber(line) ? (int)line->valuedouble : 0);
+      }
+   }
+   cJSON *trunc = cJSON_GetObjectItemCaseSensitive(resp, "truncated");
+   if (cJSON_IsBool(trunc) && cJSON_IsTrue(trunc))
+      printf("(results truncated; narrow the query)\n");
+}
+
 static void print_hud_status(cJSON *resp)
 {
    cJSON *mode = cJSON_GetObjectItemCaseSensitive(resp, "mode");
@@ -5441,6 +5566,22 @@ static void pt_print_index_structure(const char *method, cJSON *resp)
 static void pt_print_index_find_callers(const char *method, cJSON *resp)
 {
    print_index_callers(resp);
+}
+static void pt_print_index_deps(const char *method, cJSON *resp)
+{
+   print_index_deps(resp);
+}
+static void pt_print_repo_trust(const char *method, cJSON *resp)
+{
+   (void)method;
+   cJSON *changed = cJSON_GetObjectItemCaseSensitive(resp, "changed");
+   const char *prior = json_str(resp, "prior_trust");
+   const char *now = json_str(resp, "new_trust");
+   if (cJSON_IsBool(changed) && !cJSON_IsTrue(changed))
+      printf("repo %s: trust already %s (no change)\n", json_str(resp, "project"), now);
+   else
+      printf("repo %s: trust %s -> %s\n", json_str(resp, "project"), prior[0] ? prior : "(unset)",
+             now);
 }
 static void pt_print_graph_sync_code(const char *method, cJSON *resp)
 {
@@ -6469,6 +6610,8 @@ static const struct
     {"index.blast_radius", pt_print_index_blast_radius},
     {"index.structure", pt_print_index_structure},
     {"index.find_callers", pt_print_index_find_callers},
+    {"index.deps", pt_print_index_deps},
+    {"repo.trust", pt_print_repo_trust},
     {"graph.sync_code", pt_print_graph_sync_code},
     {"workspace.add", pt_print_workspace_add},
     {"workspace.list", pt_print_workspace_list},

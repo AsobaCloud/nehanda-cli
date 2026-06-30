@@ -99,4 +99,21 @@ wfe_step_result_t wfe_step_pending(wfe_pause_reason_t reason);
 wfe_step_result_t wfe_step_failed(void);
 wfe_step_result_t wfe_step_looped(void);
 
+/* ---- Autonomous merge-target rail (WP-5 safety) ----
+ * The single source of truth for the branch an autonomous run may target for a
+ * PR/merge. Autonomous merges only ever go to this branch (default "testing");
+ * promotion to a protected branch (main/master/release*) stays a human action.
+ * Overridable via AIMEE_AUTONOMY_BASE, but NEVER to a protected branch — the guard
+ * refuses and pr.open/merge fail closed, so a misconfiguration can't reach main.
+ * F4's live forge resolves its PR base + merge target through these. */
+const char *wfe_autonomous_base(void);
+int wfe_base_is_protected(const char *branch); /* 1 if main/master/release* (refused) */
+int wfe_autonomous_target_ok(void);            /* 1 if the configured base is mergeable */
+
+/* Authoritative server-side USD cost for a delegate turn of `elapsed_secs`
+ * wall-clock (rate AIMEE_AUTONOMY_USD_PER_SEC, default 0.0005). Provider-agnostic,
+ * so the per-run budget cap is enforced on a figure the provider can't understate.
+ * Negative elapsed -> 0. */
+double wfe_autonomy_cost_estimate(double elapsed_secs);
+
 #endif /* DEC_WFE_IFACE_H */
