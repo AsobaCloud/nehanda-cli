@@ -88,6 +88,11 @@ int main(void)
    assert(!strstr(msg, "onclick") && !strstr(msg, "DROP") && strstr(msg, "workflow gate"));
    wfe_enforce_user_message(WFE_ENFORCE_SOFT, NULL, NULL, msg, sizeof msg); /* no crash */
 
+   /* --- CAS advance guard --- */
+   assert(wfe_advance_cas_ok("implement", "implement") == 1); /* match -> advance */
+   assert(wfe_advance_cas_ok("understand", "implement") == 0); /* stale -> reject */
+   assert(wfe_advance_cas_ok(NULL, "implement") == -1 && wfe_advance_cas_ok("implement", "") == -1);
+
    printf("ok\n");
    return 0;
 }

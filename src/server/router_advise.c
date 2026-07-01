@@ -22,6 +22,7 @@
 #include "agent_exec.h"
 #include "agent_types.h"
 #include "interaction_events.h"
+#include "wfe_enforce.h"
 #include "wfe_router.h"
 
 /* ~1 in N DEFER turns get the LLM classifier telemetry call. */
@@ -113,6 +114,24 @@ void router_advise_turn(const char *session_id, const char *message)
    wfe_router_advisory_payload(&d, pf, 0 /* not sampled */, -1.0 /* classifier not run inline */,
                                payload, sizeof payload);
    ie_record(session_id, IE_GUARDRAIL_DECISION, "router-s1", payload, "advisory");
+
+   /* S2: if the enforcement dial is on AND the routed workflow is enforced, log
+    * the advisory enforce decision. The dial is env-gated and default-OFF (unset
+    * -> WFE_ENFORCE_OFF), so this is inert until an operator opts in. Binding +
+    * tool-strip build on this; here we prove the dial + enforced-detection fire
+    * on the live chat path. Never blocks the turn. */
+   wfe_enforce_stage_t estage = wfe_enforce_stage_parse(getenv("AIMEE_WORKFLOW_ENFORCE_STAGE"));
+   if (estage != WFE_ENFORCE_OFF)
+   {
+      const wfe_router_wf_t *w = wfe_router_find(&cat, d.workflow_id);
+      if (w && w->enforced)
+      {
+         char ep[256];
+         snprintf(ep, sizeof ep, "{\"workflow\":\"%s\",\"enforced\":1,\"stage\":\"%s\"}",
+                  d.workflow_id, wfe_enforce_stage_name(estage));
+         ie_record(session_id, IE_GUARDRAIL_DECISION, "enforce-s2", ep, "advisory");
+      }
+   }
 
    /* Sampled LLM classifier telemetry, off the turn path (detached thread). */
    if (pf == WFE_PREFILTER_DEFER &&
