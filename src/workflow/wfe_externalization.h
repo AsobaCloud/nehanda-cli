@@ -38,4 +38,14 @@ int wfe_is_externalization_tool(const char *tool_name);
  * when not delivered (fail closed). */
 int wfe_externalization_tool_permitted(const char *tool_name, int delivered);
 
+/* 1 if `tool_name` is a DELIVER PRIMITIVE -- an action that transitions a
+ * work-item's run state to delivered/accepted or makes its work visible/accepted
+ * outside the gated run (pr.open, pr.merge, accept, mark-done, deploy, publish,
+ * release, issue close). This is the CLOSED set the S2 gate.deliver enforcement
+ * refuses pre-delivery, and that the per-block tool-strip removes pre-gate -- one
+ * predicate, two enforcement points (consult Q3). It is a subset of the broader
+ * externalization denylist above (deliver primitives all externalize, but not
+ * every externalization is a delivery -- e.g. a bare `git push`). */
+int wfe_is_deliver_primitive(const char *tool_name);
+
 #endif /* DEC_WFE_EXTERNALIZATION_H */
