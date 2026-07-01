@@ -93,6 +93,7 @@ aimee_add_test(test_wfe_manager_blocks test_wfe_manager_blocks.c)
 aimee_add_test(test_wfe_manager_artifacts test_wfe_manager_artifacts.c)
 aimee_add_test(test_wfe_externalization test_wfe_externalization.c)
 aimee_add_test(test_wfe_deliver test_wfe_deliver.c)
+aimee_add_test(test_wfe_router test_wfe_router.c)
 aimee_add_test(test_shutdown_forensics test_shutdown_forensics.c)
 
 add_executable(test_toolset test_toolset.c)
