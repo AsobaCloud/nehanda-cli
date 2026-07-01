@@ -19,10 +19,12 @@
 #include "aimee_home.h"
 #include "cJSON.h"
 #include "util.h"
+#include "wfe_deliver.h" /* gate.deliver verdict-graph re-verify (Q4) */
 #include "wfe_def.h"
 #include "wfe_engine.h"
 #include "wfe_iface.h"
-#include "wfe_store.h" /* db1_work_item_set_worktree — persist the per-item worktree */
+#include "wfe_manager_artifacts.h" /* typed intent/packet/verdict schema validators */
+#include "wfe_store.h"             /* db1_work_item_set_worktree — persist the per-item worktree */
 
 /* Resolve the local working repo for a work item: $AIMEE_WORKFLOW_REPO or cwd. */
 static const char *repo_dir(void)
@@ -733,8 +735,213 @@ static wfe_step_result_t exec_custom(wfe_ctx *ctx, const wfe_node_t *node)
    return wfe_step_advanced(handle, "", 0.0); /* produces: none (sink) */
 }
 
+/* ---- primary-as-manager executors (understand / split / review / gate.deliver).
+ * understand/split drive a delegate to write a typed JSON artifact to a per-node
+ * worktree file, then the executor SCHEMA-VALIDATES it and hashes it as the
+ * produced content (a schema-invalid or missing artifact re-loops, with the
+ * validation-failure reason recorded to the append-only lifecycle log so a
+ * bounded loop's terminal failure has an audit trail). The engine captures the
+ * returned content_hash into engine-owned append-only state on advance, so
+ * downstream blocks trust the recorded hash, not the mutable file. ---- */
+
+/* per-node JSON artifact path at the worktree root (no mkdir needed). */
+static void manager_artifact_path(wfe_ctx *ctx, const wfe_node_t *node, char *buf, size_t n)
+{
+   char wd[1024];
+   resolve_workdir(ctx, wd, sizeof wd);
+   snprintf(buf, n, "%s/.wfe-%s.json", wd, node->id);
+}
+
+/* read + sha256 `path` into hash[65] (empty if absent), returning parsed cJSON
+ * (caller frees) or NULL. */
+static cJSON *manager_read_hash_json(const char *path, char *hash)
+{
+   hash[0] = '\0';
+   if (!path || !path[0])
+      return NULL;
+   FILE *f = fopen(path, "rb");
+   if (!f)
+      return NULL;
+   fseek(f, 0, SEEK_END);
+   long sz = ftell(f);
+   if (sz < 0)
+      sz = 0;
+   fseek(f, 0, SEEK_SET);
+   char *buf = malloc((size_t)sz + 1);
+   if (!buf)
+   {
+      fclose(f);
+      return NULL;
+   }
+   size_t rd = fread(buf, 1, (size_t)sz, f);
+   buf[rd] = '\0';
+   fclose(f);
+   wfe_sha256_hex(buf, rd, hash);
+   cJSON *j = cJSON_Parse(buf);
+   free(buf);
+   return j;
+}
+
+/* dispatch a delegate to author a typed artifact, then validate+hash it.
+ * `validate` is the schema validator; on missing/invalid the reason is logged
+ * and the step loops (bounded by the engine's per-stage attempt cap). */
+static wfe_step_result_t manager_produce(wfe_ctx *ctx, const wfe_node_t *node, const char *role,
+                                         const char *prompt,
+                                         int (*validate)(const cJSON *, char *, size_t))
+{
+   char wd[1024];
+   resolve_workdir(ctx, wd, sizeof wd);
+   char path[1200];
+   manager_artifact_path(ctx, node, path, sizeof path);
+   char commit[64] = "";
+   double cost = 0.0;
+   if (wfe_delegate_dispatch(wd, role, node_delegate(node), prompt, path, commit, &cost) < 0)
+      return with_cost(wfe_step_looped(), cost);
+   char hash[65] = "";
+   cJSON *j = manager_read_hash_json(path, hash);
+   char verr[200] = "";
+   int ok = j && validate(j, verr, sizeof verr) == 0;
+   if (j)
+      cJSON_Delete(j);
+   if (!ok)
+   {
+      db1_lifecycle_event_add(wfe_ctx_work_item(ctx), node->id, "loop", "engine",
+                              verr[0] ? verr : "artifact missing/invalid", "", cost);
+      return with_cost(wfe_step_looped(), cost);
+   }
+   char handle[80];
+   snprintf(handle, sizeof handle, "%s.out", node->id);
+   return wfe_step_advanced(handle, hash, cost);
+}
+
+static wfe_step_result_t exec_understand(wfe_ctx *ctx, const wfe_node_t *node)
+{
+   return manager_produce(
+       ctx, node, "architect",
+       "Scope this work item into a structured INTENT RECORD and write it as JSON to the given "
+       "path (nothing else): {\"schema_version\":1,\"status\":\"unconfirmed\",\"summary\":\"<one "
+       "line>\",\"rationale\":\"<why>\",\"acceptance_criteria\":[\"<testable>\"]}. Then commit it.",
+       wfe_intent_validate);
+}
+
+static wfe_step_result_t exec_split(wfe_ctx *ctx, const wfe_node_t *node)
+{
+   return manager_produce(
+       ctx, node, "architect",
+       "Decompose the approved intent into a structured PACKET PLAN and write it as JSON to the "
+       "given path (nothing else): {\"schema_version\":1,\"packets\":[{\"packet_id\":\"p1\","
+       "\"summary\":\"...\",\"target_blocks\":[\"implement\"],\"dependencies\":[],"
+       "\"acceptance_criteria\":[\"...\"]}]}. Then commit it.",
+       wfe_packets_validate);
+}
+
+/* review: a READ-ONLY reviewer delegate (persona from node params `reviewer`,
+ * validator-checked disjoint from the roundtable panel + producer) emits a typed
+ * verdict. pass -> ADVANCED (on_pass); changes -> LOOPED (on_fail, re-delegate).
+ * The re-delegate loop is bounded by the engine-owned per-stage attempt counter:
+ * on exhaustion the step FAILS (terminal), never silently loops. Tool-level
+ * read-only enforcement is the S2 tool-policy slice (documented residual). */
+static int review_max_iters(const wfe_node_t *node)
+{
+   const cJSON *m =
+       node->params ? cJSON_GetObjectItemCaseSensitive(node->params, "max_iters") : NULL;
+   return (m && cJSON_IsNumber(m) && m->valueint > 0) ? m->valueint : 3;
+}
+
+static wfe_step_result_t exec_review(wfe_ctx *ctx, const wfe_node_t *node)
+{
+   const char *wi = wfe_ctx_work_item(ctx);
+   if (wi && db1_stage_attempt_get(wi, node->id) >= review_max_iters(node))
+   {
+      db1_lifecycle_event_add(wi, node->id, "failed", "engine",
+                              "review re-delegation budget exhausted", "", 0.0);
+      return wfe_step_failed();
+   }
+   const cJSON *jrev =
+       node->params ? cJSON_GetObjectItemCaseSensitive(node->params, "reviewer") : NULL;
+   const char *reviewer =
+       (jrev && cJSON_IsString(jrev) && jrev->valuestring) ? jrev->valuestring : "";
+   char wd[1024];
+   resolve_workdir(ctx, wd, sizeof wd);
+   char path[1200];
+   manager_artifact_path(ctx, node, path, sizeof path);
+   char commit[64] = "";
+   double cost = 0.0;
+   if (wfe_delegate_dispatch(
+           wd, "reviewer", reviewer[0] ? reviewer : node_delegate(node),
+           "Review the delegate's frozen diff READ-ONLY (do NOT edit files). Emit a REVIEW VERDICT "
+           "as JSON to the given path (nothing else): {\"schema_version\":1,\"verdict\":\"pass\" "
+           "or "
+           "\"changes\",\"blocking_findings\":[{\"block_id\":\"...\",\"rule_id\":\"...\","
+           "\"expected\":\"...\",\"observed\":\"...\",\"suggested_fix\":\"...\"}],"
+           "\"non_blocking\":[]}. Use \"changes\" with >=1 blocking finding only if re-work is "
+           "required; otherwise \"pass\".",
+           path, commit, &cost) < 0)
+      return with_cost(wfe_step_looped(), cost);
+   char hash[65] = "";
+   cJSON *j = manager_read_hash_json(path, hash);
+   char verr[200] = "";
+   wfe_review_verdict_t v = WFE_REVIEW_CHANGES;
+   int ok = j && wfe_review_validate(j, verr, sizeof verr) == 0 && wfe_review_verdict(j, &v) == 0;
+   if (j)
+      cJSON_Delete(j);
+   if (!ok)
+   {
+      db1_lifecycle_event_add(wi, node->id, "loop", "engine",
+                              verr[0] ? verr : "review verdict missing/invalid", "", cost);
+      return with_cost(wfe_step_looped(), cost);
+   }
+   if (v == WFE_REVIEW_PASS)
+   {
+      char handle[80];
+      snprintf(handle, sizeof handle, "%s.out", node->id);
+      return wfe_step_advanced(handle, hash, cost);
+   }
+   return with_cost(wfe_step_looped(), cost); /* changes requested -> re-delegate */
+}
+
+/* gate.deliver: the terminal enforcement gate. Re-verify (Q4) that every
+ * delivery-gating gate has an engine-owned approving "advance" record before
+ * crossing; on any missing verdict FAIL (halt) -- never loop. Structural lookup
+ * over the append-only lifecycle log, no LLM judgement. */
+static int deliver_gate_advanced(const char *node_id, void *ctx)
+{
+   const char *wi = (const char *)ctx;
+   if (!wi)
+      return 0;
+   db1_lifecycle_event_t *ev = NULL;
+   int n = db1_lifecycle_event_list(wi, &ev);
+   int found = 0;
+   for (int i = 0; i < n && !found; i++)
+      if (strcmp(ev[i].stage, node_id) == 0 && strcmp(ev[i].kind, "advance") == 0)
+         found = 1;
+   free(ev);
+   return found;
+}
+
+static wfe_step_result_t exec_gate_deliver(wfe_ctx *ctx, const wfe_node_t *node)
+{
+   const char *wi = wfe_ctx_work_item(ctx);
+   const wfe_def_t *def = wfe_ctx_def(ctx);
+   char err[200] = "";
+   if (!def ||
+       wfe_deliver_reverify(def, node->id, deliver_gate_advanced, (void *)wi, err, sizeof err) != 0)
+   {
+      db1_lifecycle_event_add(wi, node->id, "failed", "engine",
+                              err[0] ? err : "delivery re-verification failed", "", 0.0);
+      return wfe_step_failed();
+   }
+   char handle[80];
+   snprintf(handle, sizeof handle, "%s.out", node->id);
+   return wfe_step_advanced(handle, "", 0.0); /* terminal: engine logs "terminal" */
+}
+
 void wfe_register_default_executors(void)
 {
+   wfe_register_block_executor(WFE_BLK_UNDERSTAND, exec_understand);
+   wfe_register_block_executor(WFE_BLK_SPLIT, exec_split);
+   wfe_register_block_executor(WFE_BLK_REVIEW, exec_review);
+   wfe_register_block_executor(WFE_BLK_GATE_DELIVER, exec_gate_deliver);
    wfe_register_block_executor(WFE_BLK_AUTHOR_PROPOSAL, exec_author);
    wfe_register_block_executor(WFE_BLK_AUTHOR_PLAN, exec_author);
    wfe_register_block_executor(WFE_BLK_IMPLEMENT, exec_implement);

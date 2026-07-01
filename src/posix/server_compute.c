@@ -3,7 +3,8 @@
 #include "agent_adapter.h"
 #include "agent_config.h"
 #include "agent_exec.h"
-#include "agent_tools.h" /* agent_tools_set_tool_event_cb — stream tool events */
+#include "agent_tools.h"   /* agent_tools_set_tool_event_cb — stream tool events */
+#include "router_advise.h" /* S1 advisory request->workflow router hook */
 #include "cli_codex.h"
 #include "cli_session.h" /* cli_session_set_stream_cb — incremental tmux CLI streaming */
 #include "config.h"
@@ -1115,6 +1116,13 @@ void chat_stream_worker(void *arg)
       compute_ctx_free(cctx);
       return;
    }
+
+   /* The S1/S2 request->workflow router now runs at the UNIFIED gateway seam
+    * (gw_stage_router, wired into the /v1/messages + /v1/chat/completions request
+    * pipelines), so it fires for the primary CLI AND every delegate. It was
+    * previously hooked HERE, but chat_stream_worker only serves the /v1/chat
+    * OpenAI-compat path -- the primary `aimee chat` CLI execs the provider CLI,
+    * which reaches the gateway, never this worker. See router_advise.c. */
 
    config_t cfg;
    config_load(&cfg);
