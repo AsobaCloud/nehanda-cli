@@ -71,6 +71,10 @@ typedef struct
  * catalog is invalid. */
 int wfe_router_catalog_validate(const wfe_router_catalog_t *cat, char *err, size_t errlen);
 
+/* 1 if `id` is a valid workflow id: non-empty, [A-Za-z0-9_-] only, and short
+ * enough to fit the id buffer (ids are logged as JSON + used as routing keys). */
+int wfe_router_id_valid(const char *id);
+
 /* Find a workflow by exact (case-sensitive) id, or NULL. */
 const wfe_router_wf_t *wfe_router_find(const wfe_router_catalog_t *cat, const char *id);
 /* The read-only default workflow (the safe fallback), or NULL if none. */

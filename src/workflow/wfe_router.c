@@ -77,6 +77,25 @@ static int is_blank(const char *s)
    return 1;
 }
 
+/* a valid workflow id: non-empty, [A-Za-z0-9_-] only, and short enough to fit
+ * the id buffer without truncation. Ids are interpolated into the advisory-log
+ * JSON and used as routing keys, so an unvalidated id (with a quote, control
+ * char, slash, ...) would be a JSON-injection / routing hazard. */
+int wfe_router_id_valid(const char *id)
+{
+   if (!id || !id[0])
+      return 0;
+   size_t l = 0;
+   for (const char *p = id; *p; p++, l++)
+   {
+      char c = *p;
+      if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+            c == '_' || c == '-'))
+         return 0;
+   }
+   return l < WFE_ROUTER_ID_LEN;
+}
+
 int wfe_router_catalog_validate(const wfe_router_catalog_t *cat, char *err, size_t errlen)
 {
    if (err && errlen)
@@ -90,9 +109,9 @@ int wfe_router_catalog_validate(const wfe_router_catalog_t *cat, char *err, size
    for (int i = 0; i < cat->n; i++)
    {
       const wfe_router_wf_t *w = &cat->wf[i];
-      if (!w->id[0])
+      if (!wfe_router_id_valid(w->id))
       {
-         snprintf(err, errlen, "catalog entry %d has empty id", i);
+         snprintf(err, errlen, "catalog entry %d has an invalid id (allowed: A-Za-z0-9_-)", i);
          return -1;
       }
       for (int j = i + 1; j < cat->n; j++)
@@ -235,6 +254,8 @@ wfe_prefilter_outcome_t wfe_router_prefilter(const char *msg, const wfe_router_c
 void wfe_router_decide(const char *msg, const wfe_router_catalog_t *cat,
                        const char *classifier_id, wfe_route_decision_t *out)
 {
+   if (!out)
+      return;
    memset(out, 0, sizeof *out);
    const wfe_router_wf_t *dflt = wfe_router_default(cat);
    const char *dflt_id = dflt ? dflt->id : "research";
@@ -282,6 +303,8 @@ static int id_char(char c)
 
 void wfe_router_classify_prompt(const wfe_router_catalog_t *cat, char *buf, size_t n)
 {
+   if (!buf || !n)
+      return;
    int off = snprintf(buf, n,
                       "You are a request router. Classify the user's request into EXACTLY ONE of "
                       "these workflow ids and reply with ONLY that id (no other text):\n");

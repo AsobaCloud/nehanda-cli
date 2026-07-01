@@ -45,14 +45,20 @@ int main(void)
    snprintf(link, sizeof link, "%s/sneaky.yaml", wf);
    (void)symlink(ext, link);
 
+   /* a workflow with an invalid (non-charset) name is skipped, not loaded. */
+   snprintf(p, sizeof p, "%s/weird.yaml", wf);
+   writef(p, "name: \"has space\"\nintent_tags:\n  - x\n");
+
    wfe_router_catalog_t cat;
    char err[256] = "";
    assert(wfe_router_catalog_load(&cat, err, sizeof err) == 0);
 
-   /* built-in converse + research + managed-change + audit = 4 (sneaky skipped) */
+   /* built-in converse + research + managed-change + audit = 4 (sneaky symlink +
+    * the invalid-name file both skipped) */
    assert(cat.n == 4);
    assert(wfe_router_find(&cat, "converse"));
    assert(wfe_router_find(&cat, "sneaky") == NULL); /* symlink escape blocked */
+   assert(wfe_router_find(&cat, "has space") == NULL); /* invalid id skipped */
 
    const wfe_router_wf_t *mc = wfe_router_find(&cat, "managed-change");
    assert(mc && mc->n_tags == 2 && strcmp(mc->tags[0], "feature") == 0);

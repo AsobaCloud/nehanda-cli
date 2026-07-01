@@ -5,10 +5,12 @@
 #include "wfe_router.h"
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "aimee_home.h"
 #include "cJSON.h"
@@ -44,33 +46,28 @@ static int ends_yaml(const char *n)
    return l > 5 && strcmp(n + l - 5, ".yaml") == 0;
 }
 
-static char *read_file(const char *path)
+/* Read an already-open fd (TOCTOU-safe: the caller open()s with O_NOFOLLOW and
+ * fstat()s the same fd, so no symlink/path swap can occur between the type check
+ * and the read). Returns a NUL-terminated buffer or NULL. */
+static char *read_fd(int fd, long sz)
 {
-   FILE *f = fopen(path, "rb");
-   if (!f)
-      return NULL;
-   fseek(f, 0, SEEK_END);
-   long sz = ftell(f);
    if (sz < 0 || sz > (4 << 20)) /* 4MB sanity cap */
-   {
-      fclose(f);
       return NULL;
-   }
-   fseek(f, 0, SEEK_SET);
    char *b = malloc((size_t)sz + 1);
    if (!b)
-   {
-      fclose(f);
       return NULL;
-   }
-   size_t rd = fread(b, 1, (size_t)sz, f);
-   b[rd] = '\0';
-   fclose(f);
+   long off = 0;
+   ssize_t rd;
+   while (off < sz && (rd = read(fd, b + off, (size_t)(sz - off))) > 0)
+      off += rd;
+   b[off] = '\0';
    return b;
 }
 
 int wfe_router_catalog_load(wfe_router_catalog_t *out, char *err, size_t errlen)
 {
+   if (!out)
+      return -1;
    if (err && errlen)
       err[0] = '\0';
    memset(out, 0, sizeof *out);
@@ -79,7 +76,9 @@ int wfe_router_catalog_load(wfe_router_catalog_t *out, char *err, size_t errlen)
    add_lane(out, "research", 1, 1);
 
    char dir[1024];
-   snprintf(dir, sizeof dir, "%s/workflows", aimee_home());
+   int dn = snprintf(dir, sizeof dir, "%s/workflows", aimee_home());
+   if (dn < 0 || (size_t)dn >= sizeof dir)
+      return wfe_router_catalog_validate(out, err, errlen); /* home path too long -> built-ins only */
    DIR *d = opendir(dir);
    if (d)
    {
@@ -89,13 +88,23 @@ int wfe_router_catalog_load(wfe_router_catalog_t *out, char *err, size_t errlen)
          if (!ends_yaml(e->d_name))
             continue;
          char path[2048];
-         snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
-         struct stat st;
-         /* lstat (not stat): skip symlinks + non-regular files so a symlink in
-          * the workflows dir cannot pull in a file from outside the trusted root. */
-         if (lstat(path, &st) != 0 || S_ISLNK(st.st_mode) || !S_ISREG(st.st_mode))
+         int pn = snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+         if (pn < 0 || (size_t)pn >= sizeof path)
+            continue; /* truncated path -> skip (don't operate on a wrong path) */
+         /* O_NOFOLLOW makes the open fail (ELOOP) on a symlink, so a symlink in
+          * the workflows dir cannot pull in a file from outside the trusted root;
+          * fstat on the returned fd is TOCTOU-safe (same file, no path re-lookup). */
+         int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+         if (fd < 0)
             continue;
-         char *buf = read_file(path);
+         struct stat st;
+         if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode))
+         {
+            close(fd);
+            continue;
+         }
+         char *buf = read_fd(fd, (long)st.st_size);
+         close(fd);
          if (!buf)
             continue;
          cJSON *root = yaml_parse(buf);
@@ -103,7 +112,10 @@ int wfe_router_catalog_load(wfe_router_catalog_t *out, char *err, size_t errlen)
          if (!root)
             continue;
          const char *name = obj_str(root, "name");
-         if (name && name[0] && !wfe_router_find(out, name) && out->n < WFE_ROUTER_MAX_WF)
+         /* validate the id charset+length (not just non-empty): a bad name is
+          * skipped, never truncated into a colliding/injection-prone id. */
+         if (name && wfe_router_id_valid(name) && !wfe_router_find(out, name) &&
+             out->n < WFE_ROUTER_MAX_WF)
          {
             if (obj_true(root, "default"))
             {
