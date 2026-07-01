@@ -215,3 +215,88 @@ oom:
    aimee_request_free(out);
    return -1;
 }
+
+/* canonical stop_reason -> OpenAI finish_reason */
+static const char *openai_finish(const aimee_response_t *r)
+{
+   switch (r->stop_reason)
+   {
+   case AIMEE_STOP_TOOL_USE:
+      return "tool_calls";
+   case AIMEE_STOP_MAX_TOKENS:
+      return "length";
+   case AIMEE_STOP_CONTENT_FILTER:
+      return "content_filter";
+   case AIMEE_STOP_END_TURN:
+   case AIMEE_STOP_STOP_SEQUENCE:
+      return "stop";
+   default:
+      return "stop";
+   }
+}
+
+cJSON *openai_frontend_render(const aimee_response_t *r)
+{
+   if (!r)
+      return NULL;
+   cJSON *out = cJSON_CreateObject();
+   cJSON_AddStringToObject(out, "id", r->id ? r->id : "");
+   cJSON_AddStringToObject(out, "object", "chat.completion");
+   if (r->model)
+      cJSON_AddStringToObject(out, "model", r->model);
+
+   cJSON *choices = cJSON_AddArrayToObject(out, "choices");
+   cJSON *choice = cJSON_CreateObject();
+   cJSON_AddItemToArray(choices, choice);
+   cJSON_AddNumberToObject(choice, "index", 0);
+   cJSON *msg = cJSON_AddObjectToObject(choice, "message");
+   cJSON_AddStringToObject(msg, "role", r->role ? r->role : "assistant");
+
+   /* content = concatenation of text blocks; tool_use blocks -> tool_calls[] */
+   size_t tlen = 0;
+   for (int i = 0; i < r->n_content; i++)
+      if (r->content[i].type == AIMEE_BLK_TEXT && r->content[i].text)
+         tlen += strlen(r->content[i].text);
+   char *text = calloc(tlen + 1, 1);
+   cJSON *tool_calls = NULL;
+   if (text)
+   {
+      for (int i = 0; i < r->n_content; i++)
+      {
+         const aimee_block_t *b = &r->content[i];
+         if (b->type == AIMEE_BLK_TEXT && b->text)
+            strcat(text, b->text);
+         else if (b->type == AIMEE_BLK_TOOL_USE)
+         {
+            if (!tool_calls)
+               tool_calls = cJSON_CreateArray();
+            cJSON *call = cJSON_CreateObject();
+            cJSON_AddStringToObject(call, "id", b->tool_id ? b->tool_id : "");
+            cJSON_AddStringToObject(call, "type", "function");
+            cJSON *fn = cJSON_AddObjectToObject(call, "function");
+            cJSON_AddStringToObject(fn, "name", b->tool_name ? b->tool_name : "");
+            /* arguments STRING: serialize the parsed tool_input (cross-protocol) */
+            char *args = b->tool_input ? cJSON_PrintUnformatted(b->tool_input) : NULL;
+            cJSON_AddStringToObject(fn, "arguments", args ? args : "{}");
+            free(args);
+            cJSON_AddItemToArray(tool_calls, call);
+         }
+      }
+   }
+   /* content is null when the assistant only emitted tool calls (OpenAI convention) */
+   if (text && text[0])
+      cJSON_AddStringToObject(msg, "content", text);
+   else
+      cJSON_AddNullToObject(msg, "content");
+   free(text);
+   if (tool_calls)
+      cJSON_AddItemToObject(msg, "tool_calls", tool_calls);
+
+   cJSON_AddStringToObject(choice, "finish_reason", openai_finish(r));
+
+   cJSON *usage = cJSON_AddObjectToObject(out, "usage");
+   cJSON_AddNumberToObject(usage, "prompt_tokens", (double)r->usage_in);
+   cJSON_AddNumberToObject(usage, "completion_tokens", (double)r->usage_out);
+   cJSON_AddNumberToObject(usage, "total_tokens", (double)(r->usage_in + r->usage_out));
+   return out;
+}
