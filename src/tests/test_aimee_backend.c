@@ -149,6 +149,58 @@ int main(void)
    aimee_response_free(&cresp);
    cJSON_Delete(crj);
 
+   /* --- (6) tool_result SPLIT (grouping ruling, Option A): an Anthropic tool
+    *         conversation -> IR -> OpenAI emits a role:tool message + Responses a
+    *         function_call_output, both carrying the tool_id VERBATIM. --- */
+   const char *CONVO =
+       "{\"model\":\"claude-3-5-sonnet\",\"max_tokens\":1024,\"messages\":["
+       "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"read foo.c\"}]},"
+       "{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{\"path\":\"foo.c\"}}]},"
+       "{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_1\",\"content\":\"file contents\"}]}]}";
+   aimee_request_t conv;
+   parse_anthropic(CONVO, &conv);
+   /* IR: the 3rd message is a user message with a single TOOL_RESULT block */
+   assert(conv.n_messages == 3);
+   assert(conv.messages[2].n_blocks == 1 &&
+          conv.messages[2].blocks[0].type == AIMEE_BLK_TOOL_RESULT &&
+          strcmp(conv.messages[2].blocks[0].tool_id, "toolu_1") == 0);
+
+   /* OpenAI backend: a role:"tool" message with tool_call_id=toolu_1 */
+   cJSON *ob = openai_backend_build(&conv);
+   cJSON *om = cJSON_GetObjectItem(ob, "messages");
+   int found_tool = 0;
+   for (int k = 0; k < cJSON_GetArraySize(om); k++)
+   {
+      cJSON *mm = cJSON_GetArrayItem(om, k);
+      cJSON *role = cJSON_GetObjectItem(mm, "role");
+      if (role && strcmp(role->valuestring, "tool") == 0)
+      {
+         assert(strcmp(cJSON_GetObjectItem(mm, "tool_call_id")->valuestring, "toolu_1") == 0);
+         assert(strcmp(cJSON_GetObjectItem(mm, "content")->valuestring, "file contents") == 0);
+         found_tool = 1;
+      }
+   }
+   assert(found_tool);
+   cJSON_Delete(ob);
+
+   /* Responses backend: a function_call_output item with call_id=toolu_1 */
+   cJSON *cb = responses_backend_build(&conv);
+   cJSON *ci = cJSON_GetObjectItem(cb, "input");
+   int found_fco = 0;
+   for (int k = 0; k < cJSON_GetArraySize(ci); k++)
+   {
+      cJSON *it = cJSON_GetArrayItem(ci, k);
+      cJSON *ty = cJSON_GetObjectItem(it, "type");
+      if (ty && strcmp(ty->valuestring, "function_call_output") == 0)
+      {
+         assert(strcmp(cJSON_GetObjectItem(it, "call_id")->valuestring, "toolu_1") == 0);
+         found_fco = 1;
+      }
+   }
+   assert(found_fco);
+   cJSON_Delete(cb);
+   aimee_request_free(&conv);
+
    printf("ok\n");
    return 0;
 }
