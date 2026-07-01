@@ -69,6 +69,35 @@ int main(void)
    cJSON_Delete(ajson);
    cJSON_Delete(ojson);
 
+   /* --- tool_use cross-protocol pair: Anthropic input OBJECT == OpenAI arguments
+    *     STRING (parsed). Same-semantic assistant turn -> identical IR. --- */
+   const char *ATOOL =
+       "{\"model\":\"claude-3-5-sonnet\",\"max_tokens\":1024,\"messages\":["
+       "{\"role\":\"assistant\",\"content\":["
+       "{\"type\":\"text\",\"text\":\"I'll read it\"},"
+       "{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{\"path\":\"foo.c\"}}]}]}";
+   const char *OTOOL =
+       "{\"model\":\"gpt-4o\",\"max_tokens\":1024,\"messages\":["
+       "{\"role\":\"assistant\",\"content\":\"I'll read it\",\"tool_calls\":["
+       "{\"id\":\"toolu_1\",\"type\":\"function\",\"function\":{\"name\":\"Read\","
+       "\"arguments\":\"{\\\"path\\\":\\\"foo.c\\\"}\"}}]}]}";
+   cJSON *at = cJSON_Parse(ATOOL), *ot = cJSON_Parse(OTOOL);
+   assert(at && ot);
+   aimee_request_t atir, otir;
+   assert(anthropic_frontend_parse(at, &atir, err, sizeof err) == 0);
+   assert(openai_frontend_parse(ot, &otir, err, sizeof err) == 0);
+   /* both assistant messages have [TEXT, TOOL_USE] with the same id/name/input */
+   assert(atir.messages[0].n_blocks == 2 && otir.messages[0].n_blocks == 2);
+   assert(atir.messages[0].blocks[1].type == AIMEE_BLK_TOOL_USE);
+   assert(otir.messages[0].blocks[1].type == AIMEE_BLK_TOOL_USE);
+   assert(strcmp(otir.messages[0].blocks[1].tool_id, "toolu_1") == 0);
+   assert(otir.messages[0].blocks[1].tool_input != NULL); /* parsed from arguments string */
+   assert(aimee_ir_request_equal(&atir, &otir)); /* THE tool-args cross-protocol assertion */
+   aimee_request_free(&atir);
+   aimee_request_free(&otir);
+   cJSON_Delete(at);
+   cJSON_Delete(ot);
+
    printf("ok\n");
    return 0;
 }
