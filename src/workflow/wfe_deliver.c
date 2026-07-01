@@ -107,8 +107,11 @@ int wfe_deliver_reverify(const wfe_def_t *def, const char *deliver_id, wfe_gate_
          rc = -1;
          break;
       }
-      /* seed from the gate's success successors, not the gate itself, so a gate
-       * whose only path to deliver is through its own on_pass still counts. */
+      /* Seed from the gate's success successors, not the gate itself, so a gate
+       * whose only path to deliver is through its own on_pass still counts. Seed
+       * from BOTH on_pass and next: a gate's success continuation is on_pass when
+       * set, else next -- seeding both covers either convention (and over-seeding
+       * is safe: it can only make more gates count as delivery-gating). */
       int seed_pass = node_index(def, n->on_pass);
       int seed_next = node_index(def, n->next);
       if (seed_pass >= 0)
