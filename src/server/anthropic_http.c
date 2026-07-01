@@ -683,6 +683,7 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
    anthropic_stream_xlate_t *xl;
    prov_stream_ctx_t pc;
    int input_est;
+   int responses_wire = 0;
 
    mint_msg_id(msg_id, sizeof(msg_id));
 
@@ -727,6 +728,10 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
    if (delegate_build_url(driver, ag, url, sizeof(url)) != 0 ||
        agent_resolve_auth(ag, auth, sizeof(auth)) != 0)
       goto cleanup;
+   /* The Responses replay path is keyed off the actual upstream shape, not the
+    * provider label, so Codex aliases that still resolve to /responses stay in
+    * the buffered replay path too. */
+   responses_wire = strstr(url, "/responses") != NULL;
    if (parity)
       build_anthropic_parity_headers(extra, sizeof(extra));
    else
@@ -749,12 +754,12 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
     * response.output_* / response.completed, not the OpenAI chat chunk
     * shape that today's incremental translator understands. Off (the
     * default) falls through to today's incremental relay/translator. */
-   if (gateway_prevent_subagents_enabled() || (driver && strcmp(driver->name, "chatgpt") == 0))
+   if (gateway_prevent_subagents_enabled() || responses_wire)
    {
       char *buf_resp = NULL;
       int buf_status;
       parsed_response_t parsed;
-      int raw_responses = driver && strcmp(driver->name, "chatgpt") == 0;
+      int raw_responses = responses_wire;
       memset(&parsed, 0, sizeof(parsed));
       buf_status = agent_http_post(url, auth, prov_body ? prov_body : "{}", &buf_resp,
                                    ag->timeout_ms, extra[0] ? extra : NULL);
