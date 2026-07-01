@@ -98,6 +98,7 @@ aimee_add_test(test_wfe_router_catalog test_wfe_router_catalog.c)
 aimee_add_test(test_wfe_enforce test_wfe_enforce.c)
 aimee_add_test(test_aimee_ir test_aimee_ir.c ../server/aimee_ir.c)
 aimee_add_test(test_aimee_ir_metrics test_aimee_ir_metrics.c ../server/aimee_ir_metrics.c)
+aimee_add_test(test_aimee_frontend test_aimee_frontend.c ../server/aimee_frontend_anthropic.c ../server/aimee_frontend_openai.c ../server/aimee_ir.c)
 aimee_add_test(test_wfe_binding test_wfe_binding.c)
 aimee_add_test(test_shutdown_forensics test_shutdown_forensics.c)
 
