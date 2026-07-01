@@ -17,9 +17,9 @@ struct cJSON;
 /* --- backend: OpenAI Chat Completions SSE chunk -> IR deltas --- */
 typedef struct
 {
-   int started;    /* TURN_START emitted */
-   int text_block; /* block id of the open text block, or -1 */
-   int next_block; /* next block id to assign */
+   int started;                            /* TURN_START emitted */
+   int text_block;                         /* block id of the open text block, or -1 */
+   int next_block;                         /* next block id to assign */
    int tool_block[AIMEE_STREAM_MAX_TOOLS]; /* openai tool_calls[i].index -> block id (-1 = none) */
    int stopped;                            /* TURN_STOP emitted */
 } openai_stream_state_t;
@@ -40,7 +40,7 @@ typedef struct
 /* Render one IR delta as Anthropic SSE event text (malloc'd `event: ...\ndata:
  * ...\n\n`, caller frees), or NULL if the delta yields no output. msg_id + model
  * are used on the first (TURN_START) event. */
-char *anthropic_delta_render(const aimee_delta_t *d, anthropic_stream_state_t *st, const char *msg_id,
-                             const char *model);
+char *anthropic_delta_render(const aimee_delta_t *d, anthropic_stream_state_t *st,
+                             const char *msg_id, const char *model);
 
 #endif /* DEC_AIMEE_IR_STREAM_H */

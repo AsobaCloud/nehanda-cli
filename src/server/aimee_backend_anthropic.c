@@ -9,7 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char *dupstr(const char *s) { return s ? strdup(s) : NULL; }
+static char *dupstr(const char *s)
+{
+   return s ? strdup(s) : NULL;
+}
 
 static void add_cache_control(cJSON *el, const char *cc)
 {
@@ -37,9 +40,8 @@ static cJSON *block_to_anthropic(const aimee_block_t *b)
       cJSON_AddStringToObject(el, "type", "tool_use");
       cJSON_AddStringToObject(el, "id", b->tool_id ? b->tool_id : "");
       cJSON_AddStringToObject(el, "name", b->tool_name ? b->tool_name : "");
-      cJSON_AddItemToObject(el, "input",
-                            b->tool_input ? cJSON_Duplicate(b->tool_input, 1)
-                                          : cJSON_CreateObject());
+      cJSON_AddItemToObject(
+          el, "input", b->tool_input ? cJSON_Duplicate(b->tool_input, 1) : cJSON_CreateObject());
       break;
    case AIMEE_BLK_TOOL_RESULT:
       cJSON_AddStringToObject(el, "type", "tool_result");
@@ -137,9 +139,8 @@ cJSON *anthropic_backend_build(const aimee_request_t *ir)
    {
       cJSON *stop = cJSON_AddArrayToObject(out, "stop_sequences");
       for (int i = 0; i < ir->n_stop; i++)
-         cJSON_AddItemToArray(stop, cJSON_CreateString(ir->stop_sequences[i]
-                                                           ? ir->stop_sequences[i]
-                                                           : ""));
+         cJSON_AddItemToArray(
+             stop, cJSON_CreateString(ir->stop_sequences[i] ? ir->stop_sequences[i] : ""));
    }
    return out;
 }

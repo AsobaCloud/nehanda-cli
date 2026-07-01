@@ -276,8 +276,8 @@ int wfe_def_validate(const wfe_def_t *def, char *err, size_t errlen)
       }
       if (deliver_terminals == 0)
       {
-         snprintf(err, errlen,
-                  "enforced workflow '%s' must terminate in a gate.deliver node", def->name);
+         snprintf(err, errlen, "enforced workflow '%s' must terminate in a gate.deliver node",
+                  def->name);
          return -1;
       }
    }

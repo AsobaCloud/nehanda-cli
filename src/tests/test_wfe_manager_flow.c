@@ -20,52 +20,51 @@
 /* managed-change shape: understand -> split -> implement -> freeze -> review ->
  * gate.roundtable -> gate.deliver. Distinct node ids so the mock can pick the
  * right schema from the per-node artifact path. */
-static const char *WF =
-    "name: mc\n"
-    "enforced: true\n"
-    "start: understand\n"
-    "nodes:\n"
-    "  - id: understand\n"
-    "    block: understand\n"
-    "    next: split\n"
-    "  - id: split\n"
-    "    block: split\n"
-    "    in:\n"
-    "      intent: understand.out\n"
-    "    next: implement\n"
-    "  - id: implement\n"
-    "    block: implement\n"
-    "    in:\n"
-    "      plan: split.out\n"
-    "    next: freeze\n"
-    "  - id: freeze\n"
-    "    block: freeze\n"
-    "    in:\n"
-    "      branch: implement.out\n"
-    "    next: review\n"
-    "  - id: review\n"
-    "    block: review\n"
-    "    in:\n"
-    "      src: freeze.out\n"
-    "    params:\n"
-    "      reviewer: contrarian\n"
-    "    on_pass: rt\n"
-    "    on_fail: split\n"
-    "  - id: rt\n"
-    "    block: gate.roundtable\n"
-    "    in:\n"
-    "      src: freeze.out\n"
-    "    params:\n"
-    "      panel:\n"
-    "        required:\n"
-    "          - security\n"
-    "          - architect\n"
-    "    on_pass: deliver\n"
-    "    on_fail: split\n"
-    "  - id: deliver\n"
-    "    block: gate.deliver\n"
-    "    in:\n"
-    "      verdict: rt.out\n";
+static const char *WF = "name: mc\n"
+                        "enforced: true\n"
+                        "start: understand\n"
+                        "nodes:\n"
+                        "  - id: understand\n"
+                        "    block: understand\n"
+                        "    next: split\n"
+                        "  - id: split\n"
+                        "    block: split\n"
+                        "    in:\n"
+                        "      intent: understand.out\n"
+                        "    next: implement\n"
+                        "  - id: implement\n"
+                        "    block: implement\n"
+                        "    in:\n"
+                        "      plan: split.out\n"
+                        "    next: freeze\n"
+                        "  - id: freeze\n"
+                        "    block: freeze\n"
+                        "    in:\n"
+                        "      branch: implement.out\n"
+                        "    next: review\n"
+                        "  - id: review\n"
+                        "    block: review\n"
+                        "    in:\n"
+                        "      src: freeze.out\n"
+                        "    params:\n"
+                        "      reviewer: contrarian\n"
+                        "    on_pass: rt\n"
+                        "    on_fail: split\n"
+                        "  - id: rt\n"
+                        "    block: gate.roundtable\n"
+                        "    in:\n"
+                        "      src: freeze.out\n"
+                        "    params:\n"
+                        "      panel:\n"
+                        "        required:\n"
+                        "          - security\n"
+                        "          - architect\n"
+                        "    on_pass: deliver\n"
+                        "    on_fail: split\n"
+                        "  - id: deliver\n"
+                        "    block: gate.deliver\n"
+                        "    in:\n"
+                        "      verdict: rt.out\n";
 
 /* mock delegate provider: writes a schema-valid artifact keyed on the node in
  * the artifact path (understand -> intent, split -> packets, review -> verdict). */
@@ -87,9 +86,11 @@ static int mock_delegate(const char *wd, const char *role, const char *delegate,
           "\"acceptance_criteria\":[\"works\"]}";
    else if (strstr(artifact_path, "split"))
       j = "{\"schema_version\":1,\"packets\":[{\"packet_id\":\"p1\",\"summary\":\"do x\","
-          "\"target_blocks\":[\"implement\"],\"dependencies\":[],\"acceptance_criteria\":[\"ok\"]}]}";
+          "\"target_blocks\":[\"implement\"],\"dependencies\":[],\"acceptance_criteria\":[\"ok\"]}]"
+          "}";
    else if (strstr(artifact_path, "review"))
-      j = "{\"schema_version\":1,\"verdict\":\"pass\",\"blocking_findings\":[],\"non_blocking\":[]}";
+      j = "{\"schema_version\":1,\"verdict\":\"pass\",\"blocking_findings\":[],\"non_blocking\":[]"
+          "}";
    if (j)
    {
       FILE *f = fopen(artifact_path, "wb");
@@ -143,15 +144,16 @@ int main(void)
    assert(db1_init(":memory:") == 0);
 
    wfe_reset_block_executors();
-   wfe_register_default_executors();          /* real understand/split/review/gate.deliver */
-   wfe_set_delegate_provider(&MOCK);          /* feeds understand/split/review */
+   wfe_register_default_executors(); /* real understand/split/review/gate.deliver */
+   wfe_set_delegate_provider(&MOCK); /* feeds understand/split/review */
    wfe_register_block_executor(WFE_BLK_IMPLEMENT, stub_adv); /* avoid git */
    wfe_register_block_executor(WFE_BLK_FREEZE, stub_adv);    /* avoid git */
-   wfe_register_block_executor(WFE_BLK_GATE_ROUNDTABLE, stub_adv); /* avoid live panel; logs advance */
+   wfe_register_block_executor(WFE_BLK_GATE_ROUNDTABLE,
+                               stub_adv); /* avoid live panel; logs advance */
 
    char id[80] = "", err[256] = "";
-   int rc = wfe_work_item_create("mc", "git@github.com:x/y.git", "docs/p.md", "interactive", id, err,
-                                 sizeof err);
+   int rc = wfe_work_item_create("mc", "git@github.com:x/y.git", "docs/p.md", "interactive", id,
+                                 err, sizeof err);
    if (rc != 0)
       printf("\n  create failed: %s\n", err);
    assert(rc == 0);

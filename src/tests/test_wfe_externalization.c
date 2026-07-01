@@ -14,7 +14,7 @@ int main(void)
    assert(wfe_is_externalization_tool("pr.open"));
    assert(wfe_is_externalization_tool("merge"));
    assert(wfe_is_externalization_tool("git_push"));
-   assert(wfe_is_externalization_tool("WebFetch"));           /* case-insensitive */
+   assert(wfe_is_externalization_tool("WebFetch"));                         /* case-insensitive */
    assert(wfe_is_externalization_tool("mcp__github__create_pull_request")); /* substring */
    assert(wfe_is_externalization_tool("deploy_release"));
    assert(wfe_is_externalization_tool("notify_slack"));

@@ -25,7 +25,7 @@
 #include "gateway_policy.h"
 #include "gateway_pipeline.h"
 #include "gw_stage_memory.h"
-#include "router_advise.h" /* gw_stage_router — the request->workflow seam */
+#include "router_advise.h"   /* gw_stage_router — the request->workflow seam */
 #include "aimee_ir_shadow.h" /* Slice 3: IR shadow-mode observer */
 #include "aimee_ir_serve.h"  /* Slice 5: IR live request-build */
 #include "ingress_preinject.h"
@@ -433,7 +433,8 @@ static int messages_buffered(const char *body, char *resp, int cap)
        * flag is off, so behavior is unchanged by default. */
       if (aimee_ir_path_enabled())
          prov_body = aimee_ir_build_provider_body(
-             req, driver->name, ag->model, agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)));
+             req, driver->name, ag->model,
+             agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)));
       if (!prov_body)
          prov_body = build_provider_body(driver, ag, messages, tools, system_text,
                                          agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)),
@@ -767,7 +768,8 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
        * translation is needed here. */
       if (aimee_ir_path_enabled())
          prov_body = aimee_ir_build_provider_body(
-             req, driver->name, ag->model, agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)));
+             req, driver->name, ag->model,
+             agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)));
       if (!prov_body)
          prov_body = build_provider_body(driver, ag, messages, tools, system_text,
                                          agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)),

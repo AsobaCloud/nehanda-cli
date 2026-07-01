@@ -35,9 +35,9 @@ struct cJSON;
 typedef enum
 {
    AIMEE_WIRE_UNKNOWN = 0,
-   AIMEE_WIRE_ANTHROPIC,  /* Anthropic Messages API (/v1/messages) */
+   AIMEE_WIRE_ANTHROPIC,   /* Anthropic Messages API (/v1/messages) */
    AIMEE_WIRE_OPENAI_CHAT, /* OpenAI Chat Completions (/v1/chat/completions) */
-   AIMEE_WIRE_RESPONSES,  /* OpenAI Responses API (/v1/responses; codex) */
+   AIMEE_WIRE_RESPONSES,   /* OpenAI Responses API (/v1/responses; codex) */
    AIMEE_WIRE_GEMINI
 } aimee_wire_t;
 
@@ -49,8 +49,8 @@ typedef enum
    AIMEE_BLK_TOOL_RESULT, /* user/tool returns a tool's output */
    AIMEE_BLK_IMAGE,
    AIMEE_BLK_DOCUMENT,
-   AIMEE_BLK_THINKING,    /* Anthropic extended-thinking / o-series reasoning */
-   AIMEE_BLK_UNKNOWN      /* preserved via `raw` only */
+   AIMEE_BLK_THINKING, /* Anthropic extended-thinking / o-series reasoning */
+   AIMEE_BLK_UNKNOWN   /* preserved via `raw` only */
 } aimee_block_type_t;
 
 typedef struct
@@ -89,7 +89,7 @@ typedef struct
 
 typedef struct
 {
-   char *name;           /* opaque */
+   char *name; /* opaque */
    char *description;
    struct cJSON *schema; /* input JSON schema, opaque; owned */
    char *cache_control;
@@ -125,9 +125,9 @@ typedef struct
 typedef enum
 {
    AIMEE_STOP_UNKNOWN = 0,
-   AIMEE_STOP_END_TURN,   /* natural stop */
+   AIMEE_STOP_END_TURN, /* natural stop */
    AIMEE_STOP_MAX_TOKENS,
-   AIMEE_STOP_TOOL_USE,   /* stopped to call a tool */
+   AIMEE_STOP_TOOL_USE, /* stopped to call a tool */
    AIMEE_STOP_STOP_SEQUENCE,
    AIMEE_STOP_CONTENT_FILTER,
    AIMEE_STOP_ERROR
@@ -171,8 +171,8 @@ typedef struct
    /* BLOCK_START of a tool_use carries the id + name (opaque, verbatim). */
    const char *tool_id;
    const char *tool_name;
-   const char *text_delta;      /* BLOCK_DELTA for text/thinking */
-   const char *tool_args_delta; /* BLOCK_DELTA for tool_use argument JSON fragment */
+   const char *text_delta;          /* BLOCK_DELTA for text/thinking */
+   const char *tool_args_delta;     /* BLOCK_DELTA for tool_use argument JSON fragment */
    aimee_stop_reason_t stop_reason; /* TURN_STOP */
    long usage_in, usage_out;        /* TURN_STOP */
    const char *error_message;       /* ERROR */

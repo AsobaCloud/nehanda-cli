@@ -19,12 +19,12 @@
 #include "aimee_home.h"
 #include "cJSON.h"
 #include "util.h"
-#include "wfe_deliver.h"           /* gate.deliver verdict-graph re-verify (Q4) */
+#include "wfe_deliver.h" /* gate.deliver verdict-graph re-verify (Q4) */
 #include "wfe_def.h"
 #include "wfe_engine.h"
 #include "wfe_iface.h"
 #include "wfe_manager_artifacts.h" /* typed intent/packet/verdict schema validators */
-#include "wfe_store.h" /* db1_work_item_set_worktree — persist the per-item worktree */
+#include "wfe_store.h"             /* db1_work_item_set_worktree — persist the per-item worktree */
 
 /* Resolve the local working repo for a work item: $AIMEE_WORKFLOW_REPO or cwd. */
 static const char *repo_dir(void)
@@ -870,7 +870,8 @@ static wfe_step_result_t exec_review(wfe_ctx *ctx, const wfe_node_t *node)
    if (wfe_delegate_dispatch(
            wd, "reviewer", reviewer[0] ? reviewer : node_delegate(node),
            "Review the delegate's frozen diff READ-ONLY (do NOT edit files). Emit a REVIEW VERDICT "
-           "as JSON to the given path (nothing else): {\"schema_version\":1,\"verdict\":\"pass\" or "
+           "as JSON to the given path (nothing else): {\"schema_version\":1,\"verdict\":\"pass\" "
+           "or "
            "\"changes\",\"blocking_findings\":[{\"block_id\":\"...\",\"rule_id\":\"...\","
            "\"expected\":\"...\",\"observed\":\"...\",\"suggested_fix\":\"...\"}],"
            "\"non_blocking\":[]}. Use \"changes\" with >=1 blocking finding only if re-work is "
@@ -923,8 +924,8 @@ static wfe_step_result_t exec_gate_deliver(wfe_ctx *ctx, const wfe_node_t *node)
    const char *wi = wfe_ctx_work_item(ctx);
    const wfe_def_t *def = wfe_ctx_def(ctx);
    char err[200] = "";
-   if (!def || wfe_deliver_reverify(def, node->id, deliver_gate_advanced, (void *)wi, err,
-                                    sizeof err) != 0)
+   if (!def ||
+       wfe_deliver_reverify(def, node->id, deliver_gate_advanced, (void *)wi, err, sizeof err) != 0)
    {
       db1_lifecycle_event_add(wi, node->id, "failed", "engine",
                               err[0] ? err : "delivery re-verification failed", "", 0.0);

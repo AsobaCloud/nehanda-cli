@@ -13,7 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char *dupstr(const char *s) { return s ? strdup(s) : NULL; }
+static char *dupstr(const char *s)
+{
+   return s ? strdup(s) : NULL;
+}
 
 static const char *ostr(const cJSON *o, const char *k)
 {
@@ -135,8 +138,8 @@ int openai_frontend_parse(const cJSON *req, aimee_request_t *out, char *err, siz
          {
             if (tool_run < 0)
             {
-               aimee_message_t *tr = grow1((void **)&out->messages, &out->n_messages,
-                                           sizeof(aimee_message_t));
+               aimee_message_t *tr =
+                   grow1((void **)&out->messages, &out->n_messages, sizeof(aimee_message_t));
                if (!tr)
                   goto oom;
                tr->role = dupstr("user");
@@ -150,13 +153,13 @@ int openai_frontend_parse(const cJSON *req, aimee_request_t *out, char *err, siz
             b->raw = cJSON_Duplicate(m, 1);
             b->tool_id = dupstr(ostr(m, "tool_call_id"));
             const char *tc = cJSON_IsString(content) ? content->valuestring : NULL;
-            b->tool_result = tc ? cJSON_CreateString(tc)
-                                : (content ? cJSON_Duplicate(content, 1) : NULL);
+            b->tool_result =
+                tc ? cJSON_CreateString(tc) : (content ? cJSON_Duplicate(content, 1) : NULL);
             continue;
          }
          tool_run = -1; /* any non-tool message ends the run */
-         aimee_message_t *msg = grow1((void **)&out->messages, &out->n_messages,
-                                      sizeof(aimee_message_t));
+         aimee_message_t *msg =
+             grow1((void **)&out->messages, &out->n_messages, sizeof(aimee_message_t));
          if (!msg)
             goto oom;
          msg->role = dupstr(role);
@@ -174,8 +177,8 @@ int openai_frontend_parse(const cJSON *req, aimee_request_t *out, char *err, siz
             const cJSON *call = NULL;
             cJSON_ArrayForEach(call, calls)
             {
-               aimee_block_t *b = grow1((void **)&msg->blocks, &msg->n_blocks,
-                                        sizeof(aimee_block_t));
+               aimee_block_t *b =
+                   grow1((void **)&msg->blocks, &msg->n_blocks, sizeof(aimee_block_t));
                if (!b)
                   goto oom;
                b->type = AIMEE_BLK_TOOL_USE;

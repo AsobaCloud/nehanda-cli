@@ -21,7 +21,10 @@ static const struct
     {WFE_BLK_AUTHOR_PLAN, "author.plan", WFE_ART_PLAN, 1, {WFE_ART_PROPOSAL, WFE_ART_NONE}},
     /* implement also accepts an INTENT directly (S0): a single-packet `hotfix`
      * feeds understand -> implement without a split step. */
-    {WFE_BLK_IMPLEMENT, "implement", WFE_ART_BRANCH, 1,
+    {WFE_BLK_IMPLEMENT,
+     "implement",
+     WFE_ART_BRANCH,
+     1,
      {WFE_ART_PLAN, WFE_ART_INTENT, WFE_ART_NONE}},
     /* document the effort: a delegate writes docs onto the branch (consumes a
      * branch, produces the documented branch) -> composes between implement and
@@ -54,7 +57,10 @@ static const struct
      * emits a verdict; gate.deliver is a terminal enforcement gate. */
     {WFE_BLK_UNDERSTAND, "understand", WFE_ART_INTENT, 0, {WFE_ART_NONE}},
     {WFE_BLK_SPLIT, "split", WFE_ART_PLAN, 1, {WFE_ART_INTENT, WFE_ART_NONE}},
-    {WFE_BLK_REVIEW, "review", WFE_ART_VERDICT, 1,
+    {WFE_BLK_REVIEW,
+     "review",
+     WFE_ART_VERDICT,
+     1,
      {WFE_ART_FROZEN_DIFF, WFE_ART_BRANCH, WFE_ART_NONE}},
     {WFE_BLK_GATE_DELIVER,
      "gate.deliver",
@@ -65,8 +71,7 @@ static const struct
 static const int CATALOG_N = (int)(sizeof(CATALOG) / sizeof(CATALOG[0]));
 
 static const char *ARTIFACT_NAMES[WFE_ART__COUNT] = {
-    "none", "proposal",   "plan",    "branch", "frozen_diff",
-    "pr",   "verdict",    "approval", "intent"};
+    "none", "proposal", "plan", "branch", "frozen_diff", "pr", "verdict", "approval", "intent"};
 
 const char *wfe_artifact_name(wfe_artifact_type_t t)
 {
@@ -258,11 +263,11 @@ wfe_def_t *wfe_def_parse(const char *yaml_text, char *err, size_t errlen)
     * router may bind a session to for substantive change. Accept bool/int/string
     * (YAML emitters vary), matching wfe_autonomy's `optional` reader. */
    const cJSON *jenf = cJSON_GetObjectItemCaseSensitive(root, "enforced");
-   def->enforced = (jenf && (cJSON_IsTrue(jenf) ||
-                             (cJSON_IsNumber(jenf) && jenf->valuedouble != 0) ||
-                             (cJSON_IsString(jenf) && strcasecmp(jenf->valuestring, "true") == 0)))
-                       ? 1
-                       : 0;
+   def->enforced =
+       (jenf && (cJSON_IsTrue(jenf) || (cJSON_IsNumber(jenf) && jenf->valuedouble != 0) ||
+                 (cJSON_IsString(jenf) && strcasecmp(jenf->valuestring, "true") == 0)))
+           ? 1
+           : 0;
 
    int n = cJSON_GetArraySize(jnodes);
    def->nodes = calloc((size_t)n, sizeof(wfe_node_t));

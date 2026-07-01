@@ -36,14 +36,15 @@ void openai_stream_state_init(openai_stream_state_t *st)
       st->tool_block[i] = -1;
 }
 
-int openai_chunk_to_deltas(const cJSON *chunk, openai_stream_state_t *st, aimee_delta_t *out, int max)
+int openai_chunk_to_deltas(const cJSON *chunk, openai_stream_state_t *st, aimee_delta_t *out,
+                           int max)
 {
    int n = 0;
    if (!chunk || !st || !out || max <= 0)
       return 0;
    const cJSON *choices = cJSON_GetObjectItemCaseSensitive((cJSON *)chunk, "choices");
-   const cJSON *choice = (choices && cJSON_IsArray(choices)) ? cJSON_GetArrayItem((cJSON *)choices, 0)
-                                                             : NULL;
+   const cJSON *choice =
+       (choices && cJSON_IsArray(choices)) ? cJSON_GetArrayItem((cJSON *)choices, 0) : NULL;
    /* a final usage-only chunk may have no choices; still allow finish/usage below */
    const cJSON *delta = choice ? cJSON_GetObjectItemCaseSensitive((cJSON *)choice, "delta") : NULL;
    const char *finish = choice ? ostr(choice, "finish_reason") : NULL;
@@ -175,7 +176,8 @@ static char *sse_frame(const char *ev, cJSON *data)
    cJSON_Delete(data);
    if (!json)
       return NULL;
-   size_t need = strlen("event: ") + strlen(ev) + strlen("\ndata: ") + strlen(json) + strlen("\n\n") + 1;
+   size_t need =
+       strlen("event: ") + strlen(ev) + strlen("\ndata: ") + strlen(json) + strlen("\n\n") + 1;
    char *buf = malloc(need);
    if (buf)
       snprintf(buf, need, "event: %s\ndata: %s\n\n", ev, json);
@@ -183,8 +185,8 @@ static char *sse_frame(const char *ev, cJSON *data)
    return buf;
 }
 
-char *anthropic_delta_render(const aimee_delta_t *d, anthropic_stream_state_t *st, const char *msg_id,
-                             const char *model)
+char *anthropic_delta_render(const aimee_delta_t *d, anthropic_stream_state_t *st,
+                             const char *msg_id, const char *model)
 {
    if (!d)
       return NULL;

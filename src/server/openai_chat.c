@@ -37,7 +37,7 @@
 #include "agent_types.h"
 #include "gateway_policy.h" /* gateway_policy_apply_request — tool-policing stage */
 #include "router_advise.h"  /* gw_stage_router — the request->workflow seam */
-#include "aimee_ir_serve.h"  /* IR-routed /v1/responses parse */
+#include "aimee_ir_serve.h" /* IR-routed /v1/responses parse */
 #include "memory.h"         /* memory_embed_text */
 #include "request_context.h"
 #include "response_dedup.h"

@@ -16,16 +16,20 @@
 static const char *ANTHROPIC =
     "{\"model\":\"claude-3-5-sonnet-20241022\",\"max_tokens\":1024,"
     "\"system\":[{\"type\":\"text\",\"text\":\"You are a helpful coding assistant.\"}],"
-    "\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"read foo.c and summarize it\"}]}],"
+    "\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"read foo.c and "
+    "summarize it\"}]}],"
     "\"tools\":[{\"name\":\"Read\",\"description\":\"Read a file\",\"input_schema\":"
-    "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}}]}";
+    "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}}"
+    "]}";
 
 static const char *OPENAI =
     "{\"model\":\"gpt-4o\",\"max_tokens\":1024,"
     "\"messages\":[{\"role\":\"system\",\"content\":\"You are a helpful coding assistant.\"},"
     "{\"role\":\"user\",\"content\":\"read foo.c and summarize it\"}],"
-    "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"Read\",\"description\":\"Read a file\","
-    "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}}}]}";
+    "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"Read\",\"description\":\"Read a "
+    "file\","
+    "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},"
+    "\"required\":[\"path\"]}}}]}";
 
 int main(void)
 {
@@ -53,7 +57,8 @@ int main(void)
    /* --- structure: OpenAI, with system LIFTED out of messages --- */
    assert(oir.frontend == AIMEE_WIRE_OPENAI_CHAT);
    assert(oir.n_system == 1 && oir.system[0].type == AIMEE_BLK_TEXT); /* lifted */
-   assert(oir.n_messages == 1 && strcmp(oir.messages[0].role, "user") == 0); /* system NOT a message */
+   assert(oir.n_messages == 1 &&
+          strcmp(oir.messages[0].role, "user") == 0); /* system NOT a message */
    assert(oir.n_tools == 1 && strcmp(oir.tools[0].name, "Read") == 0);
 
    /* --- THE golden cross-protocol assertion: identical IR --- */
@@ -71,16 +76,15 @@ int main(void)
 
    /* --- tool_use cross-protocol pair: Anthropic input OBJECT == OpenAI arguments
     *     STRING (parsed). Same-semantic assistant turn -> identical IR. --- */
-   const char *ATOOL =
-       "{\"model\":\"claude-3-5-sonnet\",\"max_tokens\":1024,\"messages\":["
-       "{\"role\":\"assistant\",\"content\":["
-       "{\"type\":\"text\",\"text\":\"I'll read it\"},"
-       "{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{\"path\":\"foo.c\"}}]}]}";
-   const char *OTOOL =
-       "{\"model\":\"gpt-4o\",\"max_tokens\":1024,\"messages\":["
-       "{\"role\":\"assistant\",\"content\":\"I'll read it\",\"tool_calls\":["
-       "{\"id\":\"toolu_1\",\"type\":\"function\",\"function\":{\"name\":\"Read\","
-       "\"arguments\":\"{\\\"path\\\":\\\"foo.c\\\"}\"}}]}]}";
+   const char *ATOOL = "{\"model\":\"claude-3-5-sonnet\",\"max_tokens\":1024,\"messages\":["
+                       "{\"role\":\"assistant\",\"content\":["
+                       "{\"type\":\"text\",\"text\":\"I'll read it\"},"
+                       "{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{"
+                       "\"path\":\"foo.c\"}}]}]}";
+   const char *OTOOL = "{\"model\":\"gpt-4o\",\"max_tokens\":1024,\"messages\":["
+                       "{\"role\":\"assistant\",\"content\":\"I'll read it\",\"tool_calls\":["
+                       "{\"id\":\"toolu_1\",\"type\":\"function\",\"function\":{\"name\":\"Read\","
+                       "\"arguments\":\"{\\\"path\\\":\\\"foo.c\\\"}\"}}]}]}";
    cJSON *at = cJSON_Parse(ATOOL), *ot = cJSON_Parse(OTOOL);
    assert(at && ot);
    aimee_request_t atir, otir;
@@ -123,9 +127,13 @@ int main(void)
    assert(strcmp(cJSON_GetObjectItem(aresp, "stop_reason")->valuestring, "tool_use") == 0);
    cJSON *ac = cJSON_GetObjectItem(aresp, "content");
    assert(cJSON_GetArraySize(ac) == 2);
-   assert(strcmp(cJSON_GetObjectItem(cJSON_GetArrayItem(ac, 1), "type")->valuestring, "tool_use") == 0);
-   assert(strcmp(cJSON_GetObjectItem(cJSON_GetArrayItem(ac, 1), "id")->valuestring, "toolu_9") == 0);
-   assert((int)cJSON_GetObjectItem(cJSON_GetObjectItem(aresp, "usage"), "input_tokens")->valuedouble == 10);
+   assert(strcmp(cJSON_GetObjectItem(cJSON_GetArrayItem(ac, 1), "type")->valuestring, "tool_use") ==
+          0);
+   assert(strcmp(cJSON_GetObjectItem(cJSON_GetArrayItem(ac, 1), "id")->valuestring, "toolu_9") ==
+          0);
+   assert(
+       (int)cJSON_GetObjectItem(cJSON_GetObjectItem(aresp, "usage"), "input_tokens")->valuedouble ==
+       10);
 
    /* OpenAI render */
    cJSON *oresp = openai_frontend_render(&rr);
@@ -139,7 +147,9 @@ int main(void)
    assert(strcmp(cJSON_GetObjectItem(ofn, "name")->valuestring, "Read") == 0);
    /* arguments re-serialized from the parsed tool_input */
    assert(strstr(cJSON_GetObjectItem(ofn, "arguments")->valuestring, "foo.c"));
-   assert((int)cJSON_GetObjectItem(cJSON_GetObjectItem(oresp, "usage"), "total_tokens")->valuedouble == 15);
+   assert(
+       (int)cJSON_GetObjectItem(cJSON_GetObjectItem(oresp, "usage"), "total_tokens")->valuedouble ==
+       15);
 
    /* Responses render: output items (message + function_call) */
    cJSON *rresp = responses_frontend_render(&rr);
@@ -176,7 +186,8 @@ int main(void)
        "\"input\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\","
        "\"text\":\"read foo.c and summarize it\"}]}],"
        "\"tools\":[{\"type\":\"function\",\"name\":\"Read\",\"description\":\"Read a file\","
-       "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}}]}";
+       "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},"
+       "\"required\":[\"path\"]}}]}";
    cJSON *rj3 = cJSON_Parse(RESPONSES);
    assert(aj3 && oj3 && rj3);
    aimee_request_t ai3, oi3, ri3;

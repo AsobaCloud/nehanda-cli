@@ -57,7 +57,7 @@ int main(void)
     * the invalid-name file both skipped) */
    assert(cat.n == 4);
    assert(wfe_router_find(&cat, "converse"));
-   assert(wfe_router_find(&cat, "sneaky") == NULL); /* symlink escape blocked */
+   assert(wfe_router_find(&cat, "sneaky") == NULL);    /* symlink escape blocked */
    assert(wfe_router_find(&cat, "has space") == NULL); /* invalid id skipped */
 
    const wfe_router_wf_t *mc = wfe_router_find(&cat, "managed-change");

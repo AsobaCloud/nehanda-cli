@@ -23,10 +23,10 @@
 
 #include <stddef.h>
 
-#define WFE_ROUTER_ID_LEN 64
-#define WFE_ROUTER_MAX_WF 64
+#define WFE_ROUTER_ID_LEN   64
+#define WFE_ROUTER_MAX_WF   64
 #define WFE_ROUTER_MAX_TAGS 16
-#define WFE_ROUTER_TAG_LEN 40
+#define WFE_ROUTER_TAG_LEN  40
 
 typedef struct
 {

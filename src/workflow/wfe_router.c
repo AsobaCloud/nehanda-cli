@@ -13,10 +13,9 @@
  * write workflow. Tunable; the S1 promotion gate measures precision before this
  * ever binds. */
 static const char *CHANGE_VERBS[] = {
-    "add",     "fix",       "change",  "implement", "refactor", "delete",  "remove",
-    "rename",  "create",    "build",   "deploy",    "update",   "write",   "edit",
-    "patch",   "migrate",   "install", "configure", "generate", "replace", "revert",
-    NULL};
+    "add",     "fix",       "change",   "implement", "refactor", "delete", "remove", "rename",
+    "create",  "build",     "deploy",   "update",    "write",    "edit",   "patch",  "migrate",
+    "install", "configure", "generate", "replace",   "revert",   NULL};
 
 /* Explicit routing tags the user can type. */
 static int starts_with_ci(const char *s, const char *pfx)
@@ -251,8 +250,8 @@ wfe_prefilter_outcome_t wfe_router_prefilter(const char *msg, const wfe_router_c
    }
 }
 
-void wfe_router_decide(const char *msg, const wfe_router_catalog_t *cat,
-                       const char *classifier_id, wfe_route_decision_t *out)
+void wfe_router_decide(const char *msg, const wfe_router_catalog_t *cat, const char *classifier_id,
+                       wfe_route_decision_t *out)
 {
    if (!out)
       return;
@@ -311,7 +310,8 @@ void wfe_router_classify_prompt(const wfe_router_catalog_t *cat, char *buf, size
    for (int i = 0; cat && i < cat->n && off > 0 && (size_t)off < n; i++)
    {
       const wfe_router_wf_t *w = &cat->wf[i];
-      off += snprintf(buf + off, n - (size_t)off, "- %s%s", w->id, w->read_only ? " (read-only)" : "");
+      off +=
+          snprintf(buf + off, n - (size_t)off, "- %s%s", w->id, w->read_only ? " (read-only)" : "");
       for (int t = 0; t < w->n_tags && (size_t)off < n; t++)
          off += snprintf(buf + off, n - (size_t)off, "%s%s", t == 0 ? " tags: " : ",", w->tags[t]);
       if ((size_t)off < n)

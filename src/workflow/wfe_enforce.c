@@ -65,8 +65,8 @@ int wfe_is_write_tool(const char *t)
 {
    if (!t || !t[0])
       return 0;
-   static const char *W[] = {"Edit",       "Write",     "NotebookEdit", "MultiEdit",
-                             "str_replace", "apply_patch", "patch",      NULL};
+   static const char *W[] = {"Edit",        "Write",       "NotebookEdit", "MultiEdit",
+                             "str_replace", "apply_patch", "patch",        NULL};
    for (int i = 0; W[i]; i++)
       if (eq_ci(t, W[i]))
          return 1;
@@ -174,8 +174,8 @@ static int safe_id(const char *s)
    for (const char *p = s; *p; p++)
    {
       char c = *p;
-      if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' ||
-            c == '-' || c == '.'))
+      if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+            c == '_' || c == '-' || c == '.'))
          return 0;
    }
    return 1;

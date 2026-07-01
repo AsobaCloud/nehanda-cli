@@ -106,11 +106,14 @@ int main(void)
           WFE_PREFILTER_DEFER);
 
    /* --- decision + fallback table --- */
-   assert(strcmp(route(&c, "use build", NULL), "build") == 0);             /* named */
-   assert(strcmp(route(&c, "hello there", NULL), "converse") == 0);        /* converse */
-   assert(strcmp(route(&c, "fix the bug", "managed-change"), "managed-change") == 0); /* classifier */
-   assert(strcmp(route(&c, "fix the bug", NULL), "research") == 0);        /* defer, no classifier -> default */
-   assert(strcmp(route(&c, "fix the bug", "not-a-workflow"), "research") == 0); /* out-of-catalog -> default */
+   assert(strcmp(route(&c, "use build", NULL), "build") == 0);      /* named */
+   assert(strcmp(route(&c, "hello there", NULL), "converse") == 0); /* converse */
+   assert(strcmp(route(&c, "fix the bug", "managed-change"), "managed-change") ==
+          0); /* classifier */
+   assert(strcmp(route(&c, "fix the bug", NULL), "research") ==
+          0); /* defer, no classifier -> default */
+   assert(strcmp(route(&c, "fix the bug", "not-a-workflow"), "research") ==
+          0); /* out-of-catalog -> default */
    /* the router never emits an id outside the catalog */
    wfe_route_decision_t d;
    wfe_router_decide("refactor everything", &c, "../evil", &d);
@@ -125,7 +128,7 @@ int main(void)
    assert(wfe_router_parse_classification("managed-change", &c, cid, sizeof cid) == 0 &&
           strcmp(cid, "managed-change") == 0);
    assert(wfe_router_parse_classification("The workflow is managed-change.", &c, cid, sizeof cid) ==
-          0 &&
+              0 &&
           strcmp(cid, "managed-change") == 0);
    assert(wfe_router_parse_classification("```build```", &c, cid, sizeof cid) == 0 &&
           strcmp(cid, "build") == 0);
@@ -150,7 +153,8 @@ int main(void)
 
    /* --- deterministic sampling --- */
    assert(wfe_router_should_sample("s", 0, 1) == 1); /* 1-in-1 always */
-   assert(wfe_router_should_sample("sess", 7, 10) == wfe_router_should_sample("sess", 7, 10)); /* stable */
+   assert(wfe_router_should_sample("sess", 7, 10) ==
+          wfe_router_should_sample("sess", 7, 10)); /* stable */
    int hits = 0;
    for (int i = 0; i < 1000; i++)
       hits += wfe_router_should_sample("sess", i, 10);

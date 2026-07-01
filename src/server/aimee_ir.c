@@ -125,7 +125,8 @@ size_t aimee_ir_last_user_text(const aimee_request_t *r, char *buf, size_t n)
    return used;
 }
 
-aimee_route_t aimee_ir_route_decide(aimee_wire_t frontend, aimee_wire_t backend, int stage_will_mutate)
+aimee_route_t aimee_ir_route_decide(aimee_wire_t frontend, aimee_wire_t backend,
+                                    int stage_will_mutate)
 {
    if (frontend == AIMEE_WIRE_UNKNOWN || backend == AIMEE_WIRE_UNKNOWN)
       return AIMEE_ROUTE_IR; /* unknown protocol: don't risk a raw passthrough */

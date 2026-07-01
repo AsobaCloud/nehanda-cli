@@ -91,7 +91,7 @@ int wfe_advance_cas_ok(const char *observed_stage, const char *actual_stage);
  * and work-item id (both id-charset) are interpolated -- NEVER the primary's
  * attempted action text, file paths, or packet contents (injection/exfil vector,
  * consult Q3). `gate`/`work_item_id` are truncated/omitted if absent. */
-void wfe_enforce_user_message(wfe_enforce_stage_t stage, const char *gate,
-                              const char *work_item_id, char *buf, size_t n);
+void wfe_enforce_user_message(wfe_enforce_stage_t stage, const char *gate, const char *work_item_id,
+                              char *buf, size_t n);
 
 #endif /* DEC_WFE_ENFORCE_H */

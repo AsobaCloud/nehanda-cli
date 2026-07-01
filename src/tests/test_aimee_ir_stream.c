@@ -37,16 +37,20 @@ int main(void)
    char acc[4096] = "";
 
    /* text streaming */
-   feed("{\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Hel\"}}]}", &ost, &ast, acc, sizeof acc);
+   feed("{\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Hel\"}}]}", &ost, &ast, acc,
+        sizeof acc);
    feed("{\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}", &ost, &ast, acc, sizeof acc);
    /* a tool call, id+name then streamed arguments */
    feed("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\","
-        "\"function\":{\"name\":\"Read\",\"arguments\":\"\"}}]}}]}", &ost, &ast, acc, sizeof acc);
+        "\"function\":{\"name\":\"Read\",\"arguments\":\"\"}}]}}]}",
+        &ost, &ast, acc, sizeof acc);
    feed("{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,"
-        "\"function\":{\"arguments\":\"{\\\"p\\\":1}\"}}]}}]}", &ost, &ast, acc, sizeof acc);
+        "\"function\":{\"arguments\":\"{\\\"p\\\":1}\"}}]}}]}",
+        &ost, &ast, acc, sizeof acc);
    /* finish */
    feed("{\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],"
-        "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4}}", &ost, &ast, acc, sizeof acc);
+        "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4}}",
+        &ost, &ast, acc, sizeof acc);
 
    /* the accumulated Anthropic SSE must be well-formed + carry the content */
    assert(strstr(acc, "event: message_start"));

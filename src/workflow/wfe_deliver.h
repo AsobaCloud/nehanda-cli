@@ -34,8 +34,8 @@ typedef int (*wfe_gate_advanced_fn)(const char *node_id, void *ctx);
  * delivery-gating gate satisfies `advanced`; -1 (with `err` set to the first
  * offending gate id) otherwise. Bad args (NULL def/deliver_id/advanced, or
  * deliver_id not a node) return -1. */
-int wfe_deliver_reverify(const wfe_def_t *def, const char *deliver_id, wfe_gate_advanced_fn advanced,
-                         void *ctx, char *err, size_t errlen);
+int wfe_deliver_reverify(const wfe_def_t *def, const char *deliver_id,
+                         wfe_gate_advanced_fn advanced, void *ctx, char *err, size_t errlen);
 
 /* 1 if `t` is a verdict/approval gate (roundtable, human, review, ci,
  * mergeable) -- the block kinds whose approval gates delivery. */

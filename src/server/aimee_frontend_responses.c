@@ -16,7 +16,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char *dupstr(const char *s) { return s ? strdup(s) : NULL; }
+static char *dupstr(const char *s)
+{
+   return s ? strdup(s) : NULL;
+}
 
 static const char *ostr(const cJSON *o, const char *k)
 {
@@ -154,7 +157,8 @@ int responses_frontend_parse(const cJSON *req, aimee_request_t *out, char *err, 
                   const char *pt = ostr(part, "type");
                   if (pt && (strcmp(pt, "input_text") == 0 || strcmp(pt, "output_text") == 0))
                   {
-                     aimee_block_t *b = grow1((void **)&m->blocks, &m->n_blocks, sizeof(aimee_block_t));
+                     aimee_block_t *b =
+                         grow1((void **)&m->blocks, &m->n_blocks, sizeof(aimee_block_t));
                      if (!b)
                         goto oom;
                      b->type = AIMEE_BLK_TEXT;

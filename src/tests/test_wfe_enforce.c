@@ -21,7 +21,8 @@ int main(void)
    assert(!wfe_is_deliver_primitive("") && !wfe_is_deliver_primitive(NULL));
 
    /* --- write / delegate tool classification --- */
-   assert(wfe_is_write_tool("Edit") && wfe_is_write_tool("Write") && wfe_is_write_tool("apply_patch"));
+   assert(wfe_is_write_tool("Edit") && wfe_is_write_tool("Write") &&
+          wfe_is_write_tool("apply_patch"));
    assert(!wfe_is_write_tool("Read") && !wfe_is_write_tool("Grep") && !wfe_is_write_tool(NULL));
    assert(wfe_is_delegate_tool("delegate") && wfe_is_delegate_tool("Task") &&
           wfe_is_delegate_tool("Subagent"));
@@ -77,7 +78,8 @@ int main(void)
           !wfe_enforce_stage_restricts(WFE_ENFORCE_ADVISORY));
    assert(wfe_enforce_stage_restricts(WFE_ENFORCE_SOFT) &&
           wfe_enforce_stage_restricts(WFE_ENFORCE_HARD));
-   assert(!wfe_enforce_stage_refuses(WFE_ENFORCE_SOFT) && wfe_enforce_stage_refuses(WFE_ENFORCE_HARD));
+   assert(!wfe_enforce_stage_refuses(WFE_ENFORCE_SOFT) &&
+          wfe_enforce_stage_refuses(WFE_ENFORCE_HARD));
 
    /* --- templated surfacing: names the gate + id, NEVER echoes injected content --- */
    char msg[256];
@@ -89,7 +91,7 @@ int main(void)
    wfe_enforce_user_message(WFE_ENFORCE_SOFT, NULL, NULL, msg, sizeof msg); /* no crash */
 
    /* --- CAS advance guard --- */
-   assert(wfe_advance_cas_ok("implement", "implement") == 1); /* match -> advance */
+   assert(wfe_advance_cas_ok("implement", "implement") == 1);  /* match -> advance */
    assert(wfe_advance_cas_ok("understand", "implement") == 0); /* stale -> reject */
    assert(wfe_advance_cas_ok(NULL, "implement") == -1 && wfe_advance_cas_ok("implement", "") == -1);
 
