@@ -105,6 +105,44 @@ int main(void)
    aimee_response_free(&resp);
    assert(resp.content == NULL && resp.id == NULL);
 
+   /* --- semantic equality: same content, different provenance -> equal --- */
+   /* Build two 1-message requests with identical semantics but different model +
+    * frontend + raw sidecar (as an Anthropic vs OpenAI parse would produce). */
+   aimee_request_t a, b;
+   for (int pass = 0; pass < 2; pass++)
+   {
+      aimee_request_t *x = pass ? &b : &a;
+      memset(x, 0, sizeof *x);
+      x->model = dup(pass ? "gpt-4o" : "claude-3-5-sonnet");   /* differs: provenance */
+      x->frontend = pass ? AIMEE_WIRE_OPENAI_CHAT : AIMEE_WIRE_ANTHROPIC;
+      x->raw = cJSON_CreateObject();                            /* differs: provenance */
+      x->n_messages = 1;
+      x->messages = calloc(1, sizeof(aimee_message_t));
+      x->messages[0].role = dup("user");
+      x->messages[0].n_blocks = 1;
+      x->messages[0].blocks = mk_blocks(1);
+      x->messages[0].blocks[0].type = AIMEE_BLK_TEXT;
+      x->messages[0].blocks[0].text = dup("summarize the repo");
+   }
+   assert(aimee_ir_request_equal(&a, &b)); /* provenance ignored -> equal */
+
+   /* a divergent content byte -> not equal */
+   free(b.messages[0].blocks[0].text);
+   b.messages[0].blocks[0].text = dup("summarize the REPO");
+   assert(!aimee_ir_request_equal(&a, &b));
+
+   /* cache_control is semantic -> a difference makes them unequal */
+   free(b.messages[0].blocks[0].text);
+   b.messages[0].blocks[0].text = dup("summarize the repo");
+   assert(aimee_ir_request_equal(&a, &b));
+   b.messages[0].blocks[0].cache_control = dup("ephemeral");
+   assert(!aimee_ir_request_equal(&a, &b));
+
+   assert(aimee_ir_request_equal(NULL, NULL) == 1);
+   assert(aimee_ir_request_equal(&a, NULL) == 0);
+   aimee_request_free(&a);
+   aimee_request_free(&b);
+
    printf("ok\n");
    return 0;
 }
