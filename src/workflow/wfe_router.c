@@ -273,6 +273,110 @@ void wfe_router_decide(const char *msg, const wfe_router_catalog_t *cat,
             classifier_id ? "classifier-out-of-catalog" : "defer-no-classifier");
 }
 
+/* is `c` part of a workflow-id token? (ids are [A-Za-z0-9_-]) */
+static int id_char(char c)
+{
+   return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' ||
+          c == '-';
+}
+
+void wfe_router_classify_prompt(const wfe_router_catalog_t *cat, char *buf, size_t n)
+{
+   int off = snprintf(buf, n,
+                      "You are a request router. Classify the user's request into EXACTLY ONE of "
+                      "these workflow ids and reply with ONLY that id (no other text):\n");
+   for (int i = 0; cat && i < cat->n && off > 0 && (size_t)off < n; i++)
+   {
+      const wfe_router_wf_t *w = &cat->wf[i];
+      off += snprintf(buf + off, n - (size_t)off, "- %s%s", w->id, w->read_only ? " (read-only)" : "");
+      for (int t = 0; t < w->n_tags && (size_t)off < n; t++)
+         off += snprintf(buf + off, n - (size_t)off, "%s%s", t == 0 ? " tags: " : ",", w->tags[t]);
+      if ((size_t)off < n)
+         off += snprintf(buf + off, n - (size_t)off, "\n");
+   }
+   if (off > 0 && (size_t)off < n)
+   {
+      const wfe_router_wf_t *df = wfe_router_default(cat);
+      snprintf(buf + off, n - (size_t)off,
+               "If none clearly fit, or the request is read-only/ambiguous, reply: %s\n",
+               df ? df->id : "research");
+   }
+}
+
+int wfe_router_parse_classification(const char *response, const wfe_router_catalog_t *cat,
+                                    char *out_id, size_t n)
+{
+   if (out_id && n)
+      out_id[0] = '\0';
+   if (!response || !cat)
+      return -1;
+   /* exact-token scan: the first catalog id that appears bounded by non-id chars.
+    * Catalog order is stable, so ties are deterministic. */
+   for (const char *p = response; *p; p++)
+   {
+      if (p != response && id_char(p[-1]))
+         continue;
+      for (int i = 0; i < cat->n; i++)
+      {
+         const char *id = cat->wf[i].id;
+         size_t l = strlen(id);
+         if (strncmp(p, id, l) == 0 && !id_char(p[l]))
+         {
+            snprintf(out_id, n, "%s", id);
+            return 0;
+         }
+      }
+   }
+   return -1;
+}
+
+static const char *prefilter_name(wfe_prefilter_outcome_t o)
+{
+   switch (o)
+   {
+   case WFE_PREFILTER_CONVERSE:
+      return "converse";
+   case WFE_PREFILTER_NAMED:
+      return "named";
+   default:
+      return "defer";
+   }
+}
+
+static const char *source_name(wfe_route_source_t s)
+{
+   switch (s)
+   {
+   case WFE_ROUTE_SRC_PREFILTER:
+      return "prefilter";
+   case WFE_ROUTE_SRC_CLASSIFIER:
+      return "classifier";
+   default:
+      return "default";
+   }
+}
+
+void wfe_router_advisory_payload(const wfe_route_decision_t *d, wfe_prefilter_outcome_t prefilter,
+                                 int sampled, double classifier_ms, char *buf, size_t n)
+{
+   /* structural features only -- NO raw message text. reason/id are router-
+    * generated (safe id charset), so no JSON escaping is required here. */
+   if (classifier_ms >= 0)
+      snprintf(buf, n,
+               "{\"workflow_id\":\"%s\",\"source\":\"%s\",\"prefilter\":\"%s\","
+               "\"user_provided_name\":%s,\"sampled\":%s,\"reason\":\"%s\","
+               "\"classifier_ms\":%.1f}",
+               d->workflow_id, source_name(d->source), prefilter_name(prefilter),
+               d->user_provided_name ? "true" : "false", sampled ? "true" : "false", d->reason,
+               classifier_ms);
+   else
+      snprintf(buf, n,
+               "{\"workflow_id\":\"%s\",\"source\":\"%s\",\"prefilter\":\"%s\","
+               "\"user_provided_name\":%s,\"sampled\":%s,\"reason\":\"%s\"}",
+               d->workflow_id, source_name(d->source), prefilter_name(prefilter),
+               d->user_provided_name ? "true" : "false", sampled ? "true" : "false", d->reason);
+}
+
 int wfe_router_should_sample(const char *session_id, int turn_index, int one_in_n)
 {
    if (one_in_n <= 1)

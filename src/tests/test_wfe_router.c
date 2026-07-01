@@ -105,6 +105,34 @@ int main(void)
    wfe_router_decide("refactor everything", &c, "../evil", &d);
    assert(wfe_router_find(&c, d.workflow_id) != NULL);
 
+   /* --- classifier prompt + response parsing --- */
+   char sys[1024];
+   wfe_router_classify_prompt(&c, sys, sizeof sys);
+   assert(strstr(sys, "managed-change") && strstr(sys, "research"));
+
+   char cid[64];
+   assert(wfe_router_parse_classification("managed-change", &c, cid, sizeof cid) == 0 &&
+          strcmp(cid, "managed-change") == 0);
+   assert(wfe_router_parse_classification("The workflow is managed-change.", &c, cid, sizeof cid) ==
+          0 &&
+          strcmp(cid, "managed-change") == 0);
+   assert(wfe_router_parse_classification("```build```", &c, cid, sizeof cid) == 0 &&
+          strcmp(cid, "build") == 0);
+   assert(wfe_router_parse_classification("none of these apply", &c, cid, sizeof cid) != 0);
+   /* a substring that isn't a bounded token must NOT match (e.g. 'rebuild' != 'build') */
+   assert(wfe_router_parse_classification("rebuild the index", &c, cid, sizeof cid) != 0);
+
+   /* --- advisory payload: structural features only, no raw text --- */
+   wfe_route_decision_t pd;
+   wfe_router_decide("use build", &c, NULL, &pd);
+   char pj[512];
+   wfe_router_advisory_payload(&pd, WFE_PREFILTER_NAMED, 0, -1.0, pj, sizeof pj);
+   assert(strstr(pj, "\"workflow_id\":\"build\"") && strstr(pj, "\"source\":\"prefilter\""));
+   assert(strstr(pj, "\"user_provided_name\":true"));
+   assert(strstr(pj, "classifier_ms") == NULL); /* not run -> omitted */
+   wfe_router_advisory_payload(&pd, WFE_PREFILTER_DEFER, 1, 42.5, pj, sizeof pj);
+   assert(strstr(pj, "\"classifier_ms\":42.5") && strstr(pj, "\"sampled\":true"));
+
    /* --- deterministic sampling --- */
    assert(wfe_router_should_sample("s", 0, 1) == 1); /* 1-in-1 always */
    assert(wfe_router_should_sample("sess", 7, 10) == wfe_router_should_sample("sess", 7, 10)); /* stable */
