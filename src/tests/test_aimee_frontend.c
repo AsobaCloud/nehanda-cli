@@ -98,6 +98,53 @@ int main(void)
    cJSON_Delete(at);
    cJSON_Delete(ot);
 
+   /* --- render: one IR response -> both client wires (purely from IR) --- */
+   aimee_response_t rr;
+   memset(&rr, 0, sizeof rr);
+   rr.id = strdup("msg_x");
+   rr.model = strdup("codex");
+   rr.role = strdup("assistant");
+   rr.stop_reason = AIMEE_STOP_TOOL_USE;
+   rr.n_content = 2;
+   rr.content = calloc(2, sizeof(aimee_block_t));
+   rr.content[0].type = AIMEE_BLK_TEXT;
+   rr.content[0].text = strdup("here you go");
+   rr.content[1].type = AIMEE_BLK_TOOL_USE;
+   rr.content[1].tool_id = strdup("toolu_9");
+   rr.content[1].tool_name = strdup("Read");
+   rr.content[1].tool_input = cJSON_Parse("{\"path\":\"foo.c\"}");
+   rr.usage_in = 10;
+   rr.usage_out = 5;
+
+   /* Anthropic render */
+   cJSON *aresp = anthropic_frontend_render(&rr);
+   assert(aresp);
+   assert(strcmp(cJSON_GetObjectItem(aresp, "type")->valuestring, "message") == 0);
+   assert(strcmp(cJSON_GetObjectItem(aresp, "stop_reason")->valuestring, "tool_use") == 0);
+   cJSON *ac = cJSON_GetObjectItem(aresp, "content");
+   assert(cJSON_GetArraySize(ac) == 2);
+   assert(strcmp(cJSON_GetObjectItem(cJSON_GetArrayItem(ac, 1), "type")->valuestring, "tool_use") == 0);
+   assert(strcmp(cJSON_GetObjectItem(cJSON_GetArrayItem(ac, 1), "id")->valuestring, "toolu_9") == 0);
+   assert((int)cJSON_GetObjectItem(cJSON_GetObjectItem(aresp, "usage"), "input_tokens")->valuedouble == 10);
+
+   /* OpenAI render */
+   cJSON *oresp = openai_frontend_render(&rr);
+   assert(oresp);
+   cJSON *ochoice = cJSON_GetArrayItem(cJSON_GetObjectItem(oresp, "choices"), 0);
+   assert(strcmp(cJSON_GetObjectItem(ochoice, "finish_reason")->valuestring, "tool_calls") == 0);
+   cJSON *omsg = cJSON_GetObjectItem(ochoice, "message");
+   assert(strcmp(cJSON_GetObjectItem(omsg, "content")->valuestring, "here you go") == 0);
+   cJSON *ocall = cJSON_GetArrayItem(cJSON_GetObjectItem(omsg, "tool_calls"), 0);
+   cJSON *ofn = cJSON_GetObjectItem(ocall, "function");
+   assert(strcmp(cJSON_GetObjectItem(ofn, "name")->valuestring, "Read") == 0);
+   /* arguments re-serialized from the parsed tool_input */
+   assert(strstr(cJSON_GetObjectItem(ofn, "arguments")->valuestring, "foo.c"));
+   assert((int)cJSON_GetObjectItem(cJSON_GetObjectItem(oresp, "usage"), "total_tokens")->valuedouble == 15);
+
+   cJSON_Delete(aresp);
+   cJSON_Delete(oresp);
+   aimee_response_free(&rr);
+
    printf("ok\n");
    return 0;
 }

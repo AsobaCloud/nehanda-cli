@@ -25,4 +25,13 @@ int anthropic_frontend_parse(const struct cJSON *req, aimee_request_t *out, char
  * Sets out->frontend = AIMEE_WIRE_OPENAI_CHAT. */
 int openai_frontend_parse(const struct cJSON *req, aimee_request_t *out, char *err, size_t errn);
 
+/* Render an IR response as a buffered client response, built PURELY from the IR
+ * (ruling Q3: semantic correctness, NOT provider byte-parity). Returns a new cJSON
+ * object the caller owns (cJSON_Delete), or NULL on bad args. The canonical
+ * stop_reason is mapped into the client's vocabulary; tool_use blocks render as the
+ * client's tool-call shape (Anthropic input object / OpenAI arguments string from
+ * the parsed tool_input). */
+struct cJSON *anthropic_frontend_render(const aimee_response_t *resp);
+struct cJSON *openai_frontend_render(const aimee_response_t *resp);
+
 #endif /* DEC_AIMEE_FRONTEND_H */
