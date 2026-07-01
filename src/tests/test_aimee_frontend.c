@@ -145,6 +145,37 @@ int main(void)
    cJSON_Delete(oresp);
    aimee_response_free(&rr);
 
+   /* --- THREE-WAY golden: the same semantic turn as Anthropic, OpenAI, AND
+    *     Responses parses to IDENTICAL IR. --- */
+   cJSON *aj3 = cJSON_Parse(ANTHROPIC);
+   cJSON *oj3 = cJSON_Parse(OPENAI);
+   const char *RESPONSES =
+       "{\"model\":\"gpt-5.5\",\"max_output_tokens\":1024,"
+       "\"instructions\":\"You are a helpful coding assistant.\","
+       "\"input\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\","
+       "\"text\":\"read foo.c and summarize it\"}]}],"
+       "\"tools\":[{\"type\":\"function\",\"name\":\"Read\",\"description\":\"Read a file\","
+       "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}}]}";
+   cJSON *rj3 = cJSON_Parse(RESPONSES);
+   assert(aj3 && oj3 && rj3);
+   aimee_request_t ai3, oi3, ri3;
+   assert(anthropic_frontend_parse(aj3, &ai3, err, sizeof err) == 0);
+   assert(openai_frontend_parse(oj3, &oi3, err, sizeof err) == 0);
+   assert(responses_frontend_parse(rj3, &ri3, err, sizeof err) == 0);
+   assert(ri3.frontend == AIMEE_WIRE_RESPONSES);
+   assert(ri3.n_system == 1 && ri3.n_messages == 1 && ri3.n_tools == 1);
+   /* all three -> the same IR (max_tokens differs: Responses uses max_output_tokens
+    * -> 1024, matching; note anthropic max_tokens 1024 too) */
+   assert(aimee_ir_request_equal(&ai3, &oi3));
+   assert(aimee_ir_request_equal(&ai3, &ri3)); /* Responses == Anthropic */
+   assert(aimee_ir_request_equal(&oi3, &ri3)); /* Responses == OpenAI */
+   aimee_request_free(&ai3);
+   aimee_request_free(&oi3);
+   aimee_request_free(&ri3);
+   cJSON_Delete(aj3);
+   cJSON_Delete(oj3);
+   cJSON_Delete(rj3);
+
    printf("ok\n");
    return 0;
 }
