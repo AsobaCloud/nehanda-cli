@@ -130,6 +130,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-wfe-deliver \
                $(TESTPREFIX)/unit-test-wfe-manager-flow \
                $(TESTPREFIX)/unit-test-wfe-router \
+               $(TESTPREFIX)/unit-test-wfe-router-catalog \
                $(TESTPREFIX)/unit-test-workflow-gate-caps \
                $(TESTPREFIX)/unit-test-wfe-webapi \
                $(TESTPREFIX)/unit-test-cli-profile \
@@ -1310,6 +1311,13 @@ $(TESTPREFIX)/unit-test-wfe-deliver: $(OBJDIR)/tests/test_wfe_deliver.o \
 # S1 router pure core (no engine/DB/LLM deps).
 $(TESTPREFIX)/unit-test-wfe-router: $(OBJDIR)/tests/test_wfe_router.o \
                                     $(OBJDIR)/workflow/wfe_router.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+# S1 router catalog I/O (enumerates $AIMEE_HOME workflows + built-in lanes).
+$(TESTPREFIX)/unit-test-wfe-router-catalog: $(OBJDIR)/tests/test_wfe_router_catalog.o \
+                                    $(OBJDIR)/workflow/wfe_router_catalog.o $(OBJDIR)/workflow/wfe_router.o \
+                                    $(OBJDIR)/yaml.o $(OBJDIR)/cJSON.o $(OBJDIR)/aimee_home.o \
+                                    $(OBJDIR)/dstr.o $(OBJDIR)/posix/platform_path.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 # Integration: the manager executors driven through the real engine (DB1-backed).
