@@ -167,7 +167,12 @@ def check_cmake(cmake: Path) -> list[str]:
         if not (src_root / rel).exists():
             violations.append(f"CMakeLists.txt references missing source ${{AIMEE_SRC_DIR}}/{rel}")
     if not block:
-        violations.append("CMakeLists.txt has no add_executable(aimee-kb ...) block")
+        # CMake is thin-client-only (it builds just the `aimee` CLI). aimee-kb —
+        # like aimee-server/gateway/webchat — is a Linux/Docker component built
+        # EXCLUSIVELY via `make -C src`, so it has no CMake target. Its KB source
+        # isolation is enforced on the Makefile side (check_makefile); the absence
+        # of a CMake aimee-kb target is expected, not a violation. (Any genuinely
+        # missing sources CMake *does* reference are still reported above.)
         return violations
     for rel in CMAKE_SRC_RE.findall(block):
         if is_forbidden_source(rel):

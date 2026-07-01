@@ -4,6 +4,9 @@
 # (pass -> merge; fail -> back to implement). No engine privilege over a
 # user-authored workflow; clone and edit freely (`aimee workflow new`).
 name: build
+intent_tags:
+  - proposal
+  - full-lifecycle
 start: draft
 nodes:
   - id: draft

@@ -1,0 +1,80 @@
+# managed-change -- the default interactive "primary as manager" workflow.
+#
+# The primary agent's role, made structural: scope intent WITH the user
+# (understand) -> decompose into delegate packets (split) -> delegates do the
+# work (implement) -> the primary REVIEWS their output (review, read-only) ->
+# the primary LEADS a roundtable review (gate.roundtable) -> deliver.
+#
+# `enforced: true` means the validator REQUIRES the terminal gate.deliver node
+# (I2): "delivered" is unreachable except by crossing the gate, and the gate is
+# only crossable once review + roundtable have passed. The router (S1) may bind
+# an interactive session to this workflow; it is the default for substantive
+# multi-file change.
+name: managed-change
+intent_tags:
+  - feature
+  - multi-file-change
+  - refactor
+enforced: true
+start: understand
+nodes:
+  - id: understand
+    block: understand
+    params:
+      with_user: true
+    next: split
+  - id: split
+    block: split
+    in:
+      intent: understand.out
+    next: implement
+  - id: implement
+    block: implement
+    in:
+      plan: split.out
+    params:
+      fanout: max
+    next: freeze
+  - id: freeze
+    block: freeze
+    in:
+      branch: implement.out
+    next: review
+  # The primary reviews the delegates' frozen diff. read-only: it cannot edit
+  # the diff (S0 invariant I3, wired in a later slice) -- a requested change
+  # loops back to split for re-delegation, it is never patched here.
+  - id: review
+    block: review
+    in:
+      src: freeze.out
+    params:
+      # explicit reviewer persona, validator-checked disjoint from the rt_gate
+      # panel below (anti-rubber-stamp); bounded re-delegation via max_iters.
+      reviewer: contrarian
+      max_iters: 3
+    on_pass: rt_gate
+    on_fail: split
+  # The primary leads the roundtable; wfe_gate_decide owns pass/fail (fail-closed
+  # quorum), so "lead" is not "rubber-stamp".
+  - id: rt_gate
+    block: gate.roundtable
+    in:
+      src: freeze.out
+    params:
+      panel:
+        required:
+          - security
+          - architect
+          - qa
+          - reviewer
+      quorum: 4
+      max_rounds: 6
+    on_pass: deliver
+    on_fail: split
+  # Terminal enforcement gate: reachable only via the roundtable's on_pass, which
+  # only fires on a fail-closed pass -- so review + roundtable are both guaranteed
+  # to have passed before delivery.
+  - id: deliver
+    block: gate.deliver
+    in:
+      verdict: rt_gate.out

@@ -131,6 +131,8 @@ DB1_ONLY_TABLES = {
     "lifecycle_work_item",
     "lifecycle_event",
     "lifecycle_stage_attempt",
+    # primary-as-manager: interactive session <-> work-item binding (per-user, DB1-owned)
+    "workflow_binding",
     # webchat tab -> Claude --resume id binding (per-user, DB1-owned)
     "webchat_claude_sessions",
     # live in-flight webchat turn mirror the browser polls (per-session, DB1-owned)

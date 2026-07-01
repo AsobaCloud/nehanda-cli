@@ -25,6 +25,9 @@
 #include "gateway_policy.h"
 #include "gateway_pipeline.h"
 #include "gw_stage_memory.h"
+#include "router_advise.h"   /* gw_stage_router — the request->workflow seam */
+#include "aimee_ir_shadow.h" /* Slice 3: IR shadow-mode observer */
+#include "aimee_ir_serve.h"  /* Slice 5: IR live request-build */
 #include "ingress_preinject.h"
 #include "json_fluent.h"
 #include "server_http.h"
@@ -280,6 +283,7 @@ static int messages_run_request_pipeline(cJSON *req, const delegate_driver_t *dr
    static const gw_stage_t stages[] = {
        {gw_stage_memory, NULL, "memory"},
        {gw_stage_tool_policing, NULL, "tool_policing"},
+       {gw_stage_router, NULL, "router"}, /* S1/S2: the unified request->workflow seam */
        {gw_stage_model_pin, NULL, "model_pin"},
    };
    return gw_pipeline_run_request(&r, stages, sizeof(stages) / sizeof(stages[0]));
@@ -379,6 +383,10 @@ static int messages_buffered(const char *body, char *resp, int cap)
       return write_error(resp, cap, 400, "invalid_request_error", "invalid JSON body");
    model = jo_cstr(req, "model");
 
+   /* SHADOW (Slice 3): observe the IR round-trip on this live request. No-op unless
+    * AIMEE_IR_SHADOW is set; never affects the response. */
+   aimee_ir_shadow_observe_request(req, AIMEE_WIRE_ANTHROPIC);
+
    ag = resolve_primary(&acfg);
    if (!ag)
    {
@@ -418,9 +426,20 @@ static int messages_buffered(const char *body, char *resp, int cap)
    if (driver_is_anthropic(driver))
       prov_body = build_anthropic_provider_body(req, ag, 0, parity);
    else
-      prov_body = build_provider_body(driver, ag, messages, tools, system_text,
-                                      agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)),
-                                      jo_num(req, "temperature", 1.0), 0);
+   {
+      /* Slice 5: build the provider request VIA THE IR (parse -> IR ->
+       * backend.build; NO direct anthropic->openai translation) when the IR-path
+       * flag is on. Falls back to the legacy translator on any failure or when the
+       * flag is off, so behavior is unchanged by default. */
+      if (aimee_ir_path_enabled())
+         prov_body = aimee_ir_build_provider_body(
+             req, driver->name, ag->model,
+             agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)));
+      if (!prov_body)
+         prov_body = build_provider_body(driver, ag, messages, tools, system_text,
+                                         agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)),
+                                         jo_num(req, "temperature", 1.0), 0);
+   }
    http_status = agent_http_post(url, auth, prov_body ? prov_body : "{}", &response, ag->timeout_ms,
                                  extra[0] ? extra : NULL);
    if (http_status != 200 || !response)
@@ -670,6 +689,7 @@ static int anthropic_relay_chunk_cb(const char *data, size_t len, void *ud)
 static int messages_stream(const char *body, server_http_sse_event_emit emit, void *ctx)
 {
    cJSON *req = cJSON_Parse((body && body[0]) ? body : "{}");
+   aimee_ir_shadow_observe_request(req, AIMEE_WIRE_ANTHROPIC); /* shadow (Slice 3), gated no-op */
    agent_config_t acfg;
    agent_t *ag = req ? resolve_primary(&acfg) : NULL;
    cJSON *messages = NULL, *tools = NULL;
@@ -740,9 +760,21 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
    if (driver_is_anthropic(driver))
       prov_body = build_anthropic_provider_body(req, ag, 1, parity);
    else
-      prov_body = build_provider_body(driver, ag, messages, tools, system_text,
-                                      agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)),
-                                      jo_num(req, "temperature", 1.0), 1);
+   {
+      /* Slice 5 (streaming): build the provider request VIA THE IR when the flag is
+       * on (Claude Code streams, so this is the path that matters for the codex
+       * case); legacy fallback on failure / flag off. For codex the reply is
+       * fetched buffered + replayed as Anthropic SSE below, so no IR-delta stream
+       * translation is needed here. */
+      if (aimee_ir_path_enabled())
+         prov_body = aimee_ir_build_provider_body(
+             req, driver->name, ag->model,
+             agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)));
+      if (!prov_body)
+         prov_body = build_provider_body(driver, ag, messages, tools, system_text,
+                                         agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)),
+                                         jo_num(req, "temperature", 1.0), 1);
+   }
 
    /* P2c streaming: when gateway_prevent_subagents is ON, or the primary
     * speaks the OpenAI Responses API (`chatgpt` / Codex), the streaming

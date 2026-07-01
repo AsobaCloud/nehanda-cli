@@ -33,6 +33,24 @@ static const char *param_str(const cJSON *params, const char *key)
    return (it && cJSON_IsString(it)) ? it->valuestring : NULL;
 }
 
+/* 1 if `persona` appears in a node's params.panel.required or .eligible. */
+static int panel_has_persona(const cJSON *params, const char *persona)
+{
+   const cJSON *panel = params ? cJSON_GetObjectItemCaseSensitive(params, "panel") : NULL;
+   if (!panel || !persona)
+      return 0;
+   static const char *keys[] = {"required", "eligible"};
+   for (int k = 0; k < 2; k++)
+   {
+      const cJSON *arr = cJSON_GetObjectItemCaseSensitive(panel, keys[k]);
+      const cJSON *it = NULL;
+      if (arr && cJSON_IsArray(arr))
+         cJSON_ArrayForEach(it, arr) if (cJSON_IsString(it) &&
+                                         strcmp(it->valuestring, persona) == 0) return 1;
+   }
+   return 0;
+}
+
 /* validate one node's input bindings against the type system. */
 static int check_inputs(const wfe_def_t *def, const wfe_node_t *n, char *err, size_t errlen)
 {
@@ -158,6 +176,31 @@ int wfe_def_validate(const wfe_def_t *def, char *err, size_t errlen)
             return -1;
          }
 
+   /* node ids must be safe identifiers. They are interpolated into per-node
+    * artifact file paths (the manager blocks write <worktree>/.wfe-<id>.json) and
+    * into lifecycle stage keys, so a '/' or '..' in an id would allow path
+    * traversal out of the worktree. Restrict to [A-Za-z0-9_-]. */
+   for (int i = 0; i < def->n_nodes; i++)
+   {
+      const char *id = def->nodes[i].id;
+      if (!id[0])
+      {
+         snprintf(err, errlen, "empty node id");
+         return -1;
+      }
+      for (const char *p = id; *p; p++)
+      {
+         char c = *p;
+         if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+               c == '_' || c == '-'))
+         {
+            snprintf(err, errlen, "node id '%s' has an invalid character (allowed: A-Za-z0-9_-)",
+                     id);
+            return -1;
+         }
+      }
+   }
+
    /* start must exist */
    if (!wfe_def_node(def, def->start))
    {
@@ -203,6 +246,42 @@ int wfe_def_validate(const wfe_def_t *def, char *err, size_t errlen)
       return -1;
    }
 
+   /* I2 (enforced-workflow delivery gate): in a workflow marked `enforced`,
+    * EVERY terminal node (one with no outgoing edge) must be a gate.deliver
+    * gate -- not merely at least one. Combined with the "at least one terminal"
+    * check above and the "all nodes reachable from start" check below, this
+    * guarantees the only way to reach a completed state is by crossing
+    * gate.deliver: an alternate exit (e.g. a `merge` terminal) cannot provide a
+    * delivery path that skips the gate, and an orphaned gate.deliver is rejected
+    * by the reachability check. This is a load-time structural invariant,
+    * independent of how the YAML edges happen to be wired, so a misconfigured
+    * or hand-edited workflow cannot silently bypass enforcement. */
+   if (def->enforced)
+   {
+      int deliver_terminals = 0;
+      for (int i = 0; i < def->n_nodes; i++)
+      {
+         const wfe_node_t *n = &def->nodes[i];
+         if (n->next[0] || n->on_pass[0] || n->on_fail[0])
+            continue; /* not a terminal node */
+         if (n->block != WFE_BLK_GATE_DELIVER)
+         {
+            snprintf(err, errlen,
+                     "enforced workflow '%s': terminal node '%s' is not a gate.deliver "
+                     "(every exit must cross the delivery gate)",
+                     def->name, n->id);
+            return -1;
+         }
+         deliver_terminals++;
+      }
+      if (deliver_terminals == 0)
+      {
+         snprintf(err, errlen, "enforced workflow '%s' must terminate in a gate.deliver node",
+                  def->name);
+         return -1;
+      }
+   }
+
    /* reachability from start */
    int *seen = calloc((size_t)def->n_nodes, sizeof(int));
    if (!seen)
@@ -217,5 +296,50 @@ int wfe_def_validate(const wfe_def_t *def, char *err, size_t errlen)
          return -1;
       }
    free(seen);
+
+   /* D3 (primary-as-manager, anti-rubber-stamp): a `review` node's explicit
+    * `reviewer` persona must be disjoint from every roundtable panel in the
+    * workflow -- the primary's pre-roundtable reviewer must not also sit on the
+    * panel that then judges the same lane. Enforced at load time so a
+    * misconfiguration surfaces at definition time, not mid-run. (Reviewer
+    * role-eligibility is a runtime/roster check -- the pure def validator has no
+    * agent roster.) */
+   for (int i = 0; i < def->n_nodes; i++)
+   {
+      const wfe_node_t *rv = &def->nodes[i];
+      if (rv->block != WFE_BLK_REVIEW)
+         continue;
+      const char *reviewer = param_str(rv->params, "reviewer");
+      if (!reviewer || !reviewer[0])
+      {
+         /* An enforced workflow's review node MUST name an explicit reviewer
+          * persona -- otherwise the disjointness invariant below cannot be
+          * checked and the review executor would fall back to an arbitrary
+          * delegate that could be a panel member (rubber-stamp bypass by YAML
+          * omission). Non-enforced workflows may leave it implicit. */
+         if (def->enforced)
+         {
+            snprintf(err, errlen,
+                     "review '%s' in an enforced workflow must set an explicit 'reviewer' "
+                     "persona (disjoint from the roundtable panel)",
+                     rv->id);
+            return -1;
+         }
+         continue;
+      }
+      for (int j = 0; j < def->n_nodes; j++)
+      {
+         if (def->nodes[j].block != WFE_BLK_GATE_ROUNDTABLE)
+            continue;
+         if (panel_has_persona(def->nodes[j].params, reviewer))
+         {
+            snprintf(err, errlen,
+                     "review '%s' reviewer '%s' also sits on roundtable '%s' panel "
+                     "(reviewer must be disjoint from the panel that judges its lane)",
+                     rv->id, reviewer, def->nodes[j].id);
+            return -1;
+         }
+      }
+   }
    return 0;
 }
