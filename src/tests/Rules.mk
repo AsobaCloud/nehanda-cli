@@ -1287,6 +1287,7 @@ $(TESTPREFIX)/unit-test-wfe-blocks: $(OBJDIR)/tests/test_wfe_blocks.o \
                                     $(OBJDIR)/db1/wfe_store.o $(OBJDIR)/workflow/wfe_def.o \
                                     $(OBJDIR)/workflow/wfe_iface.o $(OBJDIR)/workflow/wfe_validate.o \
                                     $(OBJDIR)/workflow/wfe_canonical.o $(OBJDIR)/workflow/wfe_custom.o $(OBJDIR)/aimee_home.o \
+                                    $(OBJDIR)/workflow/wfe_deliver.o $(OBJDIR)/workflow/wfe_manager_artifacts.o \
                                     $(OBJDIR)/util.o $(OBJDIR)/posix/util.o $(OBJDIR)/yaml.o \
                                     $(OBJDIR)/dstr.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
@@ -1313,6 +1314,7 @@ $(TESTPREFIX)/unit-test-wfe-deliver: $(OBJDIR)/tests/test_wfe_deliver.o \
                                     $(OBJDIR)/workflow/wfe_deliver.o $(OBJDIR)/workflow/wfe_def.o \
                                     $(OBJDIR)/workflow/wfe_iface.o $(OBJDIR)/workflow/wfe_validate.o \
                                     $(OBJDIR)/workflow/wfe_canonical.o $(OBJDIR)/workflow/wfe_custom.o \
+                                    $(OBJDIR)/workflow/wfe_deliver.o $(OBJDIR)/workflow/wfe_manager_artifacts.o \
                                     $(OBJDIR)/aimee_home.o $(OBJDIR)/util.o $(OBJDIR)/posix/util.o \
                                     $(OBJDIR)/yaml.o $(OBJDIR)/dstr.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
@@ -1406,6 +1408,7 @@ $(TESTPREFIX)/unit-test-wfe-manager-flow: $(OBJDIR)/tests/test_wfe_manager_flow.
                                     $(OBJDIR)/db1/wfe_store.o $(OBJDIR)/workflow/wfe_def.o \
                                     $(OBJDIR)/workflow/wfe_iface.o $(OBJDIR)/workflow/wfe_validate.o \
                                     $(OBJDIR)/workflow/wfe_canonical.o $(OBJDIR)/workflow/wfe_custom.o \
+                                    $(OBJDIR)/workflow/wfe_deliver.o $(OBJDIR)/workflow/wfe_manager_artifacts.o \
                                     $(OBJDIR)/aimee_home.o $(OBJDIR)/util.o $(OBJDIR)/posix/util.o \
                                     $(OBJDIR)/yaml.o $(OBJDIR)/dstr.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
@@ -1417,6 +1420,7 @@ $(TESTPREFIX)/unit-test-wfe-custom: $(OBJDIR)/tests/test_wfe_custom.o \
                                     $(OBJDIR)/db1/wfe_store.o $(OBJDIR)/workflow/wfe_def.o \
                                     $(OBJDIR)/workflow/wfe_iface.o $(OBJDIR)/workflow/wfe_validate.o \
                                     $(OBJDIR)/workflow/wfe_canonical.o $(OBJDIR)/workflow/wfe_custom.o \
+                                    $(OBJDIR)/workflow/wfe_deliver.o $(OBJDIR)/workflow/wfe_manager_artifacts.o \
                                     $(OBJDIR)/aimee_home.o $(OBJDIR)/util.o $(OBJDIR)/posix/util.o \
                                     $(OBJDIR)/yaml.o $(OBJDIR)/dstr.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
@@ -1427,6 +1431,7 @@ $(TESTPREFIX)/unit-test-wfe-safety: $(OBJDIR)/tests/test_wfe_safety.o \
                                     $(OBJDIR)/db1/wfe_store.o $(OBJDIR)/workflow/wfe_def.o \
                                     $(OBJDIR)/workflow/wfe_iface.o $(OBJDIR)/workflow/wfe_validate.o \
                                     $(OBJDIR)/workflow/wfe_canonical.o $(OBJDIR)/workflow/wfe_custom.o \
+                                    $(OBJDIR)/workflow/wfe_deliver.o $(OBJDIR)/workflow/wfe_manager_artifacts.o \
                                     $(OBJDIR)/aimee_home.o $(OBJDIR)/util.o $(OBJDIR)/posix/util.o \
                                     $(OBJDIR)/yaml.o $(OBJDIR)/dstr.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
@@ -1437,6 +1442,7 @@ $(TESTPREFIX)/unit-test-wfe-delegate-seam: $(OBJDIR)/tests/test_wfe_delegate_sea
                                     $(OBJDIR)/db1/wfe_store.o $(OBJDIR)/workflow/wfe_def.o \
                                     $(OBJDIR)/workflow/wfe_iface.o $(OBJDIR)/workflow/wfe_validate.o \
                                     $(OBJDIR)/workflow/wfe_canonical.o $(OBJDIR)/workflow/wfe_custom.o \
+                                    $(OBJDIR)/workflow/wfe_deliver.o $(OBJDIR)/workflow/wfe_manager_artifacts.o \
                                     $(OBJDIR)/aimee_home.o $(OBJDIR)/util.o $(OBJDIR)/posix/util.o \
                                     $(OBJDIR)/yaml.o $(OBJDIR)/dstr.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
@@ -2008,7 +2014,7 @@ $(TESTPREFIX)/unit-test-sse-parser: $(OBJDIR)/tests/test_sse_parser.o $(OBJDIR)/
 $(TESTPREFIX)/unit-test-anthropic-ingress: $(OBJDIR)/tests/test_anthropic_ingress.o $(OBJDIR)/server/anthropic_ingress.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(L_MINIMAL)
 
-$(TESTPREFIX)/unit-test-anthropic-http: $(OBJDIR)/tests/test_anthropic_http.o $(OBJDIR)/server/gw_stage_memory.o $(OBJDIR)/server/anthropic_ingress.o $(OBJDIR)/sse_parser.o $(OBJDIR)/json_fluent.o $(OBJDIR)/cJSON.o $(OBJDIR)/gateway_pipeline.o
+$(TESTPREFIX)/unit-test-anthropic-http: $(OBJDIR)/tests/test_anthropic_http.o $(OBJDIR)/server/gw_stage_memory.o $(OBJDIR)/server/anthropic_ingress.o $(OBJDIR)/sse_parser.o $(OBJDIR)/json_fluent.o $(OBJDIR)/cJSON.o $(OBJDIR)/gateway_pipeline.o $(OBJDIR)/tests/support/ir_ingress_stubs.o
 	$(TESTLINK) -o $@ $^ $(L_MINIMAL)
 
 # P2c (response-side tool policing) integration test: same source as
@@ -2017,7 +2023,7 @@ $(TESTPREFIX)/unit-test-anthropic-http: $(OBJDIR)/tests/test_anthropic_http.o $(
 # response. The shape tests stub the request-side policy helpers so they
 # don't have to deal with guardrails dependencies; this test exercises the
 # full wiring end-to-end.
-$(TESTPREFIX)/unit-test-anthropic-http-p2c: $(OBJDIR)/tests/test_anthropic_http_p2c.o $(OBJDIR)/server/gw_stage_memory.o $(OBJDIR)/server/anthropic_ingress.o $(OBJDIR)/sse_parser.o $(OBJDIR)/json_fluent.o $(OBJDIR)/cJSON.o $(OBJDIR)/gateway_pipeline.o $(OBJDIR)/gateway_policy.o
+$(TESTPREFIX)/unit-test-anthropic-http-p2c: $(OBJDIR)/tests/test_anthropic_http_p2c.o $(OBJDIR)/server/gw_stage_memory.o $(OBJDIR)/server/anthropic_ingress.o $(OBJDIR)/sse_parser.o $(OBJDIR)/json_fluent.o $(OBJDIR)/cJSON.o $(OBJDIR)/gateway_pipeline.o $(OBJDIR)/gateway_policy.o $(OBJDIR)/tests/support/ir_ingress_stubs.o
 	$(TESTLINK) -o $@ $^ $(L_MINIMAL)
 
 # P2c streaming integration test: linked against the REAL gateway_policy.o
@@ -2025,7 +2031,7 @@ $(TESTPREFIX)/unit-test-anthropic-http-p2c: $(OBJDIR)/tests/test_anthropic_http_
 # Same minimal-link pattern as the buffered P2c test above; the SSE replay
 # helper + police function exercise the buffered-fetch + replay flow when
 # `gateway_prevent_subagents` is ON.
-$(TESTPREFIX)/unit-test-anthropic-http-streaming-p2c: $(OBJDIR)/tests/test_anthropic_http_streaming_p2c.o $(OBJDIR)/server/gw_stage_memory.o $(OBJDIR)/server/anthropic_ingress.o $(OBJDIR)/sse_parser.o $(OBJDIR)/json_fluent.o $(OBJDIR)/cJSON.o $(OBJDIR)/gateway_pipeline.o $(OBJDIR)/gateway_policy.o
+$(TESTPREFIX)/unit-test-anthropic-http-streaming-p2c: $(OBJDIR)/tests/test_anthropic_http_streaming_p2c.o $(OBJDIR)/server/gw_stage_memory.o $(OBJDIR)/server/anthropic_ingress.o $(OBJDIR)/sse_parser.o $(OBJDIR)/json_fluent.o $(OBJDIR)/cJSON.o $(OBJDIR)/gateway_pipeline.o $(OBJDIR)/gateway_policy.o $(OBJDIR)/tests/support/ir_ingress_stubs.o
 	$(TESTLINK) -o $@ $^ $(L_MINIMAL)
 
 $(TESTPREFIX)/unit-test-gateway-policy: $(OBJDIR)/tests/test_gateway_policy.o $(OBJDIR)/gateway_policy.o $(OBJDIR)/json_fluent.o $(OBJDIR)/cJSON.o
@@ -3239,6 +3245,9 @@ $(OBJDIR)/tests/support/mock_mcp_server.o: tests/support/mock_mcp_server.c
 	@mkdir -p $(dir $@) && $(CC) $(TEST_C_FLAGS) -o $@ -c $<
 
 $(OBJDIR)/tests/support/mock_agent_http.o: tests/support/mock_agent_http.c tests/support/mock_agent_http.h
+	@mkdir -p $(dir $@) && $(CC) $(TEST_C_FLAGS) -o $@ -c $<
+
+$(OBJDIR)/tests/support/ir_ingress_stubs.o: tests/support/ir_ingress_stubs.c
 	@mkdir -p $(dir $@) && $(CC) $(TEST_C_FLAGS) -o $@ -c $<
 
 $(OBJDIR)/tests/test_mcp_client_integration.o: C_FLAGS += -DMCP_MOCK_SERVER_PATH=\"$(TESTPREFIX)/mock-mcp-server\"
