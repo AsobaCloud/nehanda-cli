@@ -81,7 +81,10 @@ int delegate_build_url(const delegate_driver_t *driver, const agent_t *agent, ch
 {
    (void)driver;
    (void)agent;
-   snprintf(url, url_len, "https://example.invalid/v1/messages");
+   if (g_driver && g_driver->name && strcmp(g_driver->name, "chatgpt") == 0)
+      snprintf(url, url_len, "https://example.invalid/v1/responses");
+   else
+      snprintf(url, url_len, "https://example.invalid/v1/messages");
    return 0;
 }
 
