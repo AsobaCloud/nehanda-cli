@@ -40,6 +40,8 @@ static const char *ENFORCED_OK =
     "    block: review\n"
     "    in:\n"
     "      src: fr.out\n"
+    "    params:\n"
+    "      reviewer: contrarian\n"
     "    on_pass: rt\n"
     "    on_fail: s\n"
     "  - id: rt\n"
@@ -54,6 +56,49 @@ static const char *ENFORCED_OK =
     "      quorum: 2\n"
     "    on_pass: dl\n"
     "    on_fail: s\n"
+    "  - id: dl\n"
+    "    block: gate.deliver\n"
+    "    in:\n"
+    "      verdict: rt.out\n";
+
+/* enforced, valid otherwise, but the review node has NO explicit reviewer ->
+ * must be rejected (a missing reviewer would let the executor fall back to an
+ * arbitrary delegate = rubber-stamp bypass by omission). */
+static const char *REVIEWER_MISSING =
+    "name: norev\n"
+    "enforced: true\n"
+    "start: u\n"
+    "nodes:\n"
+    "  - id: u\n"
+    "    block: understand\n"
+    "    next: impl\n"
+    "  - id: impl\n"
+    "    block: implement\n"
+    "    in:\n"
+    "      plan: u.out\n"
+    "    next: fr\n"
+    "  - id: fr\n"
+    "    block: freeze\n"
+    "    in:\n"
+    "      branch: impl.out\n"
+    "    next: rv\n"
+    "  - id: rv\n"
+    "    block: review\n"
+    "    in:\n"
+    "      src: fr.out\n"
+    "    on_pass: rt\n"
+    "    on_fail: impl\n"
+    "  - id: rt\n"
+    "    block: gate.roundtable\n"
+    "    in:\n"
+    "      src: fr.out\n"
+    "    params:\n"
+    "      panel:\n"
+    "        required:\n"
+    "          - security\n"
+    "          - architect\n"
+    "    on_pass: dl\n"
+    "    on_fail: impl\n"
     "  - id: dl\n"
     "    block: gate.deliver\n"
     "    in:\n"
@@ -217,6 +262,26 @@ int main(void)
    assert(wfe_def_validate(clash, err, sizeof err) != 0);
    assert(strstr(err, "reviewer") != NULL || strstr(err, "disjoint") != NULL);
    wfe_def_free(clash);
+
+   /* --- D3: an enforced review node with NO explicit reviewer is rejected --- */
+   wfe_def_t *norev = parse_ok(REVIEWER_MISSING);
+   err[0] = '\0';
+   assert(wfe_def_validate(norev, err, sizeof err) != 0);
+   assert(strstr(err, "reviewer") != NULL);
+   wfe_def_free(norev);
+
+   /* --- node ids with path-traversal chars are rejected --- */
+   {
+      char e2[256] = "";
+      wfe_def_t *bad = wfe_def_parse("name: t\nstart: a\nnodes:\n  - id: ../evil\n    block: understand\n",
+                                     e2, sizeof e2);
+      if (bad)
+      {
+         assert(wfe_def_validate(bad, e2, sizeof e2) != 0);
+         assert(strstr(e2, "invalid character") != NULL);
+         wfe_def_free(bad);
+      }
+   }
 
    /* --- backward compat: an unenforced workflow needs no gate.deliver --- */
    wfe_def_t *plain = parse_ok(UNENFORCED_OK);

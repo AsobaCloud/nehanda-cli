@@ -857,14 +857,10 @@ static wfe_step_result_t exec_review(wfe_ctx *ctx, const wfe_node_t *node)
                               "review re-delegation budget exhausted", "", 0.0);
       return wfe_step_failed();
    }
-   const char *reviewer = node->params
-                              ? (cJSON_GetObjectItemCaseSensitive(node->params, "reviewer") &&
-                                         cJSON_IsString(cJSON_GetObjectItemCaseSensitive(
-                                             node->params, "reviewer"))
-                                     ? cJSON_GetObjectItemCaseSensitive(node->params, "reviewer")
-                                           ->valuestring
-                                     : "")
-                              : "";
+   const cJSON *jrev =
+       node->params ? cJSON_GetObjectItemCaseSensitive(node->params, "reviewer") : NULL;
+   const char *reviewer =
+       (jrev && cJSON_IsString(jrev) && jrev->valuestring) ? jrev->valuestring : "";
    char wd[1024];
    resolve_workdir(ctx, wd, sizeof wd);
    char path[1200];

@@ -176,6 +176,31 @@ int wfe_def_validate(const wfe_def_t *def, char *err, size_t errlen)
             return -1;
          }
 
+   /* node ids must be safe identifiers. They are interpolated into per-node
+    * artifact file paths (the manager blocks write <worktree>/.wfe-<id>.json) and
+    * into lifecycle stage keys, so a '/' or '..' in an id would allow path
+    * traversal out of the worktree. Restrict to [A-Za-z0-9_-]. */
+   for (int i = 0; i < def->n_nodes; i++)
+   {
+      const char *id = def->nodes[i].id;
+      if (!id[0])
+      {
+         snprintf(err, errlen, "empty node id");
+         return -1;
+      }
+      for (const char *p = id; *p; p++)
+      {
+         char c = *p;
+         if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+               c == '_' || c == '-'))
+         {
+            snprintf(err, errlen, "node id '%s' has an invalid character (allowed: A-Za-z0-9_-)",
+                     id);
+            return -1;
+         }
+      }
+   }
+
    /* start must exist */
    if (!wfe_def_node(def, def->start))
    {
@@ -286,7 +311,22 @@ int wfe_def_validate(const wfe_def_t *def, char *err, size_t errlen)
          continue;
       const char *reviewer = param_str(rv->params, "reviewer");
       if (!reviewer || !reviewer[0])
+      {
+         /* An enforced workflow's review node MUST name an explicit reviewer
+          * persona -- otherwise the disjointness invariant below cannot be
+          * checked and the review executor would fall back to an arbitrary
+          * delegate that could be a panel member (rubber-stamp bypass by YAML
+          * omission). Non-enforced workflows may leave it implicit. */
+         if (def->enforced)
+         {
+            snprintf(err, errlen,
+                     "review '%s' in an enforced workflow must set an explicit 'reviewer' "
+                     "persona (disjoint from the roundtable panel)",
+                     rv->id);
+            return -1;
+         }
          continue;
+      }
       for (int j = 0; j < def->n_nodes; j++)
       {
          if (def->nodes[j].block != WFE_BLK_GATE_ROUNDTABLE)
