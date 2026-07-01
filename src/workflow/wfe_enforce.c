@@ -158,6 +158,13 @@ int wfe_enforce_stage_refuses(wfe_enforce_stage_t s)
    return s == WFE_ENFORCE_HARD;
 }
 
+int wfe_advance_cas_ok(const char *observed_stage, const char *actual_stage)
+{
+   if (!observed_stage || !observed_stage[0] || !actual_stage || !actual_stage[0])
+      return -1;
+   return strcmp(observed_stage, actual_stage) == 0 ? 1 : 0;
+}
+
 /* id-charset guard so an unexpected value can never break the JSON/user text or
  * inject content -- ids are validated elsewhere, this is defense in depth. */
 static int safe_id(const char *s)

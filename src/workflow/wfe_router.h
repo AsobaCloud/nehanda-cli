@@ -35,6 +35,7 @@ typedef struct
    int n_tags;
    int is_default; /* the mandatory fallback; exactly one; must be read-only */
    int read_only;  /* converse/research lanes never mutate the repo */
+   int enforced;   /* S2: workflow is aimee-enforced (managed panel); from YAML `enforced:` */
 } wfe_router_wf_t;
 
 typedef struct

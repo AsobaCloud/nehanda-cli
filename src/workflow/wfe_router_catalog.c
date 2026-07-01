@@ -130,6 +130,7 @@ int wfe_router_catalog_load(wfe_router_catalog_t *out, char *err, size_t errlen)
             memset(w, 0, sizeof *w);
             snprintf(w->id, sizeof w->id, "%s", name);
             w->read_only = obj_true(root, "read_only");
+            w->enforced = obj_true(root, "enforced"); /* S2: aimee-enforced workflow */
             const cJSON *tags = cJSON_GetObjectItemCaseSensitive(root, "intent_tags");
             if (tags && cJSON_IsArray(tags))
             {

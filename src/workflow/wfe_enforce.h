@@ -77,6 +77,16 @@ int wfe_enforce_stage_restricts(wfe_enforce_stage_t s);
 /* 1 if a denied action must be REFUSED (hard only); soft/advisory/off allow it. */
 int wfe_enforce_stage_refuses(wfe_enforce_stage_t s);
 
+/* Compare-and-swap guard for an interactive advance_request (consult Q1). The
+ * primary's advance carries the stage it OBSERVED; the engine advances only if
+ * that still matches the work-item's ACTUAL current stage. Prevents a duplicate
+ * chat turn / retry from double-advancing or advancing the wrong block. Returns:
+ *   1  -> match, safe to advance;
+ *   0  -> stale (observed != actual): the work-item already moved, reject;
+ *  -1  -> bad args (NULL/empty). Caller layers nonce-based idempotency on top for
+ *         the exact-replay case. */
+int wfe_advance_cas_ok(const char *observed_stage, const char *actual_stage);
+
 /* Build a user-facing enforcement message. TEMPLATED CONSTANT: only the gate name
  * and work-item id (both id-charset) are interpolated -- NEVER the primary's
  * attempted action text, file paths, or packet contents (injection/exfil vector,
