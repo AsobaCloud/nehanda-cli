@@ -103,22 +103,30 @@ int openai_frontend_parse(const cJSON *req, aimee_request_t *out, char *err, siz
    const cJSON *stream = cJSON_GetObjectItemCaseSensitive((cJSON *)req, "stream");
    out->stream = (stream && cJSON_IsTrue(stream)) ? 1 : 0;
 
-   /* messages: LIFT role:"system" into out->system (to converge with Anthropic's
-    * separate system); everything else becomes an IR message. */
+   /* messages. LIFT only the LEADING CONSECUTIVE run of role:"system" into
+    * out->system (to converge with Anthropic's separate system). A system message
+    * AFTER the first non-system turn is NOT lifted -- lifting mid-conversation
+    * system would elevate later user-controlled content to system trust (a
+    * privilege-escalation / injection vector, ruling Q2) -- it is kept as a normal
+    * message with role preserved. Empty/whitespace-only system is dropped. */
    const cJSON *msgs = cJSON_GetObjectItemCaseSensitive((cJSON *)req, "messages");
    if (msgs && cJSON_IsArray(msgs))
    {
+      int leading = 1;
       const cJSON *m = NULL;
       cJSON_ArrayForEach(m, msgs)
       {
          const char *role = ostr(m, "role");
          const cJSON *content = cJSON_GetObjectItemCaseSensitive((cJSON *)m, "content");
-         if (role && strcmp(role, "system") == 0)
+         if (leading && role && strcmp(role, "system") == 0)
          {
-            if (append_openai_content(content, &out->system, &out->n_system) != 0)
+            const char *s = cJSON_IsString(content) ? content->valuestring : NULL;
+            int empty = s && s[strspn(s, " \t\r\n")] == '\0'; /* whitespace-only */
+            if (!empty && append_openai_content(content, &out->system, &out->n_system) != 0)
                goto oom;
             continue;
          }
+         leading = 0; /* the leading system run has ended */
          aimee_message_t *msg = grow1((void **)&out->messages, &out->n_messages,
                                       sizeof(aimee_message_t));
          if (!msg)
@@ -127,6 +135,30 @@ int openai_frontend_parse(const cJSON *req, aimee_request_t *out, char *err, siz
          msg->raw = cJSON_Duplicate(m, 1);
          if (append_openai_content(content, &msg->blocks, &msg->n_blocks) != 0)
             goto oom;
+         /* assistant tool_calls -> TOOL_USE blocks. tool_input is the PARSED object
+          * (canonical, cross-protocol comparable); the OpenAI `arguments` STRING is
+          * preserved in the block raw sidecar for same-protocol replay (ruling Q1
+          * option C: opaque bytes scoped to same-protocol). tool_id stays a separate
+          * typed field, carried verbatim (never derived from the args). */
+         const cJSON *calls = cJSON_GetObjectItemCaseSensitive((cJSON *)m, "tool_calls");
+         if (calls && cJSON_IsArray(calls))
+         {
+            const cJSON *call = NULL;
+            cJSON_ArrayForEach(call, calls)
+            {
+               aimee_block_t *b = grow1((void **)&msg->blocks, &msg->n_blocks,
+                                        sizeof(aimee_block_t));
+               if (!b)
+                  goto oom;
+               b->type = AIMEE_BLK_TOOL_USE;
+               b->raw = cJSON_Duplicate(call, 1);
+               b->tool_id = dupstr(ostr(call, "id"));
+               const cJSON *fn = cJSON_GetObjectItemCaseSensitive((cJSON *)call, "function");
+               b->tool_name = dupstr(fn ? ostr(fn, "name") : NULL);
+               const char *args = fn ? ostr(fn, "arguments") : NULL;
+               b->tool_input = args ? cJSON_Parse(args) : NULL; /* derived-once parse */
+            }
+         }
       }
    }
 

@@ -10,10 +10,20 @@
  * prompt-cache / correctness). The typed core is the source of truth for the core
  * stages; the sidecar is for lossless same-protocol replay + observability.
  *
- * TRUST-BOUNDARY RULE: tool names and tool arguments are OPAQUE. Never normalize
- * case/whitespace, never reorder keys, never reformat numbers/Unicode -- mangling
- * them routes tool outputs to the wrong tool (also an injection surface). Store the
- * argument JSON verbatim (the original cJSON subtree). */
+ * TRUST-BOUNDARY RULE: tool names + ids are OPAQUE and carried verbatim in their own
+ * typed fields (never derived from the args). Tool arguments follow ruling-Q1
+ * OPTION C (dual-form): the block's `raw` sidecar holds the ORIGINAL wire bytes
+ * (Anthropic input object, or the OpenAI `arguments` STRING) and is AUTHORITATIVE
+ * for SAME-protocol replay; `tool_input` holds the PARSED canonical cJSON object
+ * (derived ONCE from raw, never independently built) used for cross-protocol
+ * EQUALITY + cross-protocol backend build. The OPAQUE-byte guarantee is scoped to
+ * SAME-protocol round-trips (replay raw verbatim); cross-protocol conversion
+ * preserves SEMANTICS via `tool_input`, not bytes. CAVEAT: cJSON numbers are
+ * doubles, so a cross-protocol re-serialize can lose precision on tool-arg integers
+ * >2^53 -- prefer raw re-emit where the same-protocol fast-path applies; a
+ * precision-preserving path is future work. STREAMING: accumulate raw fragments
+ * only; materialize `tool_input` lazily when the block finalizes; an in-flight
+ * (accumulating) tool_use is NOT IR-equal until finalized. */
 #ifndef DEC_AIMEE_IR_H
 #define DEC_AIMEE_IR_H 1
 
