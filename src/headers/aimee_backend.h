@@ -28,4 +28,11 @@ struct cJSON *openai_backend_build(const aimee_request_t *ir);
 /* Parse an OpenAI chat.completion response into the IR. */
 int openai_backend_parse(const struct cJSON *resp, aimee_response_t *out, char *err, size_t errn);
 
+/* Build an OpenAI Responses API request from the IR (codex): system blocks ->
+ * `instructions`; messages -> `input` items (message / function_call); tools ->
+ * flat function tools; max_tokens -> max_output_tokens. Returns a new cJSON. */
+struct cJSON *responses_backend_build(const aimee_request_t *ir);
+/* Parse an OpenAI Responses API response (output items) into the IR. */
+int responses_backend_parse(const struct cJSON *resp, aimee_response_t *out, char *err, size_t errn);
+
 #endif /* DEC_AIMEE_BACKEND_H */

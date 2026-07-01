@@ -1353,6 +1353,7 @@ $(TESTPREFIX)/unit-test-aimee-frontend: $(OBJDIR)/tests/test_aimee_frontend.o \
 $(TESTPREFIX)/unit-test-aimee-backend: $(OBJDIR)/tests/test_aimee_backend.o \
                                       $(OBJDIR)/server/aimee_backend_anthropic.o \
                                       $(OBJDIR)/server/aimee_backend_openai.o \
+                                      $(OBJDIR)/server/aimee_backend_responses.o \
                                       $(OBJDIR)/server/aimee_frontend_anthropic.o \
                                       $(OBJDIR)/server/aimee_frontend_openai.o \
                                       $(OBJDIR)/server/aimee_ir.o $(OBJDIR)/cJSON.o
