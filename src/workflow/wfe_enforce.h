@@ -61,4 +61,27 @@ typedef enum
  * delivery enforcement). */
 wfe_fail_action_t wfe_enforce_fail_action(wfe_fail_class_t cls, int hard, int is_deliver_or_write);
 
+/* ---- the staged rollout dial (consult Q5; default OFF) ---- */
+typedef enum
+{
+   WFE_ENFORCE_OFF = 0,  /* no binding, no enforcement (default) */
+   WFE_ENFORCE_ADVISORY, /* bind + log the decision; do NOT restrict tools/deliver */
+   WFE_ENFORCE_SOFT,     /* warn the user + primary on a denied action, but ALLOW it */
+   WFE_ENFORCE_HARD      /* refuse a denied action */
+} wfe_enforce_stage_t;
+
+wfe_enforce_stage_t wfe_enforce_stage_parse(const char *s); /* unknown/NULL -> OFF */
+const char *wfe_enforce_stage_name(wfe_enforce_stage_t s);
+/* 1 if the stage actually restricts (soft warns, hard refuses); advisory/off do not. */
+int wfe_enforce_stage_restricts(wfe_enforce_stage_t s);
+/* 1 if a denied action must be REFUSED (hard only); soft/advisory/off allow it. */
+int wfe_enforce_stage_refuses(wfe_enforce_stage_t s);
+
+/* Build a user-facing enforcement message. TEMPLATED CONSTANT: only the gate name
+ * and work-item id (both id-charset) are interpolated -- NEVER the primary's
+ * attempted action text, file paths, or packet contents (injection/exfil vector,
+ * consult Q3). `gate`/`work_item_id` are truncated/omitted if absent. */
+void wfe_enforce_user_message(wfe_enforce_stage_t stage, const char *gate,
+                              const char *work_item_id, char *buf, size_t n);
+
 #endif /* DEC_WFE_ENFORCE_H */
