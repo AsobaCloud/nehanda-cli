@@ -113,6 +113,7 @@ int openai_frontend_parse(const cJSON *req, aimee_request_t *out, char *err, siz
    if (msgs && cJSON_IsArray(msgs))
    {
       int leading = 1;
+      int tool_run = -1; /* index into out->messages of the pending tool-result user msg */
       const cJSON *m = NULL;
       cJSON_ArrayForEach(m, msgs)
       {
@@ -127,6 +128,33 @@ int openai_frontend_parse(const cJSON *req, aimee_request_t *out, char *err, siz
             continue;
          }
          leading = 0; /* the leading system run has ended */
+         /* MERGE (grouping ruling, Option A): a maximal run of consecutive
+          * role:"tool" messages becomes tool_result BLOCKS in ONE canonical user
+          * message. call_id -> tool_id verbatim; content string -> tool_result. */
+         if (role && strcmp(role, "tool") == 0)
+         {
+            if (tool_run < 0)
+            {
+               aimee_message_t *tr = grow1((void **)&out->messages, &out->n_messages,
+                                           sizeof(aimee_message_t));
+               if (!tr)
+                  goto oom;
+               tr->role = dupstr("user");
+               tool_run = out->n_messages - 1;
+            }
+            aimee_message_t *tr = &out->messages[tool_run];
+            aimee_block_t *b = grow1((void **)&tr->blocks, &tr->n_blocks, sizeof(aimee_block_t));
+            if (!b)
+               goto oom;
+            b->type = AIMEE_BLK_TOOL_RESULT;
+            b->raw = cJSON_Duplicate(m, 1);
+            b->tool_id = dupstr(ostr(m, "tool_call_id"));
+            const char *tc = cJSON_IsString(content) ? content->valuestring : NULL;
+            b->tool_result = tc ? cJSON_CreateString(tc)
+                                : (content ? cJSON_Duplicate(content, 1) : NULL);
+            continue;
+         }
+         tool_run = -1; /* any non-tool message ends the run */
          aimee_message_t *msg = grow1((void **)&out->messages, &out->n_messages,
                                       sizeof(aimee_message_t));
          if (!msg)

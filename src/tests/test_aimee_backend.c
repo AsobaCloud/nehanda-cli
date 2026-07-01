@@ -181,6 +181,13 @@ int main(void)
       }
    }
    assert(found_tool);
+   /* full round-trip: Anthropic tool convo -> IR -> OpenAI wire (SPLIT) -> IR
+    * (MERGE) == the original IR. The split (backend) and merge (frontend) are
+    * inverses over the common subset. */
+   aimee_request_t conv_rt;
+   assert(openai_frontend_parse(ob, &conv_rt, err, sizeof err) == 0);
+   assert(aimee_ir_request_equal(&conv, &conv_rt));
+   aimee_request_free(&conv_rt);
    cJSON_Delete(ob);
 
    /* Responses backend: a function_call_output item with call_id=toolu_1 */
