@@ -65,6 +65,38 @@ cJSON *openai_backend_build(const aimee_request_t *ir)
    for (int i = 0; i < ir->n_messages; i++)
    {
       const aimee_message_t *im = &ir->messages[i];
+      /* SPLIT (grouping ruling, Option A): a message's tool_result blocks become
+       * role:"tool" messages FIRST (one per block, tool_call_id = tool_id verbatim),
+       * then the remaining text/tool_use content follows as the message. Rich/image
+       * tool_result content is coerced to a string here (documented lossy). */
+      int n_tr = 0, n_other = 0;
+      for (int j = 0; j < im->n_blocks; j++)
+      {
+         if (im->blocks[j].type == AIMEE_BLK_TOOL_RESULT)
+            n_tr++;
+         else
+            n_other++;
+      }
+      for (int j = 0; j < im->n_blocks && n_tr; j++)
+      {
+         const aimee_block_t *b = &im->blocks[j];
+         if (b->type != AIMEE_BLK_TOOL_RESULT)
+            continue;
+         cJSON *tm = cJSON_CreateObject();
+         cJSON_AddStringToObject(tm, "role", "tool");
+         cJSON_AddStringToObject(tm, "tool_call_id", b->tool_id ? b->tool_id : "");
+         char *content = NULL;
+         if (b->tool_result && cJSON_IsString(b->tool_result))
+            content = strdup(b->tool_result->valuestring);
+         else if (b->tool_result)
+            content = cJSON_PrintUnformatted(b->tool_result);
+         cJSON_AddStringToObject(tm, "content", content ? content : "");
+         free(content);
+         cJSON_AddItemToArray(msgs, tm);
+      }
+      if (n_other == 0 && im->n_blocks > 0)
+         continue; /* tool_result-only message: nothing else to emit */
+
       cJSON *m = cJSON_CreateObject();
       cJSON_AddStringToObject(m, "role", im->role ? im->role : "user");
       char *text = blocks_text(im->blocks, im->n_blocks);
