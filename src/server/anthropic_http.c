@@ -25,6 +25,7 @@
 #include "gateway_policy.h"
 #include "gateway_pipeline.h"
 #include "gw_stage_memory.h"
+#include "router_advise.h" /* gw_stage_router — the request->workflow seam */
 #include "ingress_preinject.h"
 #include "json_fluent.h"
 #include "server_http.h"
@@ -280,6 +281,7 @@ static int messages_run_request_pipeline(cJSON *req, const delegate_driver_t *dr
    static const gw_stage_t stages[] = {
        {gw_stage_memory, NULL, "memory"},
        {gw_stage_tool_policing, NULL, "tool_policing"},
+       {gw_stage_router, NULL, "router"}, /* S1/S2: the unified request->workflow seam */
        {gw_stage_model_pin, NULL, "model_pin"},
    };
    return gw_pipeline_run_request(&r, stages, sizeof(stages) / sizeof(stages[0]));
