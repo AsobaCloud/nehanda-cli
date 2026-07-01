@@ -233,3 +233,71 @@ oom:
    aimee_request_free(out);
    return -1;
 }
+
+/* canonical stop_reason -> Anthropic vocabulary */
+static const char *anthropic_stop(const aimee_response_t *r)
+{
+   switch (r->stop_reason)
+   {
+   case AIMEE_STOP_END_TURN:
+      return "end_turn";
+   case AIMEE_STOP_TOOL_USE:
+      return "tool_use";
+   case AIMEE_STOP_MAX_TOKENS:
+      return "max_tokens";
+   case AIMEE_STOP_STOP_SEQUENCE:
+      return "stop_sequence";
+   default:
+      /* preserve a provider-specific value if the canonical enum was UNKNOWN */
+      return r->raw_stop_reason ? r->raw_stop_reason : "end_turn";
+   }
+}
+
+cJSON *anthropic_frontend_render(const aimee_response_t *r)
+{
+   if (!r)
+      return NULL;
+   cJSON *out = cJSON_CreateObject();
+   cJSON_AddStringToObject(out, "id", r->id ? r->id : "");
+   cJSON_AddStringToObject(out, "type", "message");
+   cJSON_AddStringToObject(out, "role", r->role ? r->role : "assistant");
+   if (r->model)
+      cJSON_AddStringToObject(out, "model", r->model);
+   cJSON *content = cJSON_AddArrayToObject(out, "content");
+   for (int i = 0; i < r->n_content; i++)
+   {
+      const aimee_block_t *b = &r->content[i];
+      cJSON *el = cJSON_CreateObject();
+      if (b->type == AIMEE_BLK_TEXT)
+      {
+         cJSON_AddStringToObject(el, "type", "text");
+         cJSON_AddStringToObject(el, "text", b->text ? b->text : "");
+      }
+      else if (b->type == AIMEE_BLK_THINKING)
+      {
+         cJSON_AddStringToObject(el, "type", "thinking");
+         cJSON_AddStringToObject(el, "thinking", b->text ? b->text : "");
+      }
+      else if (b->type == AIMEE_BLK_TOOL_USE)
+      {
+         cJSON_AddStringToObject(el, "type", "tool_use");
+         cJSON_AddStringToObject(el, "id", b->tool_id ? b->tool_id : "");
+         cJSON_AddStringToObject(el, "name", b->tool_name ? b->tool_name : "");
+         cJSON_AddItemToObject(el, "input",
+                               b->tool_input ? cJSON_Duplicate(b->tool_input, 1)
+                                             : cJSON_CreateObject());
+      }
+      else
+      {
+         cJSON_Delete(el); /* drop non-renderable blocks (e.g. UNKNOWN) */
+         continue;
+      }
+      cJSON_AddItemToArray(content, el);
+   }
+   cJSON_AddStringToObject(out, "stop_reason", anthropic_stop(r));
+   cJSON_AddNullToObject(out, "stop_sequence");
+   cJSON *usage = cJSON_AddObjectToObject(out, "usage");
+   cJSON_AddNumberToObject(usage, "input_tokens", (double)r->usage_in);
+   cJSON_AddNumberToObject(usage, "output_tokens", (double)r->usage_out);
+   return out;
+}
