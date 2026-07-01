@@ -37,6 +37,7 @@
 #include "agent_types.h"
 #include "gateway_policy.h" /* gateway_policy_apply_request — tool-policing stage */
 #include "router_advise.h"  /* gw_stage_router — the request->workflow seam */
+#include "aimee_ir_serve.h"  /* IR-routed /v1/responses parse */
 #include "memory.h"         /* memory_embed_text */
 #include "request_context.h"
 #include "response_dedup.h"
@@ -1019,8 +1020,17 @@ static int responses_stream_handler(const char *body, server_http_sse_event_emit
    responses_mint_id(created, id, sizeof(id));
    char frame[2048];
 
-   if (openai_parse_responses_to_chat(body, model, sizeof(model), &instructions, &messages, &tools,
-                                      &stream) != 0)
+   /* Route the Responses CLIENT parse through the IR (no direct Responses->chat
+    * translation) when the flag is on; fall back to the legacy translator on any
+    * failure or when off. Both feed the same downstream agent path. */
+   int rp_ok = 0;
+   if (aimee_ir_path_enabled())
+      rp_ok = (aimee_ir_responses_to_chat(body, model, sizeof(model), &instructions, &messages,
+                                          &tools, &stream) == 0);
+   if (!rp_ok)
+      rp_ok = (openai_parse_responses_to_chat(body, model, sizeof(model), &instructions, &messages,
+                                              &tools, &stream) == 0);
+   if (!rp_ok)
    {
       if (openai_format_responses_created(id, model, created, frame, sizeof(frame)) > 0)
          emit(ctx, "response.created", frame);

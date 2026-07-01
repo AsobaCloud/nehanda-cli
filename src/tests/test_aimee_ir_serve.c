@@ -54,8 +54,29 @@ int main(void)
 
    /* bad request -> NULL (caller falls back to legacy) */
    assert(aimee_ir_build_provider_body(NULL, "openai", "m", 0) == NULL);
-
    cJSON_Delete(req);
+
+   /* aimee_ir_responses_to_chat: a Responses body -> chat components via the IR
+    * (system lifted to instructions, input -> chat messages) */
+   const char *RBODY =
+       "{\"model\":\"gpt-5.5\",\"stream\":true,\"instructions\":\"be helpful\","
+       "\"input\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"hi\"}]}],"
+       "\"tools\":[{\"type\":\"function\",\"name\":\"Read\",\"parameters\":{\"type\":\"object\"}}]}";
+   char mdl[64];
+   char *instr = NULL;
+   cJSON *rmsgs = NULL, *rtls = NULL;
+   int strm = 0;
+   assert(aimee_ir_responses_to_chat(RBODY, mdl, sizeof mdl, &instr, &rmsgs, &rtls, &strm) == 0);
+   assert(strcmp(mdl, "gpt-5.5") == 0);
+   assert(strm == 1);
+   assert(instr && strcmp(instr, "be helpful") == 0);
+   assert(rmsgs && cJSON_GetArraySize(rmsgs) == 1);
+   assert(strcmp(cJSON_GetObjectItem(cJSON_GetArrayItem(rmsgs, 0), "role")->valuestring, "user") == 0);
+   assert(rtls && cJSON_GetArraySize(rtls) == 1);
+   free(instr);
+   cJSON_Delete(rmsgs);
+   cJSON_Delete(rtls);
+
    printf("ok\n");
    return 0;
 }

@@ -22,4 +22,14 @@ char *aimee_ir_build_provider_body(const struct cJSON *req, const char *driver_n
 /* 1 if the IR live-path flag is enabled (config-only: AIMEE_IR_PATH env). */
 int aimee_ir_path_enabled(void);
 
+/* Drop-in for openai_parse_responses_to_chat that routes the /v1/responses CLIENT
+ * parse THROUGH THE IR (responses_frontend_parse -> IR -> chat components), instead
+ * of a direct Responses->chat translation. Same out-param contract: `model` buffer,
+ * malloc'd `*instructions_out`, and detached `*messages_out`/`*tools_out` cJSON the
+ * caller owns; `*stream_out` mirrors the request. Returns 0, or -1 (caller falls
+ * back to the legacy translator). */
+int aimee_ir_responses_to_chat(const char *body, char *model, size_t model_n,
+                               char **instructions_out, struct cJSON **messages_out,
+                               struct cJSON **tools_out, int *stream_out);
+
 #endif /* DEC_AIMEE_IR_SERVE_H */
