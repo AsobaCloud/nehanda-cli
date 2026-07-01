@@ -964,7 +964,13 @@ static int agent_execute_messages(const agent_t *agent, cJSON *messages, cJSON *
    cJSON *eff_tools = cJSON_GetObjectItemCaseSensitive(gw_raw, "tools") ? tools : NULL;
 
    int tok = agent_request_max_tokens(agent, max_tokens);
-   cJSON *req = driver->build_request(agent, messages, eff_tools, eff_system, tok, temperature);
+   /* Build the provider request VIA THE IR (no direct chat->provider translation)
+    * when the flag is on; legacy driver->build_request fallback otherwise. */
+   cJSON *req = NULL;
+   if (aimee_ir_path_enabled())
+      req = aimee_ir_build_from_chat(agent->model, messages, eff_tools, eff_system, driver->name);
+   if (!req)
+      req = driver->build_request(agent, messages, eff_tools, eff_system, tok, temperature);
    cJSON_Delete(gw_raw); /* instructions copied into req by build_request; tools was a reference */
    if (!req)
       return -1;

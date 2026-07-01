@@ -147,3 +147,50 @@ int aimee_ir_responses_to_chat(const char *body, char *model, size_t model_n,
    aimee_ir_metric_inc(AIMEE_IR_M_IR_PATH, AIMEE_WIRE_RESPONSES);
    return 0;
 }
+
+cJSON *aimee_ir_build_from_chat(const char *agent_model, const cJSON *messages, const cJSON *tools,
+                                const char *system, const char *driver_name)
+{
+   /* assemble a chat request {model, messages: [system?] + messages, tools} */
+   cJSON *chat = cJSON_CreateObject();
+   if (agent_model)
+      cJSON_AddStringToObject(chat, "model", agent_model);
+   cJSON *msgs = cJSON_AddArrayToObject(chat, "messages");
+   if (system && system[0])
+   {
+      cJSON *sm = cJSON_CreateObject();
+      cJSON_AddStringToObject(sm, "role", "system");
+      cJSON_AddStringToObject(sm, "content", system);
+      cJSON_AddItemToArray(msgs, sm);
+   }
+   if (cJSON_IsArray(messages))
+   {
+      const cJSON *m = NULL;
+      cJSON_ArrayForEach(m, messages) cJSON_AddItemToArray(msgs, cJSON_Duplicate(m, 1));
+   }
+   if (cJSON_IsArray(tools))
+      cJSON_AddItemToObject(chat, "tools", cJSON_Duplicate((cJSON *)tools, 1));
+
+   aimee_request_t ir;
+   char err[128];
+   int rc = openai_frontend_parse(chat, &ir, err, sizeof err);
+   cJSON_Delete(chat);
+   if (rc != 0)
+   {
+      aimee_ir_metric_inc(AIMEE_IR_M_PARSE_FAIL, AIMEE_WIRE_OPENAI_CHAT);
+      return NULL;
+   }
+   if (agent_model && agent_model[0])
+   {
+      free(ir.model);
+      ir.model = strdup(agent_model);
+   }
+   int is_responses = driver_name && strcmp(driver_name, "chatgpt") == 0;
+   cJSON *prov = is_responses ? responses_backend_build(&ir) : openai_backend_build(&ir);
+   aimee_request_free(&ir);
+   if (!prov)
+      aimee_ir_metric_inc(AIMEE_IR_M_BACKEND_BUILD_FAIL, AIMEE_WIRE_OPENAI_CHAT);
+   else
+      aimee_ir_metric_inc(AIMEE_IR_M_IR_PATH, AIMEE_WIRE_OPENAI_CHAT);
+   return prov;
+}

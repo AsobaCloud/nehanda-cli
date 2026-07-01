@@ -77,6 +77,19 @@ int main(void)
    cJSON_Delete(rmsgs);
    cJSON_Delete(rtls);
 
+   /* aimee_ir_build_from_chat: agent-path chat components -> provider request via IR */
+   cJSON *cm = cJSON_Parse("[{\"role\":\"user\",\"content\":\"hi\"}]");
+   cJSON *ct = cJSON_Parse("[{\"type\":\"function\",\"function\":{\"name\":\"Read\",\"parameters\":{\"type\":\"object\"}}}]");
+   cJSON *fc = aimee_ir_build_from_chat("gpt-5.5-codex", cm, ct, "be helpful", "chatgpt");
+   assert(fc);
+   assert(strcmp(cJSON_GetObjectItem(fc, "model")->valuestring, "gpt-5.5-codex") == 0);
+   assert(cJSON_IsFalse(cJSON_GetObjectItem(fc, "store")));      /* codex req shape */
+   assert(cJSON_GetObjectItem(fc, "instructions"));              /* system -> instructions */
+   assert(cJSON_GetArraySize(cJSON_GetObjectItem(fc, "input")) >= 1);
+   cJSON_Delete(fc);
+   cJSON_Delete(cm);
+   cJSON_Delete(ct);
+
    printf("ok\n");
    return 0;
 }
