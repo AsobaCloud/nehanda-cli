@@ -4,6 +4,7 @@
 #include "agent_config.h"
 #include "agent_exec.h"
 #include "agent_tools.h" /* agent_tools_set_tool_event_cb — stream tool events */
+#include "router_advise.h" /* S1 advisory request->workflow router hook */
 #include "cli_codex.h"
 #include "cli_session.h" /* cli_session_set_stream_cb — incremental tmux CLI streaming */
 #include "config.h"
@@ -1115,6 +1116,12 @@ void chat_stream_worker(void *arg)
       compute_ctx_free(cctx);
       return;
    }
+
+   /* S1 advisory router: classify this turn and log the routed workflow. Advisory
+    * ONLY -- it never binds the session to a workflow or affects the turn (S2 does
+    * the binding); it is fail-safe and sub-millisecond (no LLM). */
+   if (!compact)
+      router_advise_turn(aimee_sid, message);
 
    config_t cfg;
    config_load(&cfg);

@@ -95,6 +95,25 @@ void wfe_router_decide(const char *msg, const wfe_router_catalog_t *cat,
  * means always. */
 int wfe_router_should_sample(const char *session_id, int turn_index, int one_in_n);
 
+/* ---- classifier prompt/parse (pure; the agent_execute call is integration) -- */
+
+/* Build the classifier SYSTEM prompt: instructs the model to reply with exactly
+ * one catalog id (or the read-only default) and nothing else. Deterministic. */
+void wfe_router_classify_prompt(const wfe_router_catalog_t *cat, char *buf, size_t n);
+
+/* Parse a classifier response into a catalog id. Accepts an exact-id reply or an
+ * id embedded as a bounded token; the FIRST catalog id found wins. Returns 0 and
+ * fills out_id on a valid (allowlisted) id, -1 otherwise (caller routes to the
+ * read-only default). Never returns an id outside the catalog. */
+int wfe_router_parse_classification(const char *response, const wfe_router_catalog_t *cat,
+                                    char *out_id, size_t n);
+
+/* Build the advisory-log payload as JSON STRUCTURAL FEATURES only -- never the
+ * raw message text (PII/secrets must not be persisted to the append-only sink).
+ * classifier_ms < 0 means the classifier was not run this turn. */
+void wfe_router_advisory_payload(const wfe_route_decision_t *d, wfe_prefilter_outcome_t prefilter,
+                                 int sampled, double classifier_ms, char *buf, size_t n);
+
 /* ---- I/O layer (wfe_router_catalog.c) -------------------------------------
  * Build the catalog from the built-in read-only converse/research lanes plus
  * every $AIMEE_HOME/workflows/<name>.yaml's router metadata (name + enforced +
