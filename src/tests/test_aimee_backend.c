@@ -91,6 +91,35 @@ int main(void)
    aimee_response_free(&resp);
    cJSON_Delete(rj);
 
+   /* --- (4) OpenAI backend: Anthropic client -> IR -> OpenAI request -> re-parse
+    *         == equal IR (cross-protocol build via OpenAI). --- */
+   aimee_request_t bir;
+   parse_anthropic(ANTHROPIC, &bir);
+   cJSON *obuilt = openai_backend_build(&bir);
+   assert(obuilt);
+   aimee_request_t bir2;
+   assert(openai_frontend_parse(obuilt, &bir2, err, sizeof err) == 0);
+   assert(aimee_ir_request_equal(&bir, &bir2));
+   cJSON_Delete(obuilt);
+   aimee_request_free(&bir);
+   aimee_request_free(&bir2);
+
+   /* OpenAI response -> IR */
+   const char *ORESP =
+       "{\"id\":\"cmpl_1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"message\":"
+       "{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"call_5\","
+       "\"type\":\"function\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"path\\\":\\\"y\\\"}\"}}]},"
+       "\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":8}}";
+   cJSON *orj = cJSON_Parse(ORESP);
+   aimee_response_t oresp;
+   assert(openai_backend_parse(orj, &oresp, err, sizeof err) == 0);
+   assert(oresp.stop_reason == AIMEE_STOP_TOOL_USE);
+   assert(oresp.n_content == 1 && oresp.content[0].type == AIMEE_BLK_TOOL_USE);
+   assert(strcmp(oresp.content[0].tool_id, "call_5") == 0 && oresp.content[0].tool_input);
+   assert(oresp.usage_in == 20 && oresp.usage_out == 8);
+   aimee_response_free(&oresp);
+   cJSON_Delete(orj);
+
    printf("ok\n");
    return 0;
 }
