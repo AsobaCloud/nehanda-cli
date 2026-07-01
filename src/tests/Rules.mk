@@ -139,6 +139,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-aimee-backend \
                $(TESTPREFIX)/unit-test-aimee-ir-shadow \
                $(TESTPREFIX)/unit-test-aimee-ir-serve \
+               $(TESTPREFIX)/unit-test-aimee-ir-stream \
                $(TESTPREFIX)/unit-test-workflow-gate-caps \
                $(TESTPREFIX)/unit-test-wfe-webapi \
                $(TESTPREFIX)/unit-test-cli-profile \
@@ -1382,6 +1383,12 @@ $(TESTPREFIX)/unit-test-aimee-ir-serve: $(OBJDIR)/tests/test_aimee_ir_serve.o \
                                        $(OBJDIR)/server/aimee_frontend_responses.o \
                                        $(OBJDIR)/server/aimee_ir.o \
                                        $(OBJDIR)/server/aimee_ir_metrics.o $(OBJDIR)/cJSON.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+# Slice 4: IR-delta streaming (pure — cJSON only).
+$(TESTPREFIX)/unit-test-aimee-ir-stream: $(OBJDIR)/tests/test_aimee_ir_stream.o \
+                                        $(OBJDIR)/server/aimee_ir_stream.o \
+                                        $(OBJDIR)/server/aimee_ir.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 # S1 router catalog I/O (enumerates $AIMEE_HOME workflows + built-in lanes).

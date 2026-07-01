@@ -168,11 +168,14 @@ typedef struct
    aimee_delta_type_t type;
    int block_id;
    aimee_block_type_t kind;
-   char *text_delta;       /* BLOCK_DELTA for text/thinking */
-   char *tool_args_delta;  /* BLOCK_DELTA for tool_use argument JSON fragment */
+   /* BLOCK_START of a tool_use carries the id + name (opaque, verbatim). */
+   const char *tool_id;
+   const char *tool_name;
+   const char *text_delta;      /* BLOCK_DELTA for text/thinking */
+   const char *tool_args_delta; /* BLOCK_DELTA for tool_use argument JSON fragment */
    aimee_stop_reason_t stop_reason; /* TURN_STOP */
    long usage_in, usage_out;        /* TURN_STOP */
-   char *error_message;    /* ERROR */
+   const char *error_message;       /* ERROR */
 } aimee_delta_t;
 
 /* ---- lifecycle ---- */
