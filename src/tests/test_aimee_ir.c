@@ -1,0 +1,110 @@
+/* test_aimee_ir.c -- Slice 0: the canonical IR structs, the shape-agnostic
+ * last-user-text extractor (the KB fix), stop-reason round-trip, and clean free. */
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "aimee_ir.h"
+#include "cJSON.h"
+
+static char *dup(const char *s) { return s ? strdup(s) : NULL; }
+
+/* helper: a heap message with `n` text/other blocks */
+static aimee_block_t *mk_blocks(int n) { return calloc((size_t)n, sizeof(aimee_block_t)); }
+
+int main(void)
+{
+   printf("aimee-ir: ");
+
+   /* --- last_user_text: last user message, concat TEXT blocks, drop non-text --- */
+   aimee_request_t r;
+   memset(&r, 0, sizeof r);
+   r.n_messages = 3;
+   r.messages = calloc(3, sizeof(aimee_message_t));
+
+   r.messages[0].role = dup("user");
+   r.messages[0].n_blocks = 1;
+   r.messages[0].blocks = mk_blocks(1);
+   r.messages[0].blocks[0].type = AIMEE_BLK_TEXT;
+   r.messages[0].blocks[0].text = dup("first user turn");
+
+   r.messages[1].role = dup("assistant");
+   r.messages[1].n_blocks = 1;
+   r.messages[1].blocks = mk_blocks(1);
+   r.messages[1].blocks[0].type = AIMEE_BLK_TEXT;
+   r.messages[1].blocks[0].text = dup("assistant reply");
+
+   /* last user: two text blocks + a tool_result block that must NOT be concatenated
+    * (but must not cause the message to be skipped) */
+   r.messages[2].role = dup("user");
+   r.messages[2].n_blocks = 3;
+   r.messages[2].blocks = mk_blocks(3);
+   r.messages[2].blocks[0].type = AIMEE_BLK_TEXT;
+   r.messages[2].blocks[0].text = dup("fix ");
+   r.messages[2].blocks[1].type = AIMEE_BLK_TOOL_RESULT;
+   r.messages[2].blocks[1].tool_id = dup("call_1");
+   r.messages[2].blocks[1].tool_result = cJSON_CreateString("output that must not leak into the query");
+   r.messages[2].blocks[2].type = AIMEE_BLK_TEXT;
+   r.messages[2].blocks[2].text = dup("the login bug");
+
+   char q[128];
+   size_t got = aimee_ir_last_user_text(&r, q, sizeof q);
+   assert(got == strlen("fix the login bug"));
+   assert(strcmp(q, "fix the login bug") == 0); /* tool_result dropped, texts joined */
+
+   /* truncation: tiny buffer never overflows and is NUL-terminated */
+   char tiny[6];
+   size_t t = aimee_ir_last_user_text(&r, tiny, sizeof tiny);
+   assert(t == 5 && strcmp(tiny, "fix t") == 0);
+
+   /* NULL/empty guards */
+   assert(aimee_ir_last_user_text(&r, NULL, 0) == 0);
+   assert(aimee_ir_last_user_text(NULL, q, sizeof q) == 0 && q[0] == '\0');
+
+   aimee_request_free(&r);
+   /* free zeroes the struct */
+   assert(r.messages == NULL && r.n_messages == 0);
+
+   /* --- no user message -> empty --- */
+   aimee_request_t r2;
+   memset(&r2, 0, sizeof r2);
+   r2.n_messages = 1;
+   r2.messages = calloc(1, sizeof(aimee_message_t));
+   r2.messages[0].role = dup("assistant");
+   assert(aimee_ir_last_user_text(&r2, q, sizeof q) == 0 && q[0] == '\0');
+   aimee_request_free(&r2);
+
+   /* --- stop_reason canonical round-trip --- */
+   aimee_stop_reason_t all[] = {AIMEE_STOP_END_TURN,       AIMEE_STOP_MAX_TOKENS,
+                                AIMEE_STOP_TOOL_USE,        AIMEE_STOP_STOP_SEQUENCE,
+                                AIMEE_STOP_CONTENT_FILTER,  AIMEE_STOP_ERROR,
+                                AIMEE_STOP_UNKNOWN};
+   for (size_t i = 0; i < sizeof all / sizeof all[0]; i++)
+      assert(aimee_stop_reason_parse(aimee_stop_reason_name(all[i])) == all[i]);
+   assert(aimee_stop_reason_parse("bogus") == AIMEE_STOP_UNKNOWN);
+   assert(aimee_stop_reason_parse(NULL) == AIMEE_STOP_UNKNOWN);
+
+   /* --- response free with content blocks + sidecars (no leak / no crash) --- */
+   aimee_response_t resp;
+   memset(&resp, 0, sizeof resp);
+   resp.id = dup("msg_1");
+   resp.model = dup("codex");
+   resp.role = dup("assistant");
+   resp.stop_reason = AIMEE_STOP_TOOL_USE;
+   resp.raw_stop_reason = dup("tool_calls");
+   resp.n_content = 2;
+   resp.content = mk_blocks(2);
+   resp.content[0].type = AIMEE_BLK_TEXT;
+   resp.content[0].text = dup("let me call a tool");
+   resp.content[1].type = AIMEE_BLK_TOOL_USE;
+   resp.content[1].tool_id = dup("call_9");
+   resp.content[1].tool_name = dup("Read");
+   resp.content[1].tool_input = cJSON_Parse("{\"path\":\"foo.c\"}");
+   resp.raw = cJSON_CreateObject();
+   aimee_response_free(&resp);
+   assert(resp.content == NULL && resp.id == NULL);
+
+   printf("ok\n");
+   return 0;
+}
