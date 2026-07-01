@@ -132,6 +132,10 @@ int main(void)
    assert(wfe_router_parse_classification("none of these apply", &c, cid, sizeof cid) != 0);
    /* a substring that isn't a bounded token must NOT match (e.g. 'rebuild' != 'build') */
    assert(wfe_router_parse_classification("rebuild the index", &c, cid, sizeof cid) != 0);
+   /* reasoning-style reply: earlier ids are mentioned but the ANSWER is last */
+   assert(wfe_router_parse_classification("Not converse or research; answer: managed-change", &c,
+                                          cid, sizeof cid) == 0 &&
+          strcmp(cid, "managed-change") == 0);
 
    /* --- advisory payload: structural features only, no raw text --- */
    wfe_route_decision_t pd;
