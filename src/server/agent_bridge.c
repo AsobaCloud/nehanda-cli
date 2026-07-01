@@ -653,14 +653,31 @@ static void responses_handle_sse_event(const char *event, const char *data, pars
    else if (strcmp(event, "response.output_text.delta") == 0)
    {
       cJSON *delta = cJSON_GetObjectItem(ev, "delta");
+      const char *text = NULL;
       if (cJSON_IsString(delta))
-         (void)append_text(delta_text, delta->valuestring);
+         text = delta->valuestring;
+      else if (cJSON_IsObject(delta))
+      {
+         cJSON *v;
+         if ((v = cJSON_GetObjectItem(delta, "text")) && cJSON_IsString(v))
+            text = v->valuestring;
+         else if ((v = cJSON_GetObjectItem(delta, "value")) && cJSON_IsString(v))
+            text = v->valuestring;
+      }
+      if (text)
+         (void)append_text(delta_text, text);
    }
    else if (strcmp(event, "response.output_text.done") == 0)
    {
       cJSON *text = cJSON_GetObjectItem(ev, "text");
       if (cJSON_IsString(text))
          (void)append_text(done_text, text->valuestring);
+      else if (cJSON_IsObject(text))
+      {
+         cJSON *v = cJSON_GetObjectItem(text, "text");
+         if (cJSON_IsString(v))
+            (void)append_text(done_text, v->valuestring);
+      }
    }
    else if (strcmp(event, "response.content_part.done") == 0)
    {
