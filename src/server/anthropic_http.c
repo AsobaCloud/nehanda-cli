@@ -759,9 +759,20 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
    if (driver_is_anthropic(driver))
       prov_body = build_anthropic_provider_body(req, ag, 1, parity);
    else
-      prov_body = build_provider_body(driver, ag, messages, tools, system_text,
-                                      agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)),
-                                      jo_num(req, "temperature", 1.0), 1);
+   {
+      /* Slice 5 (streaming): build the provider request VIA THE IR when the flag is
+       * on (Claude Code streams, so this is the path that matters for the codex
+       * case); legacy fallback on failure / flag off. For codex the reply is
+       * fetched buffered + replayed as Anthropic SSE below, so no IR-delta stream
+       * translation is needed here. */
+      if (aimee_ir_path_enabled())
+         prov_body = aimee_ir_build_provider_body(
+             req, driver->name, ag->model, agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)));
+      if (!prov_body)
+         prov_body = build_provider_body(driver, ag, messages, tools, system_text,
+                                         agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)),
+                                         jo_num(req, "temperature", 1.0), 1);
+   }
 
    /* P2c streaming: when gateway_prevent_subagents is ON, or the primary
     * speaks the OpenAI Responses API (`chatgpt` / Codex), the streaming
