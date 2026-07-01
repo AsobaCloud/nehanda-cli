@@ -13,7 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char *dupstr(const char *s) { return s ? strdup(s) : NULL; }
+static char *dupstr(const char *s)
+{
+   return s ? strdup(s) : NULL;
+}
 
 static const char *ostr(const cJSON *o, const char *k)
 {

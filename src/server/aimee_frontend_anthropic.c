@@ -8,7 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char *dupstr(const char *s) { return s ? strdup(s) : NULL; }
+static char *dupstr(const char *s)
+{
+   return s ? strdup(s) : NULL;
+}
 
 static const char *ostr(const cJSON *o, const char *k)
 {
@@ -112,7 +115,10 @@ static int parse_content(const cJSON *content, aimee_block_t **out, int *n)
       return -1;
    int i = 0;
    const cJSON *el = NULL;
-   cJSON_ArrayForEach(el, content) { parse_block(el, &arr[i++]); }
+   cJSON_ArrayForEach(el, content)
+   {
+      parse_block(el, &arr[i++]);
+   }
    *out = arr;
    *n = cnt;
    return 0;
@@ -283,9 +289,8 @@ cJSON *anthropic_frontend_render(const aimee_response_t *r)
          cJSON_AddStringToObject(el, "type", "tool_use");
          cJSON_AddStringToObject(el, "id", b->tool_id ? b->tool_id : "");
          cJSON_AddStringToObject(el, "name", b->tool_name ? b->tool_name : "");
-         cJSON_AddItemToObject(el, "input",
-                               b->tool_input ? cJSON_Duplicate(b->tool_input, 1)
-                                             : cJSON_CreateObject());
+         cJSON_AddItemToObject(
+             el, "input", b->tool_input ? cJSON_Duplicate(b->tool_input, 1) : cJSON_CreateObject());
       }
       else
       {

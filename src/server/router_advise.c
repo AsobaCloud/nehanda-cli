@@ -72,8 +72,8 @@ static void *classify_thread(void *arg)
           * (observed live on .254 with minimax at 32 tokens). */
          int rc = agent_run(&acfg, "summarize", sys, a->message, 256, &res);
          clock_gettime(CLOCK_MONOTONIC, &t1);
-         double ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0 +
-                     (double)(t1.tv_nsec - t0.tv_nsec) / 1.0e6;
+         double ms =
+             (double)(t1.tv_sec - t0.tv_sec) * 1000.0 + (double)(t1.tv_nsec - t0.tv_nsec) / 1.0e6;
 
          char cbuf[WFE_ROUTER_ID_LEN] = "";
          const char *cid =

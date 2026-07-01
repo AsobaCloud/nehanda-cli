@@ -78,7 +78,8 @@ int wfe_router_catalog_load(wfe_router_catalog_t *out, char *err, size_t errlen)
    char dir[1024];
    int dn = snprintf(dir, sizeof dir, "%s/workflows", aimee_home());
    if (dn < 0 || (size_t)dn >= sizeof dir)
-      return wfe_router_catalog_validate(out, err, errlen); /* home path too long -> built-ins only */
+      return wfe_router_catalog_validate(out, err,
+                                         errlen); /* home path too long -> built-ins only */
    DIR *d = opendir(dir);
    if (d)
    {

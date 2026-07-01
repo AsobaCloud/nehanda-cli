@@ -19,7 +19,8 @@ struct cJSON *anthropic_backend_build(const aimee_request_t *ir);
 
 /* Parse an Anthropic Messages API response into the IR. Returns 0 (out owned by
  * caller -> aimee_response_free), -1 on error. */
-int anthropic_backend_parse(const struct cJSON *resp, aimee_response_t *out, char *err, size_t errn);
+int anthropic_backend_parse(const struct cJSON *resp, aimee_response_t *out, char *err,
+                            size_t errn);
 
 /* Build an OpenAI Chat Completions request from the IR (system blocks -> leading
  * system messages; tool_use -> assistant tool_calls; tools -> function tools).
@@ -33,6 +34,7 @@ int openai_backend_parse(const struct cJSON *resp, aimee_response_t *out, char *
  * flat function tools; max_tokens -> max_output_tokens. Returns a new cJSON. */
 struct cJSON *responses_backend_build(const aimee_request_t *ir);
 /* Parse an OpenAI Responses API response (output items) into the IR. */
-int responses_backend_parse(const struct cJSON *resp, aimee_response_t *out, char *err, size_t errn);
+int responses_backend_parse(const struct cJSON *resp, aimee_response_t *out, char *err,
+                            size_t errn);
 
 #endif /* DEC_AIMEE_BACKEND_H */

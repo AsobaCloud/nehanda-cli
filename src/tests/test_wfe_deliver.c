@@ -11,21 +11,20 @@
 /* review(rv) -> roundtable(rt) -> gate.deliver(dl); both rv and rt are gates on
  * the success path to dl, so both must have approving records. Parses (blocks +
  * edges recognized); not type-validated -- the policy only needs the graph. */
-static const char *WF =
-    "name: t\n"
-    "enforced: true\n"
-    "start: rv\n"
-    "nodes:\n"
-    "  - id: rv\n"
-    "    block: review\n"
-    "    on_pass: rt\n"
-    "    on_fail: rv\n"
-    "  - id: rt\n"
-    "    block: gate.roundtable\n"
-    "    on_pass: dl\n"
-    "    on_fail: rv\n"
-    "  - id: dl\n"
-    "    block: gate.deliver\n";
+static const char *WF = "name: t\n"
+                        "enforced: true\n"
+                        "start: rv\n"
+                        "nodes:\n"
+                        "  - id: rv\n"
+                        "    block: review\n"
+                        "    on_pass: rt\n"
+                        "    on_fail: rv\n"
+                        "  - id: rt\n"
+                        "    block: gate.roundtable\n"
+                        "    on_pass: dl\n"
+                        "    on_fail: rv\n"
+                        "  - id: dl\n"
+                        "    block: gate.deliver\n";
 
 static int mock_advanced(const char *id, void *ctx)
 {

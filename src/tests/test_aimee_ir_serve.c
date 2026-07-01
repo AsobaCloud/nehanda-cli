@@ -26,7 +26,8 @@ int main(void)
    assert(rbody);
    cJSON *rj = cJSON_Parse(rbody);
    assert(rj);
-   assert(strcmp(cJSON_GetObjectItem(rj, "model")->valuestring, "gpt-5.5-codex") == 0); /* agent's */
+   assert(strcmp(cJSON_GetObjectItem(rj, "model")->valuestring, "gpt-5.5-codex") ==
+          0); /* agent's */
    /* codex requirements (verified live): store=false, stream=true, no max_output_tokens */
    assert(cJSON_IsFalse(cJSON_GetObjectItem(rj, "store")));
    assert(cJSON_IsTrue(cJSON_GetObjectItem(rj, "stream")));
@@ -47,7 +48,8 @@ int main(void)
    /* messages: a leading system message + the user message */
    cJSON *msgs = cJSON_GetObjectItem(oj, "messages");
    assert(cJSON_GetArraySize(msgs) == 2);
-   assert(strcmp(cJSON_GetObjectItem(cJSON_GetArrayItem(msgs, 0), "role")->valuestring, "system") == 0);
+   assert(strcmp(cJSON_GetObjectItem(cJSON_GetArrayItem(msgs, 0), "role")->valuestring, "system") ==
+          0);
    assert(cJSON_GetObjectItem(oj, "tools"));
    cJSON_Delete(oj);
    free(obody);
@@ -58,10 +60,11 @@ int main(void)
 
    /* aimee_ir_responses_to_chat: a Responses body -> chat components via the IR
     * (system lifted to instructions, input -> chat messages) */
-   const char *RBODY =
-       "{\"model\":\"gpt-5.5\",\"stream\":true,\"instructions\":\"be helpful\","
-       "\"input\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"hi\"}]}],"
-       "\"tools\":[{\"type\":\"function\",\"name\":\"Read\",\"parameters\":{\"type\":\"object\"}}]}";
+   const char *RBODY = "{\"model\":\"gpt-5.5\",\"stream\":true,\"instructions\":\"be helpful\","
+                       "\"input\":[{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":"
+                       "\"input_text\",\"text\":\"hi\"}]}],"
+                       "\"tools\":[{\"type\":\"function\",\"name\":\"Read\",\"parameters\":{"
+                       "\"type\":\"object\"}}]}";
    char mdl[64];
    char *instr = NULL;
    cJSON *rmsgs = NULL, *rtls = NULL;
@@ -71,7 +74,8 @@ int main(void)
    assert(strm == 1);
    assert(instr && strcmp(instr, "be helpful") == 0);
    assert(rmsgs && cJSON_GetArraySize(rmsgs) == 1);
-   assert(strcmp(cJSON_GetObjectItem(cJSON_GetArrayItem(rmsgs, 0), "role")->valuestring, "user") == 0);
+   assert(strcmp(cJSON_GetObjectItem(cJSON_GetArrayItem(rmsgs, 0), "role")->valuestring, "user") ==
+          0);
    assert(rtls && cJSON_GetArraySize(rtls) == 1);
    free(instr);
    cJSON_Delete(rmsgs);
@@ -79,12 +83,13 @@ int main(void)
 
    /* aimee_ir_build_from_chat: agent-path chat components -> provider request via IR */
    cJSON *cm = cJSON_Parse("[{\"role\":\"user\",\"content\":\"hi\"}]");
-   cJSON *ct = cJSON_Parse("[{\"type\":\"function\",\"function\":{\"name\":\"Read\",\"parameters\":{\"type\":\"object\"}}}]");
+   cJSON *ct = cJSON_Parse("[{\"type\":\"function\",\"function\":{\"name\":\"Read\",\"parameters\":"
+                           "{\"type\":\"object\"}}}]");
    cJSON *fc = aimee_ir_build_from_chat("gpt-5.5-codex", cm, ct, "be helpful", "chatgpt");
    assert(fc);
    assert(strcmp(cJSON_GetObjectItem(fc, "model")->valuestring, "gpt-5.5-codex") == 0);
-   assert(cJSON_IsFalse(cJSON_GetObjectItem(fc, "store")));      /* codex req shape */
-   assert(cJSON_GetObjectItem(fc, "instructions"));              /* system -> instructions */
+   assert(cJSON_IsFalse(cJSON_GetObjectItem(fc, "store"))); /* codex req shape */
+   assert(cJSON_GetObjectItem(fc, "instructions"));         /* system -> instructions */
    assert(cJSON_GetArraySize(cJSON_GetObjectItem(fc, "input")) >= 1);
    cJSON_Delete(fc);
    cJSON_Delete(cm);
