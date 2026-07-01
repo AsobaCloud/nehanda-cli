@@ -333,8 +333,12 @@ int wfe_router_parse_classification(const char *response, const wfe_router_catal
       out_id[0] = '\0';
    if (!response || !cat)
       return -1;
-   /* exact-token scan: the first catalog id that appears bounded by non-id chars.
-    * Catalog order is stable, so ties are deterministic. */
+   /* Scan for a catalog id that appears bounded by non-id chars, and keep the
+    * LAST such match: models are told to reply with only the id, but a reasoning
+    * model may narrate first and put its answer at the end, so the final id token
+    * is the most reliable signal (a clean single-token reply has last == first).
+    * Catalog order is stable, so any residual tie is deterministic. */
+   const char *found = NULL;
    for (const char *p = response; *p; p++)
    {
       if (p != response && id_char(p[-1]))
@@ -345,12 +349,15 @@ int wfe_router_parse_classification(const char *response, const wfe_router_catal
          size_t l = strlen(id);
          if (strncmp(p, id, l) == 0 && !id_char(p[l]))
          {
-            snprintf(out_id, n, "%s", id);
-            return 0;
+            found = id;
+            break;
          }
       }
    }
-   return -1;
+   if (!found)
+      return -1;
+   snprintf(out_id, n, "%s", found);
+   return 0;
 }
 
 static const char *prefilter_name(wfe_prefilter_outcome_t o)
