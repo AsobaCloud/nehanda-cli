@@ -7,6 +7,9 @@
 # feeds understand -> implement directly (no split), which is the only structural
 # difference from managed-change.
 name: hotfix
+intent_tags:
+  - one-liner
+  - trivial-fix
 enforced: true
 start: understand
 nodes:

@@ -95,4 +95,13 @@ void wfe_router_decide(const char *msg, const wfe_router_catalog_t *cat,
  * means always. */
 int wfe_router_should_sample(const char *session_id, int turn_index, int one_in_n);
 
+/* ---- I/O layer (wfe_router_catalog.c) -------------------------------------
+ * Build the catalog from the built-in read-only converse/research lanes plus
+ * every $AIMEE_HOME/workflows/<name>.yaml's router metadata (name + enforced +
+ * read_only + intent_tags). Symlinks and non-regular files in the workflows dir
+ * are skipped (escape guard). `research` is the built-in default; a workflow
+ * YAML that sets `default` is rejected. Returns 0 on a valid catalog, -1 + err
+ * otherwise (the router must fail closed on an invalid catalog). */
+int wfe_router_catalog_load(wfe_router_catalog_t *out, char *err, size_t errlen);
+
 #endif /* DEC_WFE_ROUTER_H */

@@ -11,6 +11,10 @@
 # an interactive session to this workflow; it is the default for substantive
 # multi-file change.
 name: managed-change
+intent_tags:
+  - feature
+  - multi-file-change
+  - refactor
 enforced: true
 start: understand
 nodes:
