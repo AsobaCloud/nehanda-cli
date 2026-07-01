@@ -16,6 +16,15 @@
 #include "cJSON.h"
 #include "yaml.h"
 
+/* O_NOFOLLOW/O_CLOEXEC are POSIX; on non-POSIX (Windows/MinGW) degrade to 0. The
+ * symlink-escape hardening they provide is Linux-deploy-only. */
+#ifndef O_NOFOLLOW
+#define O_NOFOLLOW 0
+#endif
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+
 static int obj_true(const cJSON *root, const char *key)
 {
    const cJSON *it = cJSON_GetObjectItemCaseSensitive(root, key);
