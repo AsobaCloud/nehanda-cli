@@ -58,16 +58,17 @@ cJSON *responses_backend_build(const aimee_request_t *ir)
       cJSON_AddStringToObject(out, "model", ir->model);
    if (ir->has_max_tokens)
       cJSON_AddNumberToObject(out, "max_output_tokens", ir->max_tokens);
-   if (ir->stream)
-      cJSON_AddBoolToObject(out, "stream", 1);
-   /* system blocks -> `instructions` (Responses' system field) */
-   if (ir->n_system > 0)
-   {
-      char *instr = blocks_text(ir->system, ir->n_system);
-      if (instr)
-         cJSON_AddStringToObject(out, "instructions", instr);
-      free(instr);
-   }
+   /* Responses/codex REQUIREMENTS (verified live: codex 400s with "Store must be
+    * set to false" otherwise): store=false, and the API is SSE-based so stream is
+    * always on (the caller accumulates + parses the SSE). */
+   cJSON_AddBoolToObject(out, "store", 0);
+   cJSON_AddBoolToObject(out, "stream", 1);
+   /* system blocks -> `instructions` (Responses' system field); a default keeps
+    * codex happy when the client sent no system. */
+   char *instr = ir->n_system > 0 ? blocks_text(ir->system, ir->n_system) : NULL;
+   cJSON_AddStringToObject(out, "instructions",
+                           (instr && instr[0]) ? instr : "You are an execution agent.");
+   free(instr);
 
    cJSON *input = cJSON_AddArrayToObject(out, "input");
    for (int i = 0; i < ir->n_messages; i++)
