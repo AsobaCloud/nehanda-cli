@@ -122,5 +122,11 @@ CREATE INDEX IF NOT EXISTS idx_lifecycle_event_wi ON lifecycle_event(work_item_i
 CREATE INDEX IF NOT EXISTS idx_lwi_submitter_state_mode ON lifecycle_work_item(submitter, state, mode);
 CREATE INDEX IF NOT EXISTS idx_lwi_submitter_created ON lifecycle_work_item(submitter, created_at);
 CREATE TABLE IF NOT EXISTS lifecycle_stage_attempt ( work_item_id TEXT NOT NULL, stage TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (work_item_id, stage));
+-- S2 primary-as-manager: interactive session <-> work-item binding (single-writer).
+-- aimee_session_id is PK (one binding per session); the index on work_item_id lets
+-- the bind path reject a second session binding the same work-item. enforce_stage
+-- is stamped once at bind and is monotonic per work-item (never downgraded on re-bind).
+CREATE TABLE IF NOT EXISTS workflow_binding ( aimee_session_id TEXT NOT NULL PRIMARY KEY, work_item_id TEXT NOT NULL, enforce_stage TEXT NOT NULL DEFAULT 'off', lease_expiry TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+CREATE INDEX IF NOT EXISTS idx_workflow_binding_wi ON workflow_binding(work_item_id);
 CREATE TABLE IF NOT EXISTS harness_memory ( id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'fact' CHECK (type IN ('fact','index','note','scratch')), description TEXT, body TEXT NOT NULL DEFAULT '', meta_json TEXT NOT NULL DEFAULT '{}', content_hash TEXT NOT NULL DEFAULT '', last_client TEXT NOT NULL DEFAULT '', source_session TEXT NOT NULL DEFAULT '', schema_version INTEGER NOT NULL DEFAULT 1, deleted_at TEXT DEFAULT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(project, name));
 CREATE INDEX IF NOT EXISTS idx_harness_memory_project ON harness_memory(project, deleted_at);
