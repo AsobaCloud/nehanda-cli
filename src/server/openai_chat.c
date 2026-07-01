@@ -36,6 +36,7 @@
 #include "agent_tools.h" /* agent_tools_set_tool_event_cb — /v1/runs tool events */
 #include "agent_types.h"
 #include "gateway_policy.h" /* gateway_policy_apply_request — tool-policing stage */
+#include "router_advise.h"  /* gw_stage_router — the request->workflow seam */
 #include "memory.h"         /* memory_embed_text */
 #include "request_context.h"
 #include "response_dedup.h"
@@ -953,6 +954,7 @@ static int agent_execute_messages(const agent_t *agent, cJSON *messages, cJSON *
    const gw_stage_t stages[] = {
        {gw_stage_memory, messages, "memory"},
        {gw_stage_openai_tool_policing, NULL, "tool_policing"},
+       {gw_stage_router, NULL, "router"}, /* S1/S2: the unified request->workflow seam */
    };
    gw_pipeline_run_request(&gr, stages, sizeof(stages) / sizeof(stages[0]));
 

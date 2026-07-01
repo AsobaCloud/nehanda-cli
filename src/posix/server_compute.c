@@ -1117,11 +1117,12 @@ void chat_stream_worker(void *arg)
       return;
    }
 
-   /* S1 advisory router: classify this turn and log the routed workflow. Advisory
-    * ONLY -- it never binds the session to a workflow or affects the turn (S2 does
-    * the binding); it is fail-safe and sub-millisecond (no LLM). */
-   if (!compact)
-      router_advise_turn(aimee_sid, message);
+   /* The S1/S2 request->workflow router now runs at the UNIFIED gateway seam
+    * (gw_stage_router, wired into the /v1/messages + /v1/chat/completions request
+    * pipelines), so it fires for the primary CLI AND every delegate. It was
+    * previously hooked HERE, but chat_stream_worker only serves the /v1/chat
+    * OpenAI-compat path -- the primary `aimee chat` CLI execs the provider CLI,
+    * which reaches the gateway, never this worker. See router_advise.c. */
 
    config_t cfg;
    config_load(&cfg);

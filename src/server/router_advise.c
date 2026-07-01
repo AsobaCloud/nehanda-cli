@@ -21,6 +21,9 @@
 #include "agent_config.h"
 #include "agent_exec.h"
 #include "agent_types.h"
+#include "cJSON.h"
+#include "gateway_pipeline.h"  /* gw_request_t — the shared gateway seam */
+#include "ingress_preinject.h" /* query-from-messages + per-turn id */
 #include "interaction_events.h"
 #include "wfe_enforce.h"
 #include "wfe_router.h"
@@ -92,15 +95,22 @@ static void *classify_thread(void *arg)
    return NULL;
 }
 
-void router_advise_turn(const char *session_id, const char *message)
+/* The decision + logging CORE: catalog -> prefilter -> decide -> advisory ie
+ * record (+ the S2 enforce record when the dial is on). It runs NO LLM classifier
+ * and NEVER mutates the request, so it is cheap and safe to call at the universal
+ * gateway seam on every turn (primary AND delegate). Returns the prefilter outcome
+ * (or -1 on a bad/empty catalog / bad args) so a caller may decide to sample.
+ * `corr_id` is the ie correlation id -- a session id on the legacy path, or the
+ * ingress turn id at the gateway seam. */
+static wfe_prefilter_outcome_t router_advise_log(const char *corr_id, const char *message)
 {
-   if (!session_id || !session_id[0] || !message)
-      return;
+   if (!corr_id || !corr_id[0] || !message || !message[0])
+      return (wfe_prefilter_outcome_t)-1;
 
    wfe_router_catalog_t cat;
    char err[256];
    if (wfe_router_catalog_load(&cat, err, sizeof err) != 0)
-      return; /* invalid/empty catalog -> fail closed */
+      return (wfe_prefilter_outcome_t)-1; /* invalid/empty catalog -> fail closed */
 
    char mid[WFE_ROUTER_ID_LEN], reason[96];
    wfe_prefilter_outcome_t pf =
@@ -113,13 +123,13 @@ void router_advise_turn(const char *session_id, const char *message)
    char payload[512];
    wfe_router_advisory_payload(&d, pf, 0 /* not sampled */, -1.0 /* classifier not run inline */,
                                payload, sizeof payload);
-   ie_record(session_id, IE_GUARDRAIL_DECISION, "router-s1", payload, "advisory");
+   ie_record(corr_id, IE_GUARDRAIL_DECISION, "router-s1", payload, "advisory");
 
    /* S2: if the enforcement dial is on AND the routed workflow is enforced, log
     * the advisory enforce decision. The dial is env-gated and default-OFF (unset
     * -> WFE_ENFORCE_OFF), so this is inert until an operator opts in. Binding +
-    * tool-strip build on this; here we prove the dial + enforced-detection fire
-    * on the live chat path. Never blocks the turn. */
+    * tool-strip build on this; here we prove the dial + enforced-detection fire on
+    * the live provider path. Never blocks the turn. */
    wfe_enforce_stage_t estage = wfe_enforce_stage_parse(getenv("AIMEE_WORKFLOW_ENFORCE_STAGE"));
    if (estage != WFE_ENFORCE_OFF)
    {
@@ -129,9 +139,39 @@ void router_advise_turn(const char *session_id, const char *message)
          char ep[256];
          snprintf(ep, sizeof ep, "{\"workflow\":\"%s\",\"enforced\":1,\"stage\":\"%s\"}",
                   d.workflow_id, wfe_enforce_stage_name(estage));
-         ie_record(session_id, IE_GUARDRAIL_DECISION, "enforce-s2", ep, "advisory");
+         ie_record(corr_id, IE_GUARDRAIL_DECISION, "enforce-s2", ep, "advisory");
       }
    }
+   return pf;
+}
+
+/* Gateway pipeline stage: THE unified seam. Every inbound provider request
+ * (primary CLI via /v1/messages, delegates via /v1/chat/completions) runs this,
+ * co-located with gw_stage_tool_policing. We extract THIS turn's user query the
+ * same way the memory stage does (NULL on a tool-result continuation -> fires once
+ * per user turn) and run the advisory decision keyed on the ingress turn id. The
+ * sampled LLM classifier is deliberately NOT run here: it calls agent_run, which
+ * would re-enter this very seam -> recursion/cost. Never mutates the request. */
+int gw_stage_router(gw_request_t *r, void *ud)
+{
+   (void)ud;
+   if (!r || !r->raw)
+      return 0;
+   char *query =
+       ingress_preinject_query_from_messages(cJSON_GetObjectItemCaseSensitive(r->raw, "messages"));
+   if (!query)
+      return 0;
+   const char *tid = ingress_preinject_turn_id();
+   router_advise_log((tid && tid[0]) ? tid : "ingress", query);
+   free(query);
+   return 0;
+}
+
+void router_advise_turn(const char *session_id, const char *message)
+{
+   wfe_prefilter_outcome_t pf = router_advise_log(session_id, message);
+   if ((int)pf < 0 || !message)
+      return;
 
    /* Sampled LLM classifier telemetry, off the turn path (detached thread). */
    if (pf == WFE_PREFILTER_DEFER &&
