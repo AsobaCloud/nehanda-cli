@@ -56,8 +56,8 @@ cJSON *responses_backend_build(const aimee_request_t *ir)
    cJSON *out = cJSON_CreateObject();
    if (ir->model)
       cJSON_AddStringToObject(out, "model", ir->model);
-   if (ir->has_max_tokens)
-      cJSON_AddNumberToObject(out, "max_output_tokens", ir->max_tokens);
+   /* NOTE: no max_output_tokens -- the legacy build omits it and codex/gpt-5.5
+    * 400s on "Unsupported parameter: max_output_tokens" (verified live). */
    /* Responses/codex REQUIREMENTS (verified live: codex 400s with "Store must be
     * set to false" otherwise): store=false, and the API is SSE-based so stream is
     * always on (the caller accumulates + parses the SSE). */

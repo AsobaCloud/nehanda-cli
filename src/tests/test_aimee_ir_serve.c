@@ -27,7 +27,10 @@ int main(void)
    cJSON *rj = cJSON_Parse(rbody);
    assert(rj);
    assert(strcmp(cJSON_GetObjectItem(rj, "model")->valuestring, "gpt-5.5-codex") == 0); /* agent's */
-   assert((int)cJSON_GetObjectItem(rj, "max_output_tokens")->valuedouble == 200);       /* override */
+   /* codex requirements (verified live): store=false, stream=true, no max_output_tokens */
+   assert(cJSON_IsFalse(cJSON_GetObjectItem(rj, "store")));
+   assert(cJSON_IsTrue(cJSON_GetObjectItem(rj, "stream")));
+   assert(cJSON_GetObjectItem(rj, "max_output_tokens") == NULL);
    assert(cJSON_GetObjectItem(rj, "instructions")); /* system -> instructions */
    assert(cJSON_GetArraySize(cJSON_GetObjectItem(rj, "input")) >= 1);
    assert(cJSON_GetObjectItem(rj, "tools"));
