@@ -181,4 +181,13 @@ size_t aimee_ir_last_user_text(const aimee_request_t *r, char *buf, size_t n);
 const char *aimee_stop_reason_name(aimee_stop_reason_t s);
 aimee_stop_reason_t aimee_stop_reason_parse(const char *canonical_name);
 
+/* 1 if two requests are SEMANTICALLY equal: same system blocks, messages (role +
+ * ordered content blocks incl. tool ids/names/args/results + cache_control),
+ * tools, tool_choice, and sampling params. IGNORES provenance that legitimately
+ * differs across frontends: `frontend` wire tag, the `raw` sidecar, and `model`
+ * (the client's model string). This is the golden-test assertion that an
+ * Anthropic-shaped turn and an OpenAI-shaped turn with identical semantics produce
+ * identical IR -> identical KB input + identical backend build. */
+int aimee_ir_request_equal(const aimee_request_t *a, const aimee_request_t *b);
+
 #endif /* DEC_AIMEE_IR_H */

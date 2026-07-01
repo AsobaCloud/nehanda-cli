@@ -147,6 +147,106 @@ const char *aimee_stop_reason_name(aimee_stop_reason_t s)
    }
 }
 
+static int str_eq(const char *a, const char *b)
+{
+   if (a == b)
+      return 1;
+   if (!a || !b)
+      return 0;
+   return strcmp(a, b) == 0;
+}
+
+static int json_eq(const struct cJSON *a, const struct cJSON *b)
+{
+   if (a == b)
+      return 1;
+   if (!a || !b)
+      return 0;
+   return cJSON_Compare((const cJSON *)a, (const cJSON *)b, 1 /* case-sensitive */);
+}
+
+static int block_eq(const aimee_block_t *a, const aimee_block_t *b)
+{
+   if (a->type != b->type)
+      return 0;
+   if (!str_eq(a->cache_control, b->cache_control))
+      return 0;
+   switch (a->type)
+   {
+   case AIMEE_BLK_TEXT:
+   case AIMEE_BLK_THINKING:
+      return str_eq(a->text, b->text);
+   case AIMEE_BLK_TOOL_USE:
+      return str_eq(a->tool_id, b->tool_id) && str_eq(a->tool_name, b->tool_name) &&
+             json_eq(a->tool_input, b->tool_input);
+   case AIMEE_BLK_TOOL_RESULT:
+      return str_eq(a->tool_id, b->tool_id) && a->tool_is_error == b->tool_is_error &&
+             json_eq(a->tool_result, b->tool_result);
+   case AIMEE_BLK_IMAGE:
+   case AIMEE_BLK_DOCUMENT:
+      return str_eq(a->media_type, b->media_type) && str_eq(a->media_ref, b->media_ref);
+   case AIMEE_BLK_UNKNOWN:
+   default:
+      return json_eq(a->raw, b->raw);
+   }
+}
+
+static int blocks_eq(const aimee_block_t *a, int na, const aimee_block_t *b, int nb)
+{
+   if (na != nb)
+      return 0;
+   for (int i = 0; i < na; i++)
+      if (!block_eq(&a[i], &b[i]))
+         return 0;
+   return 1;
+}
+
+int aimee_ir_request_equal(const aimee_request_t *a, const aimee_request_t *b)
+{
+   if (a == b)
+      return 1;
+   if (!a || !b)
+      return 0;
+   if (!blocks_eq(a->system, a->n_system, b->system, b->n_system))
+      return 0;
+   if (a->n_messages != b->n_messages)
+      return 0;
+   for (int i = 0; i < a->n_messages; i++)
+   {
+      if (!str_eq(a->messages[i].role, b->messages[i].role))
+         return 0;
+      if (!blocks_eq(a->messages[i].blocks, a->messages[i].n_blocks, b->messages[i].blocks,
+                     b->messages[i].n_blocks))
+         return 0;
+   }
+   if (a->n_tools != b->n_tools)
+      return 0;
+   for (int i = 0; i < a->n_tools; i++)
+   {
+      if (!str_eq(a->tools[i].name, b->tools[i].name) ||
+          !str_eq(a->tools[i].description, b->tools[i].description) ||
+          !str_eq(a->tools[i].cache_control, b->tools[i].cache_control) ||
+          !json_eq(a->tools[i].schema, b->tools[i].schema))
+         return 0;
+   }
+   if (!json_eq(a->tool_choice, b->tool_choice))
+      return 0;
+   /* sampling params (content, not provenance) */
+   if (a->has_max_tokens != b->has_max_tokens ||
+       (a->has_max_tokens && a->max_tokens != b->max_tokens))
+      return 0;
+   if (a->has_temperature != b->has_temperature ||
+       (a->has_temperature && a->temperature != b->temperature))
+      return 0;
+   if (a->stream != b->stream || a->n_stop != b->n_stop)
+      return 0;
+   for (int i = 0; i < a->n_stop; i++)
+      if (!str_eq(a->stop_sequences[i], b->stop_sequences[i]))
+         return 0;
+   /* IGNORED: frontend wire tag, raw sidecar, model string (provenance). */
+   return 1;
+}
+
 aimee_stop_reason_t aimee_stop_reason_parse(const char *name)
 {
    if (!name)
