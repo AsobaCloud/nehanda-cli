@@ -527,6 +527,9 @@ set(CORE_SRCS
     ${AIMEE_SRC_DIR}/workflow/wfe_validate.c
     ${AIMEE_SRC_DIR}/workflow/wfe_canonical.c
     ${AIMEE_SRC_DIR}/workflow/wfe_custom.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_manager_artifacts.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_externalization.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_deliver.c
     ${AIMEE_SRC_DIR}/vendor/cJSON.c
     ${PLATFORM_CORE_SRCS}
 )
@@ -1211,6 +1214,9 @@ add_executable(aimee
     ${AIMEE_SRC_DIR}/workflow/wfe_validate.c
     ${AIMEE_SRC_DIR}/workflow/wfe_canonical.c
     ${AIMEE_SRC_DIR}/workflow/wfe_custom.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_manager_artifacts.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_externalization.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_deliver.c
 )
 target_include_directories(aimee PRIVATE ${AIMEE_SRC_DIR} ${AIMEE_SRC_DIR}/headers ${AIMEE_SRC_DIR}/vendor/headers ${AIMEE_SRC_DIR}/db1 ${AIMEE_SRC_DIR}/db2 ${AIMEE_SRC_DIR}/workflow)
 target_compile_options(aimee PRIVATE ${AIMEE_COMMON_WARNINGS})

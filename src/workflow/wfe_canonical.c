@@ -171,6 +171,10 @@ static cJSON *normalize(const wfe_def_t *def)
    cJSON *root = cJSON_CreateObject();
    cJSON_AddStringToObject(root, "name", def->name);
    cJSON_AddStringToObject(root, "start", def->start);
+   /* Pin `enforced` in the version hash (only when set, so existing
+    * non-enforced workflows keep their canonical form + version). */
+   if (def->enforced)
+      cJSON_AddBoolToObject(root, "enforced", 1);
 
    int n = def->n_nodes;
    int *idx = calloc((size_t)(n > 0 ? n : 1), sizeof(int));

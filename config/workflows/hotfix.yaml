@@ -1,0 +1,53 @@
+# hotfix -- expedited enforced workflow for genuine one-liners / trivial changes.
+#
+# EXPEDITED, NOT WEAKENED (author ruling 2026-07-01): the roundtable keeps the
+# SAME required-persona quorum as managed-change -- expediting is faster/cheaper
+# panel models + a tighter round budget (max_rounds: 2), never fewer personas.
+# So the §8 fail-closed guarantee holds identically here. The single-packet path
+# feeds understand -> implement directly (no split), which is the only structural
+# difference from managed-change.
+name: hotfix
+enforced: true
+start: understand
+nodes:
+  - id: understand
+    block: understand
+    params:
+      with_user: true
+    next: implement
+  # single packet: implement consumes the intent directly (no split step).
+  - id: implement
+    block: implement
+    in:
+      plan: understand.out
+    next: freeze
+  - id: freeze
+    block: freeze
+    in:
+      branch: implement.out
+    next: review
+  - id: review
+    block: review
+    in:
+      src: freeze.out
+    on_pass: rt_gate
+    on_fail: implement
+  - id: rt_gate
+    block: gate.roundtable
+    in:
+      src: freeze.out
+    params:
+      panel:
+        required:
+          - security
+          - architect
+          - qa
+          - reviewer
+      quorum: 4
+      max_rounds: 2
+    on_pass: deliver
+    on_fail: implement
+  - id: deliver
+    block: gate.deliver
+    in:
+      verdict: rt_gate.out

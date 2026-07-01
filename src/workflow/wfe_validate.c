@@ -203,6 +203,42 @@ int wfe_def_validate(const wfe_def_t *def, char *err, size_t errlen)
       return -1;
    }
 
+   /* I2 (enforced-workflow delivery gate): in a workflow marked `enforced`,
+    * EVERY terminal node (one with no outgoing edge) must be a gate.deliver
+    * gate -- not merely at least one. Combined with the "at least one terminal"
+    * check above and the "all nodes reachable from start" check below, this
+    * guarantees the only way to reach a completed state is by crossing
+    * gate.deliver: an alternate exit (e.g. a `merge` terminal) cannot provide a
+    * delivery path that skips the gate, and an orphaned gate.deliver is rejected
+    * by the reachability check. This is a load-time structural invariant,
+    * independent of how the YAML edges happen to be wired, so a misconfigured
+    * or hand-edited workflow cannot silently bypass enforcement. */
+   if (def->enforced)
+   {
+      int deliver_terminals = 0;
+      for (int i = 0; i < def->n_nodes; i++)
+      {
+         const wfe_node_t *n = &def->nodes[i];
+         if (n->next[0] || n->on_pass[0] || n->on_fail[0])
+            continue; /* not a terminal node */
+         if (n->block != WFE_BLK_GATE_DELIVER)
+         {
+            snprintf(err, errlen,
+                     "enforced workflow '%s': terminal node '%s' is not a gate.deliver "
+                     "(every exit must cross the delivery gate)",
+                     def->name, n->id);
+            return -1;
+         }
+         deliver_terminals++;
+      }
+      if (deliver_terminals == 0)
+      {
+         snprintf(err, errlen,
+                  "enforced workflow '%s' must terminate in a gate.deliver node", def->name);
+         return -1;
+      }
+   }
+
    /* reachability from start */
    int *seen = calloc((size_t)def->n_nodes, sizeof(int));
    if (!seen)
