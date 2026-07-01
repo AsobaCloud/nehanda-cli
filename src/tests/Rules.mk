@@ -133,6 +133,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-wfe-router-catalog \
                $(TESTPREFIX)/unit-test-wfe-enforce \
                $(TESTPREFIX)/unit-test-wfe-binding \
+               $(TESTPREFIX)/unit-test-aimee-ir \
                $(TESTPREFIX)/unit-test-workflow-gate-caps \
                $(TESTPREFIX)/unit-test-wfe-webapi \
                $(TESTPREFIX)/unit-test-cli-profile \
@@ -1326,6 +1327,11 @@ $(TESTPREFIX)/unit-test-wfe-binding: $(OBJDIR)/tests/test_wfe_binding.o \
                                     $(OBJDIR)/db1/db1_write.o $(OBJDIR)/db1/db1_trigger.o \
                                     $(OBJDIR)/db1/db1_cron_jobs.o $(OBJDIR)/db1/model_catalog.o \
                                     $(OBJDIR)/db1/eval.o $(OBJDIR)/db2/db_schema.o $(TEST_CORE_OBJS)
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+# Slice 0: the canonical IR (pure — cJSON only).
+$(TESTPREFIX)/unit-test-aimee-ir: $(OBJDIR)/tests/test_aimee_ir.o \
+                                 $(OBJDIR)/server/aimee_ir.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 # S1 router catalog I/O (enumerates $AIMEE_HOME workflows + built-in lanes).
