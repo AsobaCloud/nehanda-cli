@@ -120,6 +120,35 @@ int main(void)
    aimee_response_free(&oresp);
    cJSON_Delete(orj);
 
+   /* --- (5) Responses (codex) backend: Anthropic IR -> Responses request; a
+    *         Responses response (message + function_call output items) -> IR. --- */
+   aimee_request_t cir;
+   parse_anthropic(ANTHROPIC, &cir);
+   cJSON *cbuilt = responses_backend_build(&cir);
+   assert(cbuilt);
+   assert(cJSON_GetObjectItem(cbuilt, "instructions")); /* system -> instructions */
+   assert(cJSON_GetArraySize(cJSON_GetObjectItem(cbuilt, "input")) >= 1); /* messages -> items */
+   assert(cJSON_GetObjectItem(cbuilt, "tools"));
+   cJSON_Delete(cbuilt);
+   aimee_request_free(&cir);
+
+   const char *CRESP =
+       "{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":["
+       "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]},"
+       "{\"type\":\"function_call\",\"call_id\":\"fc_1\",\"name\":\"Read\",\"arguments\":\"{\\\"path\\\":\\\"z\\\"}\"}],"
+       "\"usage\":{\"input_tokens\":30,\"output_tokens\":9}}";
+   cJSON *crj = cJSON_Parse(CRESP);
+   aimee_response_t cresp;
+   assert(responses_backend_parse(crj, &cresp, err, sizeof err) == 0);
+   assert(cresp.stop_reason == AIMEE_STOP_TOOL_USE); /* a function_call was emitted */
+   assert(cresp.n_content == 2);
+   assert(cresp.content[0].type == AIMEE_BLK_TEXT && strcmp(cresp.content[0].text, "done") == 0);
+   assert(cresp.content[1].type == AIMEE_BLK_TOOL_USE &&
+          strcmp(cresp.content[1].tool_id, "fc_1") == 0 && cresp.content[1].tool_input);
+   assert(cresp.usage_in == 30 && cresp.usage_out == 9);
+   aimee_response_free(&cresp);
+   cJSON_Delete(crj);
+
    printf("ok\n");
    return 0;
 }
