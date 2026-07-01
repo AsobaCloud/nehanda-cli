@@ -33,6 +33,24 @@ static const char *param_str(const cJSON *params, const char *key)
    return (it && cJSON_IsString(it)) ? it->valuestring : NULL;
 }
 
+/* 1 if `persona` appears in a node's params.panel.required or .eligible. */
+static int panel_has_persona(const cJSON *params, const char *persona)
+{
+   const cJSON *panel = params ? cJSON_GetObjectItemCaseSensitive(params, "panel") : NULL;
+   if (!panel || !persona)
+      return 0;
+   static const char *keys[] = {"required", "eligible"};
+   for (int k = 0; k < 2; k++)
+   {
+      const cJSON *arr = cJSON_GetObjectItemCaseSensitive(panel, keys[k]);
+      const cJSON *it = NULL;
+      if (arr && cJSON_IsArray(arr))
+         cJSON_ArrayForEach(it, arr) if (cJSON_IsString(it) &&
+                                         strcmp(it->valuestring, persona) == 0) return 1;
+   }
+   return 0;
+}
+
 /* validate one node's input bindings against the type system. */
 static int check_inputs(const wfe_def_t *def, const wfe_node_t *n, char *err, size_t errlen)
 {
@@ -253,5 +271,35 @@ int wfe_def_validate(const wfe_def_t *def, char *err, size_t errlen)
          return -1;
       }
    free(seen);
+
+   /* D3 (primary-as-manager, anti-rubber-stamp): a `review` node's explicit
+    * `reviewer` persona must be disjoint from every roundtable panel in the
+    * workflow -- the primary's pre-roundtable reviewer must not also sit on the
+    * panel that then judges the same lane. Enforced at load time so a
+    * misconfiguration surfaces at definition time, not mid-run. (Reviewer
+    * role-eligibility is a runtime/roster check -- the pure def validator has no
+    * agent roster.) */
+   for (int i = 0; i < def->n_nodes; i++)
+   {
+      const wfe_node_t *rv = &def->nodes[i];
+      if (rv->block != WFE_BLK_REVIEW)
+         continue;
+      const char *reviewer = param_str(rv->params, "reviewer");
+      if (!reviewer || !reviewer[0])
+         continue;
+      for (int j = 0; j < def->n_nodes; j++)
+      {
+         if (def->nodes[j].block != WFE_BLK_GATE_ROUNDTABLE)
+            continue;
+         if (panel_has_persona(def->nodes[j].params, reviewer))
+         {
+            snprintf(err, errlen,
+                     "review '%s' reviewer '%s' also sits on roundtable '%s' panel "
+                     "(reviewer must be disjoint from the panel that judges its lane)",
+                     rv->id, reviewer, def->nodes[j].id);
+            return -1;
+         }
+      }
+   }
    return 0;
 }

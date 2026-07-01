@@ -30,6 +30,9 @@ nodes:
     block: review
     in:
       src: freeze.out
+    params:
+      reviewer: contrarian
+      max_iters: 2
     on_pass: rt_gate
     on_fail: implement
   - id: rt_gate

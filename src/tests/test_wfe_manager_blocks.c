@@ -98,6 +98,51 @@ static const char *ENFORCED_ALT_EXIT =
     "  - id: esc\n"
     "    block: understand\n";
 
+/* fully valid, but the review node's reviewer persona ('security') also sits on
+ * the rt gate panel -> D3 disjointness must reject (anti-rubber-stamp). */
+static const char *REVIEWER_CLASH =
+    "name: clash\n"
+    "enforced: true\n"
+    "start: u\n"
+    "nodes:\n"
+    "  - id: u\n"
+    "    block: understand\n"
+    "    next: impl\n"
+    "  - id: impl\n"
+    "    block: implement\n"
+    "    in:\n"
+    "      plan: u.out\n"
+    "    next: fr\n"
+    "  - id: fr\n"
+    "    block: freeze\n"
+    "    in:\n"
+    "      branch: impl.out\n"
+    "    next: rv\n"
+    "  - id: rv\n"
+    "    block: review\n"
+    "    in:\n"
+    "      src: fr.out\n"
+    "    params:\n"
+    "      reviewer: security\n"
+    "    on_pass: rt\n"
+    "    on_fail: impl\n"
+    "  - id: rt\n"
+    "    block: gate.roundtable\n"
+    "    in:\n"
+    "      src: fr.out\n"
+    "    params:\n"
+    "      panel:\n"
+    "        required:\n"
+    "          - security\n"
+    "          - architect\n"
+    "      quorum: 2\n"
+    "    on_pass: dl\n"
+    "    on_fail: impl\n"
+    "  - id: dl\n"
+    "    block: gate.deliver\n"
+    "    in:\n"
+    "      verdict: rt.out\n";
+
 /* the same single-node graph but NOT enforced -> must validate (backward compat:
  * a non-enforced workflow need not have a gate.deliver). */
 static const char *UNENFORCED_OK =
@@ -164,6 +209,14 @@ int main(void)
    assert(wfe_def_validate(alt, err, sizeof err) != 0);
    assert(strstr(err, "gate.deliver") != NULL);
    wfe_def_free(alt);
+
+   /* --- D3: a reviewer persona that also sits on the roundtable panel is
+    * rejected (anti-rubber-stamp) --- */
+   wfe_def_t *clash = parse_ok(REVIEWER_CLASH);
+   err[0] = '\0';
+   assert(wfe_def_validate(clash, err, sizeof err) != 0);
+   assert(strstr(err, "reviewer") != NULL || strstr(err, "disjoint") != NULL);
+   wfe_def_free(clash);
 
    /* --- backward compat: an unenforced workflow needs no gate.deliver --- */
    wfe_def_t *plain = parse_ok(UNENFORCED_OK);
