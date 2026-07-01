@@ -135,6 +135,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-wfe-binding \
                $(TESTPREFIX)/unit-test-aimee-ir \
                $(TESTPREFIX)/unit-test-aimee-ir-metrics \
+               $(TESTPREFIX)/unit-test-aimee-frontend \
                $(TESTPREFIX)/unit-test-workflow-gate-caps \
                $(TESTPREFIX)/unit-test-wfe-webapi \
                $(TESTPREFIX)/unit-test-cli-profile \
@@ -1338,6 +1339,13 @@ $(TESTPREFIX)/unit-test-aimee-ir: $(OBJDIR)/tests/test_aimee_ir.o \
 # Slice 0: IR shadow metrics (pure).
 $(TESTPREFIX)/unit-test-aimee-ir-metrics: $(OBJDIR)/tests/test_aimee_ir_metrics.o \
                                          $(OBJDIR)/server/aimee_ir_metrics.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+# Slice 1: frontend parse adapters (pure — cJSON only).
+$(TESTPREFIX)/unit-test-aimee-frontend: $(OBJDIR)/tests/test_aimee_frontend.o \
+                                       $(OBJDIR)/server/aimee_frontend_anthropic.o \
+                                       $(OBJDIR)/server/aimee_frontend_openai.o \
+                                       $(OBJDIR)/server/aimee_ir.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 # S1 router catalog I/O (enumerates $AIMEE_HOME workflows + built-in lanes).
