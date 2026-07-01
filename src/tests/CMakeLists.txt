@@ -96,6 +96,7 @@ aimee_add_test(test_wfe_deliver test_wfe_deliver.c)
 aimee_add_test(test_wfe_router test_wfe_router.c)
 aimee_add_test(test_wfe_router_catalog test_wfe_router_catalog.c)
 aimee_add_test(test_wfe_enforce test_wfe_enforce.c)
+aimee_add_test(test_wfe_binding test_wfe_binding.c)
 aimee_add_test(test_shutdown_forensics test_shutdown_forensics.c)
 
 add_executable(test_toolset test_toolset.c)

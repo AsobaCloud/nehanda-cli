@@ -132,6 +132,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-wfe-router \
                $(TESTPREFIX)/unit-test-wfe-router-catalog \
                $(TESTPREFIX)/unit-test-wfe-enforce \
+               $(TESTPREFIX)/unit-test-wfe-binding \
                $(TESTPREFIX)/unit-test-workflow-gate-caps \
                $(TESTPREFIX)/unit-test-wfe-webapi \
                $(TESTPREFIX)/unit-test-cli-profile \
@@ -1317,6 +1318,14 @@ $(TESTPREFIX)/unit-test-wfe-router: $(OBJDIR)/tests/test_wfe_router.o \
 # S2 enforcement pure cores (no engine/DB deps).
 $(TESTPREFIX)/unit-test-wfe-enforce: $(OBJDIR)/tests/test_wfe_enforce.o \
                                     $(OBJDIR)/workflow/wfe_enforce.o $(OBJDIR)/workflow/wfe_externalization.o
+	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
+
+# S2 session<->work-item binding (DB1-backed).
+$(TESTPREFIX)/unit-test-wfe-binding: $(OBJDIR)/tests/test_wfe_binding.o \
+                                    $(OBJDIR)/db1/wfe_binding.o $(OBJDIR)/db1/db1_init.o \
+                                    $(OBJDIR)/db1/db1_write.o $(OBJDIR)/db1/db1_trigger.o \
+                                    $(OBJDIR)/db1/db1_cron_jobs.o $(OBJDIR)/db1/model_catalog.o \
+                                    $(OBJDIR)/db1/eval.o $(OBJDIR)/db2/db_schema.o $(TEST_CORE_OBJS)
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
 
 # S1 router catalog I/O (enumerates $AIMEE_HOME workflows + built-in lanes).

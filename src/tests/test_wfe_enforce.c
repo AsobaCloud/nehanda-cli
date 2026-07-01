@@ -3,6 +3,7 @@
  * rollout fail-class split. */
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "wfe_enforce.h"
 #include "wfe_externalization.h"
@@ -63,6 +64,29 @@ int main(void)
    assert(wfe_enforce_fail_action(WFE_FAIL_INSTRUMENTATION, 1, 1) == WFE_ACT_FAIL_CLOSED);
    assert(wfe_enforce_fail_action(WFE_FAIL_INSTRUMENTATION, 1, 0) == WFE_ACT_FAIL_OPEN_CHAT);
    assert(wfe_enforce_fail_action(WFE_FAIL_INSTRUMENTATION, 0, 1) == WFE_ACT_FAIL_OPEN_CHAT);
+
+   /* --- staged dial --- */
+   assert(wfe_enforce_stage_parse(NULL) == WFE_ENFORCE_OFF);
+   assert(wfe_enforce_stage_parse("off") == WFE_ENFORCE_OFF);
+   assert(wfe_enforce_stage_parse("bogus") == WFE_ENFORCE_OFF); /* unknown -> off */
+   assert(wfe_enforce_stage_parse("advisory") == WFE_ENFORCE_ADVISORY);
+   assert(wfe_enforce_stage_parse("SOFT") == WFE_ENFORCE_SOFT); /* case-insensitive */
+   assert(wfe_enforce_stage_parse("hard") == WFE_ENFORCE_HARD);
+   assert(strcmp(wfe_enforce_stage_name(WFE_ENFORCE_HARD), "hard") == 0);
+   assert(!wfe_enforce_stage_restricts(WFE_ENFORCE_OFF) &&
+          !wfe_enforce_stage_restricts(WFE_ENFORCE_ADVISORY));
+   assert(wfe_enforce_stage_restricts(WFE_ENFORCE_SOFT) &&
+          wfe_enforce_stage_restricts(WFE_ENFORCE_HARD));
+   assert(!wfe_enforce_stage_refuses(WFE_ENFORCE_SOFT) && wfe_enforce_stage_refuses(WFE_ENFORCE_HARD));
+
+   /* --- templated surfacing: names the gate + id, NEVER echoes injected content --- */
+   char msg[256];
+   wfe_enforce_user_message(WFE_ENFORCE_HARD, "deliver", "wi_abc123", msg, sizeof msg);
+   assert(strstr(msg, "deliver") && strstr(msg, "wi_abc123") && strstr(msg, "blocked"));
+   /* an injection-shaped gate/id is rejected -> safe fallback, no echo */
+   wfe_enforce_user_message(WFE_ENFORCE_SOFT, "\" onclick=x", "id\";DROP", msg, sizeof msg);
+   assert(!strstr(msg, "onclick") && !strstr(msg, "DROP") && strstr(msg, "workflow gate"));
+   wfe_enforce_user_message(WFE_ENFORCE_SOFT, NULL, NULL, msg, sizeof msg); /* no crash */
 
    printf("ok\n");
    return 0;

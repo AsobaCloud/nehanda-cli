@@ -2,6 +2,7 @@
 #include "wfe_enforce.h"
 
 #include <ctype.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "wfe_externalization.h" /* wfe_is_deliver_primitive */
@@ -116,4 +117,73 @@ wfe_fail_action_t wfe_enforce_fail_action(wfe_fail_class_t cls, int hard, int is
    if (hard && is_deliver_or_write)
       return WFE_ACT_FAIL_CLOSED;
    return WFE_ACT_FAIL_OPEN_CHAT;
+}
+
+wfe_enforce_stage_t wfe_enforce_stage_parse(const char *s)
+{
+   if (!s || !s[0])
+      return WFE_ENFORCE_OFF;
+   if (eq_ci(s, "advisory"))
+      return WFE_ENFORCE_ADVISORY;
+   if (eq_ci(s, "soft"))
+      return WFE_ENFORCE_SOFT;
+   if (eq_ci(s, "hard"))
+      return WFE_ENFORCE_HARD;
+   return WFE_ENFORCE_OFF;
+}
+
+const char *wfe_enforce_stage_name(wfe_enforce_stage_t s)
+{
+   switch (s)
+   {
+   case WFE_ENFORCE_ADVISORY:
+      return "advisory";
+   case WFE_ENFORCE_SOFT:
+      return "soft";
+   case WFE_ENFORCE_HARD:
+      return "hard";
+   case WFE_ENFORCE_OFF:
+   default:
+      return "off";
+   }
+}
+
+int wfe_enforce_stage_restricts(wfe_enforce_stage_t s)
+{
+   return s == WFE_ENFORCE_SOFT || s == WFE_ENFORCE_HARD;
+}
+
+int wfe_enforce_stage_refuses(wfe_enforce_stage_t s)
+{
+   return s == WFE_ENFORCE_HARD;
+}
+
+/* id-charset guard so an unexpected value can never break the JSON/user text or
+ * inject content -- ids are validated elsewhere, this is defense in depth. */
+static int safe_id(const char *s)
+{
+   if (!s || !s[0])
+      return 0;
+   for (const char *p = s; *p; p++)
+   {
+      char c = *p;
+      if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' ||
+            c == '-' || c == '.'))
+         return 0;
+   }
+   return 1;
+}
+
+void wfe_enforce_user_message(wfe_enforce_stage_t stage, const char *gate, const char *work_item_id,
+                              char *buf, size_t n)
+{
+   if (!buf || !n)
+      return;
+   const char *g = safe_id(gate) ? gate : "the workflow gate";
+   const char *verb = wfe_enforce_stage_refuses(stage) ? "was blocked" : "is being held";
+   if (safe_id(work_item_id))
+      snprintf(buf, n, "This change %s: it must pass %s before it can be delivered (work item %s).",
+               verb, g, work_item_id);
+   else
+      snprintf(buf, n, "This change %s: it must pass %s before it can be delivered.", verb, g);
 }
