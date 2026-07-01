@@ -92,16 +92,34 @@ cJSON *responses_backend_build(const aimee_request_t *ir)
       for (int j = 0; j < im->n_blocks; j++)
       {
          const aimee_block_t *b = &im->blocks[j];
-         if (b->type != AIMEE_BLK_TOOL_USE)
-            continue;
-         cJSON *fc = cJSON_CreateObject();
-         cJSON_AddStringToObject(fc, "type", "function_call");
-         cJSON_AddStringToObject(fc, "call_id", b->tool_id ? b->tool_id : "");
-         cJSON_AddStringToObject(fc, "name", b->tool_name ? b->tool_name : "");
-         char *args = b->tool_input ? cJSON_PrintUnformatted(b->tool_input) : NULL;
-         cJSON_AddStringToObject(fc, "arguments", args ? args : "{}");
-         free(args);
-         cJSON_AddItemToArray(input, fc);
+         if (b->type == AIMEE_BLK_TOOL_USE)
+         {
+            cJSON *fc = cJSON_CreateObject();
+            cJSON_AddStringToObject(fc, "type", "function_call");
+            cJSON_AddStringToObject(fc, "call_id", b->tool_id ? b->tool_id : "");
+            cJSON_AddStringToObject(fc, "name", b->tool_name ? b->tool_name : "");
+            char *args = b->tool_input ? cJSON_PrintUnformatted(b->tool_input) : NULL;
+            cJSON_AddStringToObject(fc, "arguments", args ? args : "{}");
+            free(args);
+            cJSON_AddItemToArray(input, fc);
+         }
+         else if (b->type == AIMEE_BLK_TOOL_RESULT)
+         {
+            /* SPLIT (grouping ruling, Option A): tool_result block -> a
+             * function_call_output item, call_id = tool_id verbatim; rich content
+             * coerced to a string (documented lossy). */
+            cJSON *fo = cJSON_CreateObject();
+            cJSON_AddStringToObject(fo, "type", "function_call_output");
+            cJSON_AddStringToObject(fo, "call_id", b->tool_id ? b->tool_id : "");
+            char *o = NULL;
+            if (b->tool_result && cJSON_IsString(b->tool_result))
+               o = strdup(b->tool_result->valuestring);
+            else if (b->tool_result)
+               o = cJSON_PrintUnformatted(b->tool_result);
+            cJSON_AddStringToObject(fo, "output", o ? o : "");
+            free(o);
+            cJSON_AddItemToArray(input, fo);
+         }
       }
    }
 
