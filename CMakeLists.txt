@@ -530,6 +530,7 @@ set(CORE_SRCS
     ${AIMEE_SRC_DIR}/workflow/wfe_custom.c
     ${AIMEE_SRC_DIR}/workflow/wfe_manager_artifacts.c
     ${AIMEE_SRC_DIR}/workflow/wfe_externalization.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_enforce.c
     ${AIMEE_SRC_DIR}/workflow/wfe_deliver.c
     ${AIMEE_SRC_DIR}/workflow/wfe_router.c
     ${AIMEE_SRC_DIR}/workflow/wfe_router_catalog.c
@@ -1219,6 +1220,7 @@ add_executable(aimee
     ${AIMEE_SRC_DIR}/workflow/wfe_custom.c
     ${AIMEE_SRC_DIR}/workflow/wfe_manager_artifacts.c
     ${AIMEE_SRC_DIR}/workflow/wfe_externalization.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_enforce.c
     ${AIMEE_SRC_DIR}/workflow/wfe_deliver.c
     ${AIMEE_SRC_DIR}/workflow/wfe_router.c
     ${AIMEE_SRC_DIR}/workflow/wfe_router_catalog.c
