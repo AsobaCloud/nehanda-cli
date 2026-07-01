@@ -41,8 +41,19 @@ int main(void)
    wfe_router_catalog_t c;
    mkcat(&c);
 
+   /* --- id validity (charset + length; used for JSON-safe logging + routing) --- */
+   assert(wfe_router_id_valid("managed-change") && wfe_router_id_valid("build_2"));
+   assert(!wfe_router_id_valid("") && !wfe_router_id_valid(NULL));
+   assert(!wfe_router_id_valid("../evil") && !wfe_router_id_valid("has space"));
+   assert(!wfe_router_id_valid("quote\"inject") && !wfe_router_id_valid("path/sep"));
+
    /* --- catalog validation --- */
    assert(wfe_router_catalog_validate(&c, err, sizeof err) == 0);
+   {
+      wfe_router_catalog_t badid = c; /* an invalid id in the catalog is rejected */
+      snprintf(badid.wf[3].id, sizeof badid.wf[3].id, "bad\"id");
+      assert(wfe_router_catalog_validate(&badid, err, sizeof err) != 0);
+   }
 
    wfe_router_catalog_t bad = c; /* two defaults */
    bad.wf[2].is_default = 1;
