@@ -761,21 +761,24 @@ int main(void)
       g_config_strict = 0;
    }
 
-   /* --- schema validation: valid config passes strict mode --- */
+   /* schema validation: valid config passes strict mode. Also this PR's fold-key
+    * regression: top-level `fold:` is a registered key (loads clean, no "unknown
+    * key") AND actually parses (fold_enabled set, not merely allowlisted). */
    {
       char cpath[512];
       snprintf(cpath, sizeof(cpath), "%s/.config/aimee/aimee.yaml", tmpdir);
       FILE *f = fopen(cpath, "w");
       assert(f);
-      fprintf(f, "provider: claude\nuse_builtin_cli: true\n");
+      fprintf(f, "provider: claude\nuse_builtin_cli: true\nfold:\n  enabled: true\n");
       fclose(f);
 
       static config_t cfg;
       memset(&cfg, 0, sizeof(cfg));
       g_config_strict = 1;
       int rc = config_load(&cfg);
-      assert(rc == 0); /* all keys valid */
+      assert(rc == 0); /* all keys valid, incl. the registered top-level fold */
       assert(strcmp(cfg.provider, "claude") == 0);
+      assert(cfg.fold_enabled == 1); /* fold section parsed, not merely allowlisted */
       g_config_strict = 0;
    }
 
