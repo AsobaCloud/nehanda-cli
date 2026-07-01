@@ -141,6 +141,27 @@ int main(void)
    assert(strstr(cJSON_GetObjectItem(ofn, "arguments")->valuestring, "foo.c"));
    assert((int)cJSON_GetObjectItem(cJSON_GetObjectItem(oresp, "usage"), "total_tokens")->valuedouble == 15);
 
+   /* Responses render: output items (message + function_call) */
+   cJSON *rresp = responses_frontend_render(&rr);
+   assert(rresp);
+   assert(strcmp(cJSON_GetObjectItem(rresp, "object")->valuestring, "response") == 0);
+   assert(strcmp(cJSON_GetObjectItem(rresp, "status")->valuestring, "completed") == 0);
+   cJSON *rout = cJSON_GetObjectItem(rresp, "output");
+   assert(cJSON_GetArraySize(rout) == 2);
+   int found_fc = 0;
+   for (int i = 0; i < cJSON_GetArraySize(rout); i++)
+   {
+      cJSON *it = cJSON_GetArrayItem(rout, i);
+      if (strcmp(cJSON_GetObjectItem(it, "type")->valuestring, "function_call") == 0)
+      {
+         assert(strcmp(cJSON_GetObjectItem(it, "call_id")->valuestring, "toolu_9") == 0);
+         assert(strcmp(cJSON_GetObjectItem(it, "name")->valuestring, "Read") == 0);
+         found_fc = 1;
+      }
+   }
+   assert(found_fc);
+   cJSON_Delete(rresp);
+
    cJSON_Delete(aresp);
    cJSON_Delete(oresp);
    aimee_response_free(&rr);

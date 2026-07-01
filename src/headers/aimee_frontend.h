@@ -38,5 +38,7 @@ int responses_frontend_parse(const struct cJSON *req, aimee_request_t *out, char
  * the parsed tool_input). */
 struct cJSON *anthropic_frontend_render(const aimee_response_t *resp);
 struct cJSON *openai_frontend_render(const aimee_response_t *resp);
+/* Render an IR response as an OpenAI Responses API response (output items). */
+struct cJSON *responses_frontend_render(const aimee_response_t *resp);
 
 #endif /* DEC_AIMEE_FRONTEND_H */

@@ -197,3 +197,56 @@ oom:
    aimee_request_free(out);
    return -1;
 }
+
+cJSON *responses_frontend_render(const aimee_response_t *r)
+{
+   if (!r)
+      return NULL;
+   cJSON *out = cJSON_CreateObject();
+   cJSON_AddStringToObject(out, "id", r->id ? r->id : "");
+   cJSON_AddStringToObject(out, "object", "response");
+   if (r->model)
+      cJSON_AddStringToObject(out, "model", r->model);
+   cJSON_AddStringToObject(out, "status",
+                           r->stop_reason == AIMEE_STOP_MAX_TOKENS ? "incomplete" : "completed");
+
+   cJSON *output = cJSON_AddArrayToObject(out, "output");
+   for (int i = 0; i < r->n_content; i++)
+   {
+      const aimee_block_t *b = &r->content[i];
+      if (b->type == AIMEE_BLK_TEXT)
+      {
+         cJSON *item = cJSON_CreateObject();
+         cJSON_AddStringToObject(item, "type", "message");
+         cJSON_AddStringToObject(item, "role", "assistant");
+         cJSON *content = cJSON_AddArrayToObject(item, "content");
+         cJSON *part = cJSON_CreateObject();
+         cJSON_AddStringToObject(part, "type", "output_text");
+         cJSON_AddStringToObject(part, "text", b->text ? b->text : "");
+         cJSON_AddItemToArray(content, part);
+         cJSON_AddItemToArray(output, item);
+      }
+      else if (b->type == AIMEE_BLK_TOOL_USE)
+      {
+         cJSON *item = cJSON_CreateObject();
+         cJSON_AddStringToObject(item, "type", "function_call");
+         cJSON_AddStringToObject(item, "call_id", b->tool_id ? b->tool_id : "");
+         cJSON_AddStringToObject(item, "name", b->tool_name ? b->tool_name : "");
+         char *args = b->tool_input ? cJSON_PrintUnformatted(b->tool_input) : NULL;
+         cJSON_AddStringToObject(item, "arguments", args ? args : "{}");
+         free(args);
+         cJSON_AddItemToArray(output, item);
+      }
+      else if (b->type == AIMEE_BLK_THINKING)
+      {
+         cJSON *item = cJSON_CreateObject();
+         cJSON_AddStringToObject(item, "type", "reasoning");
+         cJSON_AddStringToObject(item, "summary", b->text ? b->text : "");
+         cJSON_AddItemToArray(output, item);
+      }
+   }
+   cJSON *usage = cJSON_AddObjectToObject(out, "usage");
+   cJSON_AddNumberToObject(usage, "input_tokens", (double)r->usage_in);
+   cJSON_AddNumberToObject(usage, "output_tokens", (double)r->usage_out);
+   return out;
+}
