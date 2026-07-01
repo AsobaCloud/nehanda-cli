@@ -53,7 +53,13 @@ static int claude_build_argv(const provider_cli_cfg_t *cfg, char **tokens, int c
    CLAUDE_ADD_ARG("WebSearch");
    CLAUDE_ADD_ARG("NotebookEdit");
    CLAUDE_ADD_ARG("--disallowedTools");
-   CLAUDE_ADD_ARG("AskUserQuestion,Agent,RemoteTrigger");
+   /* Enforce delegate-only: block Claude Code's CLIENT-SIDE subagent tools so the
+    * primary must use aimee delegates. `Task` is Claude Code's real sub-agent
+    * spawn tool (Agent/RemoteTrigger are the legacy/aimee names) -- omitting it
+    * let the primary keep spawning its own subagents despite the gateway request
+    * strip, which only removes Task from the API request, not from the CLI's own
+    * built-in tool registry. Mirrors guardrails' Task->Subagent canonicalization. */
+   CLAUDE_ADD_ARG("AskUserQuestion,Task,Agent,RemoteTrigger");
    if (cfg && cfg->system_prompt && cfg->system_prompt[0])
    {
       CLAUDE_ADD_ARG("--append-system-prompt");
