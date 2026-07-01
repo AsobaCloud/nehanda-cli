@@ -6,6 +6,7 @@
 #include "aimee_ir_metrics.h"
 #include "cJSON.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -50,4 +51,99 @@ char *aimee_ir_build_provider_body(const cJSON *req, const char *driver_name,
    if (s)
       aimee_ir_metric_inc(AIMEE_IR_M_IR_PATH, AIMEE_WIRE_ANTHROPIC);
    return s;
+}
+
+static const char *jo_str(const cJSON *o, const char *k)
+{
+   const cJSON *it = cJSON_GetObjectItemCaseSensitive((cJSON *)o, k);
+   return (it && cJSON_IsString(it)) ? it->valuestring : NULL;
+}
+
+int aimee_ir_responses_to_chat(const char *body, char *model, size_t model_n,
+                               char **instructions_out, cJSON **messages_out, cJSON **tools_out,
+                               int *stream_out)
+{
+   if (model && model_n)
+      model[0] = '\0';
+   if (instructions_out)
+      *instructions_out = NULL;
+   if (messages_out)
+      *messages_out = NULL;
+   if (tools_out)
+      *tools_out = NULL;
+   if (stream_out)
+      *stream_out = 0;
+
+   cJSON *req = cJSON_Parse((body && body[0]) ? body : "{}");
+   if (!req)
+      return -1;
+   aimee_request_t ir;
+   char err[128];
+   if (responses_frontend_parse(req, &ir, err, sizeof err) != 0)
+   {
+      cJSON_Delete(req);
+      aimee_ir_metric_inc(AIMEE_IR_M_PARSE_FAIL, AIMEE_WIRE_RESPONSES);
+      return -1;
+   }
+   cJSON_Delete(req);
+   if (model && model_n && ir.model)
+      snprintf(model, model_n, "%s", ir.model);
+   if (stream_out)
+      *stream_out = ir.stream;
+
+   /* build the chat shape, then split leading system messages -> instructions */
+   cJSON *chat = openai_backend_build(&ir);
+   aimee_request_free(&ir);
+   if (!chat)
+   {
+      aimee_ir_metric_inc(AIMEE_IR_M_BACKEND_BUILD_FAIL, AIMEE_WIRE_RESPONSES);
+      return -1;
+   }
+   cJSON *msgs = cJSON_DetachItemFromObjectCaseSensitive(chat, "messages");
+   cJSON *tools = cJSON_DetachItemFromObjectCaseSensitive(chat, "tools");
+   cJSON_Delete(chat);
+
+   char *instr = NULL;
+   size_t ilen = 0;
+   cJSON *first;
+   while (msgs && (first = cJSON_GetArrayItem(msgs, 0)) != NULL)
+   {
+      const char *role = jo_str(first, "role");
+      if (!role || strcmp(role, "system") != 0)
+         break;
+      const char *c = jo_str(first, "content");
+      if (c && c[0])
+      {
+         size_t cl = strlen(c);
+         char *p = realloc(instr, ilen + cl + 3);
+         if (p)
+         {
+            instr = p;
+            if (ilen)
+            {
+               memcpy(instr + ilen, "\n\n", 2);
+               ilen += 2;
+            }
+            memcpy(instr + ilen, c, cl);
+            ilen += cl;
+            instr[ilen] = '\0';
+         }
+      }
+      cJSON_DeleteItemFromArray(msgs, 0);
+   }
+
+   if (instructions_out)
+      *instructions_out = instr;
+   else
+      free(instr);
+   if (messages_out)
+      *messages_out = msgs;
+   else
+      cJSON_Delete(msgs);
+   if (tools_out)
+      *tools_out = tools;
+   else
+      cJSON_Delete(tools);
+   aimee_ir_metric_inc(AIMEE_IR_M_IR_PATH, AIMEE_WIRE_RESPONSES);
+   return 0;
 }

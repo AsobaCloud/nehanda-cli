@@ -1378,6 +1378,8 @@ $(TESTPREFIX)/unit-test-aimee-ir-serve: $(OBJDIR)/tests/test_aimee_ir_serve.o \
                                        $(OBJDIR)/server/aimee_backend_openai.o \
                                        $(OBJDIR)/server/aimee_backend_responses.o \
                                        $(OBJDIR)/server/aimee_frontend_anthropic.o \
+                                       $(OBJDIR)/server/aimee_frontend_openai.o \
+                                       $(OBJDIR)/server/aimee_frontend_responses.o \
                                        $(OBJDIR)/server/aimee_ir.o \
                                        $(OBJDIR)/server/aimee_ir_metrics.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(TEST_L_FLAGS)
