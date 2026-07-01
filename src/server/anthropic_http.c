@@ -27,6 +27,7 @@
 #include "gw_stage_memory.h"
 #include "router_advise.h" /* gw_stage_router — the request->workflow seam */
 #include "aimee_ir_shadow.h" /* Slice 3: IR shadow-mode observer */
+#include "aimee_ir_serve.h"  /* Slice 5: IR live request-build */
 #include "ingress_preinject.h"
 #include "json_fluent.h"
 #include "server_http.h"
@@ -425,9 +426,19 @@ static int messages_buffered(const char *body, char *resp, int cap)
    if (driver_is_anthropic(driver))
       prov_body = build_anthropic_provider_body(req, ag, 0, parity);
    else
-      prov_body = build_provider_body(driver, ag, messages, tools, system_text,
-                                      agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)),
-                                      jo_num(req, "temperature", 1.0), 0);
+   {
+      /* Slice 5: build the provider request VIA THE IR (parse -> IR ->
+       * backend.build; NO direct anthropic->openai translation) when the IR-path
+       * flag is on. Falls back to the legacy translator on any failure or when the
+       * flag is off, so behavior is unchanged by default. */
+      if (aimee_ir_path_enabled())
+         prov_body = aimee_ir_build_provider_body(
+             req, driver->name, ag->model, agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)));
+      if (!prov_body)
+         prov_body = build_provider_body(driver, ag, messages, tools, system_text,
+                                         agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)),
+                                         jo_num(req, "temperature", 1.0), 0);
+   }
    http_status = agent_http_post(url, auth, prov_body ? prov_body : "{}", &response, ag->timeout_ms,
                                  extra[0] ? extra : NULL);
    if (http_status != 200 || !response)
