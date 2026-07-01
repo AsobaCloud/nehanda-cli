@@ -8,10 +8,16 @@
 #include "aimee_ir.h"
 #include "cJSON.h"
 
-static char *dup(const char *s) { return s ? strdup(s) : NULL; }
+static char *dup(const char *s)
+{
+   return s ? strdup(s) : NULL;
+}
 
 /* helper: a heap message with `n` text/other blocks */
-static aimee_block_t *mk_blocks(int n) { return calloc((size_t)n, sizeof(aimee_block_t)); }
+static aimee_block_t *mk_blocks(int n)
+{
+   return calloc((size_t)n, sizeof(aimee_block_t));
+}
 
 int main(void)
 {
@@ -44,7 +50,8 @@ int main(void)
    r.messages[2].blocks[0].text = dup("fix ");
    r.messages[2].blocks[1].type = AIMEE_BLK_TOOL_RESULT;
    r.messages[2].blocks[1].tool_id = dup("call_1");
-   r.messages[2].blocks[1].tool_result = cJSON_CreateString("output that must not leak into the query");
+   r.messages[2].blocks[1].tool_result =
+       cJSON_CreateString("output that must not leak into the query");
    r.messages[2].blocks[2].type = AIMEE_BLK_TEXT;
    r.messages[2].blocks[2].text = dup("the login bug");
 
@@ -77,8 +84,8 @@ int main(void)
 
    /* --- stop_reason canonical round-trip --- */
    aimee_stop_reason_t all[] = {AIMEE_STOP_END_TURN,       AIMEE_STOP_MAX_TOKENS,
-                                AIMEE_STOP_TOOL_USE,        AIMEE_STOP_STOP_SEQUENCE,
-                                AIMEE_STOP_CONTENT_FILTER,  AIMEE_STOP_ERROR,
+                                AIMEE_STOP_TOOL_USE,       AIMEE_STOP_STOP_SEQUENCE,
+                                AIMEE_STOP_CONTENT_FILTER, AIMEE_STOP_ERROR,
                                 AIMEE_STOP_UNKNOWN};
    for (size_t i = 0; i < sizeof all / sizeof all[0]; i++)
       assert(aimee_stop_reason_parse(aimee_stop_reason_name(all[i])) == all[i]);
@@ -113,9 +120,9 @@ int main(void)
    {
       aimee_request_t *x = pass ? &b : &a;
       memset(x, 0, sizeof *x);
-      x->model = dup(pass ? "gpt-4o" : "claude-3-5-sonnet");   /* differs: provenance */
+      x->model = dup(pass ? "gpt-4o" : "claude-3-5-sonnet"); /* differs: provenance */
       x->frontend = pass ? AIMEE_WIRE_OPENAI_CHAT : AIMEE_WIRE_ANTHROPIC;
-      x->raw = cJSON_CreateObject();                            /* differs: provenance */
+      x->raw = cJSON_CreateObject(); /* differs: provenance */
       x->n_messages = 1;
       x->messages = calloc(1, sizeof(aimee_message_t));
       x->messages[0].role = dup("user");

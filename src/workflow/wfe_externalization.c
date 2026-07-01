@@ -38,18 +38,17 @@ static int eq_ci(const char *a, const char *b)
 
 /* Exact/canonical externalization tool names. Extend only with review. */
 static const char *DENY_EXACT[] = {
-    "pr.open",  "pr_open",   "propose_pr",   "open_pr",  "merge",       "pr.merge",
-    "git_push", "git-push",  "push",         "gh_pr",    "web_fetch",   "webfetch",
-    "fetch",    "http",      "http_request", "curl",     "wget",        "send_email",
-    "email",    "notify",    "notification", "slack",    "post_comment", "comment",
-    NULL};
+    "pr.open",      "pr_open",  "propose_pr",   "open_pr", "merge",
+    "pr.merge",     "git_push", "git-push",     "push",    "gh_pr",
+    "web_fetch",    "webfetch", "fetch",        "http",    "http_request",
+    "curl",         "wget",     "send_email",   "email",   "notify",
+    "notification", "slack",    "post_comment", "comment", NULL};
 
 /* Substrings that mark an externalizing action regardless of surrounding name
  * (e.g. an MCP tool `mcp__github__create_pull_request`). Lowercase. */
 static const char *DENY_SUBSTR[] = {
-    "push",     "create_pull", "pull_request", "merge",     "publish",   "deploy",
-    "release",  "upload",      "egress",       "outbound",  "webhook",   "notify",
-    NULL};
+    "push",   "create_pull", "pull_request", "merge",   "publish", "deploy", "release",
+    "upload", "egress",      "outbound",     "webhook", "notify",  NULL};
 
 int wfe_is_externalization_tool(const char *tool_name)
 {
@@ -76,11 +75,11 @@ int wfe_externalization_tool_permitted(const char *tool_name, int delivered)
 /* Closed DELIVER_PRIMITIVES set: actions that mark work delivered/accepted or
  * make it visible outside the gated run. Extend only with review. */
 static const char *DELIVER_EXACT[] = {
-    "pr.open",   "pr_open",  "open_pr",     "propose_pr", "pr.merge", "merge",
-    "gh_pr",     "accept",   "mark_done",   "mark-done",  "deploy",   "publish",
-    "release",   "tag",      "close_issue", "issue_close", NULL};
-static const char *DELIVER_SUBSTR[] = {
-    "create_pull", "pull_request", "merge", "publish", "deploy", "release", NULL};
+    "pr.open", "pr_open", "open_pr",     "propose_pr",  "pr.merge", "merge",
+    "gh_pr",   "accept",  "mark_done",   "mark-done",   "deploy",   "publish",
+    "release", "tag",     "close_issue", "issue_close", NULL};
+static const char *DELIVER_SUBSTR[] = {"create_pull", "pull_request", "merge", "publish",
+                                       "deploy",      "release",      NULL};
 
 int wfe_is_deliver_primitive(const char *tool_name)
 {

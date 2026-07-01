@@ -52,10 +52,9 @@ int main(void)
    cJSON_Delete(bad_status);
 
    /* ---- packet plan ---- */
-   cJSON *packets =
-       P("{\"schema_version\":1,\"packets\":[{\"packet_id\":\"p1\","
-         "\"summary\":\"impl the button\",\"target_blocks\":[\"implement\"],"
-         "\"dependencies\":[],\"acceptance_criteria\":[\"compiles\"]}]}");
+   cJSON *packets = P("{\"schema_version\":1,\"packets\":[{\"packet_id\":\"p1\","
+                      "\"summary\":\"impl the button\",\"target_blocks\":[\"implement\"],"
+                      "\"dependencies\":[],\"acceptance_criteria\":[\"compiles\"]}]}");
    assert(wfe_packets_validate(packets, err, sizeof err) == 0);
    cJSON_Delete(packets);
 

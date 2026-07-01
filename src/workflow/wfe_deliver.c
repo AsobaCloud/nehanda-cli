@@ -66,8 +66,8 @@ static void mark_reach(const wfe_def_t *def, int start_idx, int success_only, in
    free(stack);
 }
 
-int wfe_deliver_reverify(const wfe_def_t *def, const char *deliver_id, wfe_gate_advanced_fn advanced,
-                         void *ctx, char *err, size_t errlen)
+int wfe_deliver_reverify(const wfe_def_t *def, const char *deliver_id,
+                         wfe_gate_advanced_fn advanced, void *ctx, char *err, size_t errlen)
 {
    if (err && errlen)
       err[0] = '\0';

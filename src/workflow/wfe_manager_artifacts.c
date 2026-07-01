@@ -198,7 +198,8 @@ int wfe_review_validate(const cJSON *rec, char *err, size_t errlen)
          snprintf(err, errlen, "blocking_findings[%d]: not an object", idx);
          return -1;
       }
-      static const char *fields[] = {"block_id", "rule_id", "expected", "observed", "suggested_fix"};
+      static const char *fields[] = {"block_id", "rule_id", "expected", "observed",
+                                     "suggested_fix"};
       for (size_t k = 0; k < sizeof fields / sizeof fields[0]; k++)
          if (req_str(f, fields[k], err, errlen) != 0)
          {

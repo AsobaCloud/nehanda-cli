@@ -19,14 +19,17 @@ static const char *ANTHROPIC =
     "\"system\":[{\"type\":\"text\",\"text\":\"You are a helpful coding assistant.\"}],"
     "\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"read foo.c\"}]}],"
     "\"tools\":[{\"name\":\"Read\",\"description\":\"Read a file\",\"input_schema\":"
-    "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}}]}";
+    "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}}"
+    "]}";
 
 static const char *OPENAI =
     "{\"model\":\"gpt-4o\",\"max_tokens\":1024,"
     "\"messages\":[{\"role\":\"system\",\"content\":\"You are a helpful coding assistant.\"},"
     "{\"role\":\"user\",\"content\":\"read foo.c\"}],"
-    "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"Read\",\"description\":\"Read a file\","
-    "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}}}]}";
+    "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"Read\",\"description\":\"Read a "
+    "file\","
+    "\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},"
+    "\"required\":[\"path\"]}}}]}";
 
 /* parse an Anthropic request JSON into the IR */
 static void parse_anthropic(const char *json, aimee_request_t *ir)
@@ -108,8 +111,10 @@ int main(void)
    const char *ORESP =
        "{\"id\":\"cmpl_1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"message\":"
        "{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"call_5\","
-       "\"type\":\"function\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"path\\\":\\\"y\\\"}\"}}]},"
-       "\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":8}}";
+       "\"type\":\"function\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"path\\\":"
+       "\\\"y\\\"}\"}}]},"
+       "\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":8}"
+       "}";
    cJSON *orj = cJSON_Parse(ORESP);
    aimee_response_t oresp;
    assert(openai_backend_parse(orj, &oresp, err, sizeof err) == 0);
@@ -132,11 +137,12 @@ int main(void)
    cJSON_Delete(cbuilt);
    aimee_request_free(&cir);
 
-   const char *CRESP =
-       "{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":["
-       "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]},"
-       "{\"type\":\"function_call\",\"call_id\":\"fc_1\",\"name\":\"Read\",\"arguments\":\"{\\\"path\\\":\\\"z\\\"}\"}],"
-       "\"usage\":{\"input_tokens\":30,\"output_tokens\":9}}";
+   const char *CRESP = "{\"id\":\"resp_1\",\"status\":\"completed\",\"output\":["
+                       "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":"
+                       "\"output_text\",\"text\":\"done\"}]},"
+                       "{\"type\":\"function_call\",\"call_id\":\"fc_1\",\"name\":\"Read\","
+                       "\"arguments\":\"{\\\"path\\\":\\\"z\\\"}\"}],"
+                       "\"usage\":{\"input_tokens\":30,\"output_tokens\":9}}";
    cJSON *crj = cJSON_Parse(CRESP);
    aimee_response_t cresp;
    assert(responses_backend_parse(crj, &cresp, err, sizeof err) == 0);
@@ -155,8 +161,10 @@ int main(void)
    const char *CONVO =
        "{\"model\":\"claude-3-5-sonnet\",\"max_tokens\":1024,\"messages\":["
        "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"read foo.c\"}]},"
-       "{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{\"path\":\"foo.c\"}}]},"
-       "{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_1\",\"content\":\"file contents\"}]}]}";
+       "{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":"
+       "\"Read\",\"input\":{\"path\":\"foo.c\"}}]},"
+       "{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_1\","
+       "\"content\":\"file contents\"}]}]}";
    aimee_request_t conv;
    parse_anthropic(CONVO, &conv);
    /* IR: the 3rd message is a user message with a single TOOL_RESULT block */

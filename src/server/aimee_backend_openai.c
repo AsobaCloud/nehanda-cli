@@ -12,7 +12,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char *dupstr(const char *s) { return s ? strdup(s) : NULL; }
+static char *dupstr(const char *s)
+{
+   return s ? strdup(s) : NULL;
+}
 
 static const char *ostr(const cJSON *o, const char *k)
 {
@@ -156,9 +159,8 @@ cJSON *openai_backend_build(const aimee_request_t *ir)
    {
       cJSON *stop = cJSON_AddArrayToObject(out, "stop");
       for (int i = 0; i < ir->n_stop; i++)
-         cJSON_AddItemToArray(stop, cJSON_CreateString(ir->stop_sequences[i]
-                                                           ? ir->stop_sequences[i]
-                                                           : ""));
+         cJSON_AddItemToArray(
+             stop, cJSON_CreateString(ir->stop_sequences[i] ? ir->stop_sequences[i] : ""));
    }
    return out;
 }
@@ -193,8 +195,8 @@ int openai_backend_parse(const cJSON *resp, aimee_response_t *out, char *err, si
    out->model = dupstr(ostr(resp, "model"));
 
    const cJSON *choices = cJSON_GetObjectItemCaseSensitive((cJSON *)resp, "choices");
-   const cJSON *choice = (choices && cJSON_IsArray(choices)) ? cJSON_GetArrayItem((cJSON *)choices, 0)
-                                                             : NULL;
+   const cJSON *choice =
+       (choices && cJSON_IsArray(choices)) ? cJSON_GetArrayItem((cJSON *)choices, 0) : NULL;
    const cJSON *msg = choice ? cJSON_GetObjectItemCaseSensitive((cJSON *)choice, "message") : NULL;
    const char *fr = choice ? ostr(choice, "finish_reason") : NULL;
    out->raw_stop_reason = dupstr(fr);
