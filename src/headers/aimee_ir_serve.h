@@ -32,4 +32,13 @@ int aimee_ir_responses_to_chat(const char *body, char *model, size_t model_n,
                                char **instructions_out, struct cJSON **messages_out,
                                struct cJSON **tools_out, int *stream_out);
 
+/* Build a provider request from the agent path's chat components (messages + tools
+ * + system) VIA THE IR, replacing driver->build_request's direct chat->provider
+ * translation. Assembles a chat request, parses it to the IR, overrides the served
+ * model, and builds for the backend named by `driver_name` ("chatgpt" -> Responses,
+ * else OpenAI). Returns a new cJSON the caller owns, or NULL to fall back. */
+struct cJSON *aimee_ir_build_from_chat(const char *agent_model, const struct cJSON *messages,
+                                       const struct cJSON *tools, const char *system,
+                                       const char *driver_name);
+
 #endif /* DEC_AIMEE_IR_SERVE_H */
