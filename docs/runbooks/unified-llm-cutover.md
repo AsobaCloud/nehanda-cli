@@ -5,8 +5,14 @@ The unified-llm-container migration (P7). **Operator-gated** — the production 
 pieces; this runbook is the order of operations + the gates.
 
 Validated before this runbook (`.253`/`.254`, see `benchmarks/results/unified-llm/`):
-the `aimee-llm:cpu`/`:gpu` images build, serve `/embed`+`/rerank`(ettin encoder + gateway
+the images build, serve `/embed`+`/rerank`(ettin encoder + gateway
 head)+`/v1/chat/completions`, and offload to the AMD 7900 XTX via Vulkan (`-ngl 99`).
+
+> **Naming update (post-cutover):** the images built here were renamed
+> `aimee-llm-cpu`/`aimee-llm-gpu` → `aimee-kb-cpu`/`aimee-kb-gpu-small`, and a third GPU
+> tier `aimee-kb-gpu-mid` (Gemma 4 26B-A4B) was added; `aimee-llm` is now only the plugin
+> name. The steps below keep the original names as a record — for the current tiers and
+> build-args see [../AIMEE_KB_SYNTH_TIERS.md](../AIMEE_KB_SYNTH_TIERS.md).
 
 ## 0. What changes
 
@@ -33,24 +39,28 @@ release (no in-image rollback flag); a post-cutover revert is a deploy-tag rollb
 
 CI builds + publishes both tiers as part of the normal release cycle:
 - **main:** `.github/workflows/publish-images.yml` (via `auto-release.yml`) builds
-  `aimee-llm-cpu` + `aimee-llm-gpu` on every release and tags them `:<version>` + `:latest`
-  (multi-arch). They are in both the `build` and the `merge` matrices — the merge step is
-  what applies the tags, so a build that pushes only by digest leaves `tags:null`.
-- **testing:** `.github/workflows/publish-llm-testing.yml` builds both tiers on `testing`
-  pushes that touch `Dockerfile.aimee-llm` or the gateway/supervisor scripts, tagged
-  `:testing` (+ `:testing-<sha>`, amd64) — a tested-but-unreleased image for `.254`.
+  `aimee-kb-cpu` + `aimee-kb-gpu-small` + `aimee-kb-gpu-mid` on every release and tags them
+  `:<version>` + `:latest`. They are in both the `build` and the `merge` matrices — the
+  merge step applies the tags, so a build that pushes only by digest leaves `tags:null`.
+  (`gpu-mid` is amd64-only.)
+- **testing:** `.github/workflows/publish-llm-testing.yml` builds `cpu` + `gpu-small` on
+  `testing` pushes that touch `Dockerfile.aimee-llm` or the gateway/supervisor scripts,
+  tagged `:testing` (+ `:testing-<sha>`, amd64). `gpu-mid` is dispatch-only
+  (`build_kb_gpu_mid=true`) — a tested-but-unreleased image for `.254`.
 
 To build out-of-band (e.g. on a PVE CT with docker):
 
 ```
-docker build -f Dockerfile.aimee-llm -t aimee-llm:cpu .
-docker build -f Dockerfile.aimee-llm -t aimee-llm:gpu \
+docker build -f Dockerfile.aimee-llm -t aimee-kb-cpu .
+docker build -f Dockerfile.aimee-llm -t aimee-kb-gpu-small \
   --build-arg EMBED_REPO=Qwen/Qwen3-Embedding-4B-GGUF \
   --build-arg EMBED_FILE=Qwen3-Embedding-4B-Q8_0.gguf \
   --build-arg RERANK_REPO=cross-encoder/ettin-reranker-400m-v1 \
-  --build-arg SYNTH_REPO=unsloth/gemma-4-12b-it-GGUF \
-  --build-arg SYNTH_FILE=gemma-4-12b-it-Q4_K_M.gguf .
+  --build-arg SYNTH_REPO=unsloth/gemma-4-12B-it-qat-GGUF \
+  --build-arg SYNTH_FILE=gemma-4-12B-it-qat-UD-Q4_K_XL.gguf \
+  --build-arg SYNTH_FA=on .
 ```
+(gpu-mid swaps the synth args to Gemma 4 26B-A4B — see the tiers doc for the exact pins.)
 
 ## 3. Deploy to `.254` (tierd / LXC, GPU)
 
