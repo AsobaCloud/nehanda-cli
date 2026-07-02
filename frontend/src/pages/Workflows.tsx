@@ -599,6 +599,22 @@ export default function Workflows() {
     return p ? { x: p.x + NODE_W / 2, y: p.y + NODE_H / 2 } : { x: 0, y: 0 };
   };
 
+  // Size the SVG to the actual node extents (plus a margin) so the overflow box
+  // can scroll to every node. A fixed 1600×1000 canvas clipped the scroll region,
+  // so deep workflows (x grows ~230px/depth) or nodes dragged right/down became
+  // unreachable. Keep a floor so a small graph still fills the viewport.
+  const CANVAS_PAD = 80;
+  let canvasW = 1600;
+  let canvasH = 1000;
+  if (graph) {
+    for (const n of graph.nodes) {
+      const p = pos[n.id];
+      if (!p) continue;
+      canvasW = Math.max(canvasW, p.x + NODE_W + CANVAS_PAD);
+      canvasH = Math.max(canvasH, p.y + NODE_H + CANVAS_PAD);
+    }
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <ProjectPicker
@@ -787,7 +803,7 @@ export default function Workflows() {
           }}
           onClick={() => setSelected(null)}
         >
-          <svg width={1600} height={1000} style={{ display: "block" }}>
+          <svg width={canvasW} height={canvasH} style={{ display: "block" }}>
             <defs>
               <marker
                 id="arrow"
