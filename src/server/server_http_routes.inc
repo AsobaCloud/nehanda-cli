@@ -1726,6 +1726,7 @@ static const http_route_t g_v1_routes[] = {
     {"POST", "/v1/agent/enable", NULL, RM_EXACT, "agent.enable", 0, rh_dispatch_op},
     {"POST", "/v1/agent/disable", NULL, RM_EXACT, "agent.disable", 0, rh_dispatch_op},
     {"POST", "/v1/agent/probe", NULL, RM_EXACT, "agent.probe", 0, rh_dispatch_op},
+    {"GET", "/v1/agent/stats", NULL, RM_EXACT, "agent.stats", 0, rh_dispatch_op},
     {"POST", "/v1/agent/setup", NULL, RM_EXACT, "agent.setup", 0, rh_dispatch_op},
     {"POST", "/v1/agent/setup_poll", NULL, RM_EXACT, "agent.setup_poll", 0, rh_dispatch_op},
     {"POST", "/v1/agent/cli_oauth_start", NULL, RM_EXACT, "agent.cli_oauth_start", 0,
