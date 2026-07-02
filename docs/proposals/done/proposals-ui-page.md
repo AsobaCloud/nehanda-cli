@@ -1,5 +1,10 @@
 # Proposal: dedicated Proposals web page (author → autonomous implement → status/history)
 
+- **State:** done
+- **Completed:** 2026-07-02
+- **Moved from:** `docs/proposals/pending/proposals-ui-page.md`
+- **Feature doc:** [`docs/PROPOSALS_PAGE.md`](../../PROPOSALS_PAGE.md)
+
 ## Goal
 
 Give the aimee web UI a **Proposals** page, separate from Workflows, that carries a
@@ -297,3 +302,40 @@ break the Workflows page (TS structural typing ignores extra keys — kept, veri
 its build); "drafting" badge removed (badge derives strictly from
 `state`+`pause_reason`+`current_stage`); per-delegate drill-down stays a Non-goal
 (execution tables lack `work_item_id`); server-side draft store deferred to Non-goals.
+
+---
+
+## Close-out (shipped)
+
+**DONE — all four slices merged to `testing`.** Built slice-by-slice, each design and
+code roundtable-reviewed before merge:
+
+- **Slice 0 — backend read surfaces** (#954): paginated lifecycle timeline
+  (`/v1/workflow/items/<id>/events`), path-confined proposal read-back (`/proposal`),
+  operator `/all`, and owner-scoped + enriched `item_to_json`. Behavioral tests in
+  `test_wfe_webapi.c` (ownership allow+deny, pagination cursor, symlink→403).
+- **Slice 1 — Proposals page + Workflows de-scope** (#956): list + status/history
+  detail; Runs/Run-state/gate removed from Workflows.
+- **Slice 2 — author-from-scratch composer** (#959): composer + client-side draft;
+  Submit-proposal panel removed from Workflows. Also repaired pre-existing `testing`
+  breakage (clang-format + an `audit_args_hash` test-link `undefined reference`).
+- **Slice 3 — delegate-assisted drafting** (#963): a tool-free one-shot completion
+  (`agent_generate` → `agent_execute`, non-CLI, no worktree) behind `POST
+  /v1/agent/draft`; the composer's "Draft with a delegate" button.
+
+**Design notes that changed under review:** R-Q1 resolved to a constrained,
+**non-agentic** draft path — the plan roundtable rejected reusing the agentic
+`/v1/delegate/run` (tool access + worktree + zombie jobs behind a browser button). The
+cap model landed on **owner-only per-item reads** (no admin bypass; `/all` is the
+admin list) rather than a per-request caps accessor.
+
+**No new tables or columns.** A proposal remains markdown + a `lifecycle_work_item`.
+
+**Feature documentation:** [`docs/PROPOSALS_PAGE.md`](../../PROPOSALS_PAGE.md)
+(roundtable-approved).
+
+**Carried as future work / known limits:** headless browser click-through of the live
+UI (the remaining manual verification step); per-delegate drill-down inside a stage
+(execution tables lack `work_item_id`); a lighter dedicated draft endpoint if the
+synchronous worker-hold ever matters; server-side draft persistence; cross-user admin
+inspection of another user's timeline/proposal.
