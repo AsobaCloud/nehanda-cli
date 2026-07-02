@@ -22,7 +22,6 @@
 #include "kb_reasoning.h"
 #endif
 #include "log.h"
-#include "audit_action.h"
 #include "platform_path.h"
 #include "slop_detect.h"
 #include <ctype.h>
@@ -1194,18 +1193,8 @@ static int is_write_intent(const char *tool_name, cJSON *root)
    return 0;
 }
 
-/* Per-call reason_code for the S2 governed-action audit row. Set at block sites
- * that carry a stable key; the pre_tool_check wrapper reads it post-verdict.
- * Thread-local so concurrent sessions do not clobber each other. */
-static __thread char g_audit_reason[48];
-static void audit_reason_set(const char *code)
-{
-   snprintf(g_audit_reason, sizeof g_audit_reason, "%s", code ? code : "");
-}
-
-static int pre_tool_check_inner(const char *tool_name, const char *input_json,
-                                session_state_t *state, const char *guardrail_mode, const char *cwd,
-                                char *msg_buf, size_t msg_len)
+int pre_tool_check_inner(const char *tool_name, const char *input_json, session_state_t *state,
+                   const char *guardrail_mode, const char *cwd, char *msg_buf, size_t msg_len)
 {
    if (!tool_name || !input_json || !state)
       return 0;
@@ -1236,8 +1225,6 @@ static int pre_tool_check_inner(const char *tool_name, const char *input_json,
          snprintf(msg_buf, msg_len, "%s: %s",
                   decision == COMPUTER_USE_DECISION_APPROVE ? "APPROVAL_REQUIRED" : "BLOCKED",
                   reason[0] ? reason : "computer-use action rejected by policy");
-         audit_reason_set(decision == COMPUTER_USE_DECISION_APPROVE ? "computer_use_approval"
-                                                                    : "computer_use_blocked");
          cJSON_Delete(root);
          return 2;
       }
@@ -1626,7 +1613,6 @@ static int pre_tool_check_inner(const char *tool_name, const char *input_json,
                "cost-tracked, see the shared memory + KB, and inherit this session's guardrails.");
       audit_log("subagent_blocked",
                 "provider sub-agent tool blocked — keep delegation inside aimee");
-      audit_reason_set("subagent_blocked");
       cJSON_Delete(root);
       return 2;
    }
@@ -1686,7 +1672,6 @@ static int pre_tool_check_inner(const char *tool_name, const char *input_json,
                      hits, label, (long long)matches[i].id);
             audit_log("antipattern_blocked", "(%dx, id=%lld): %s", hits, (long long)matches[i].id,
                       label);
-            audit_reason_set("antipattern_blocked");
             cJSON_Delete(root);
             return 2;
          }
@@ -1796,7 +1781,6 @@ static int pre_tool_check_inner(const char *tool_name, const char *input_json,
                      "with Edit, or rewrite with Write after reviewing the file.",
                      norm);
             audit_log("read_before_write", "blocked blind overwrite of %s", norm);
-            audit_reason_set("read_before_write");
             cJSON_Delete(root);
             return 2;
          }
@@ -1828,7 +1812,6 @@ static int pre_tool_check_inner(const char *tool_name, const char *input_json,
                      norm, (long long)st.st_size, new_len);
             audit_log("truncating_write", "blocked %zu-byte overwrite of %lld-byte file %s",
                       new_len, (long long)st.st_size, norm);
-            audit_reason_set("truncating_write");
             cJSON_Delete(root);
             return 2;
          }
@@ -1860,7 +1843,6 @@ static int pre_tool_check_inner(const char *tool_name, const char *input_json,
                      "making further edits.",
                      norm);
             audit_log("stale_edit", "blocked edit of changed file %s", norm);
-            audit_reason_set("stale_edit");
             cJSON_Delete(root);
             return 2;
          }
@@ -2015,63 +1997,4 @@ static int pre_tool_check_inner(const char *tool_name, const char *input_json,
           normalize_path(fp->valuestring, effective_cwd, norm, sizeof(norm)), msg_buf, msg_len);
    cJSON_Delete(root);
    return 0;
-}
-
-/* Cached audit_action_enabled. Read once on first use; a config_load failure
- * leaves the memset-zeroed flag at 0 (audit OFF), so the gate is fail-safe and
- * the hot path costs one branch instead of a per-call config parse. Toggling the
- * knob takes effect on restart — acceptable for a passive, default-off audit. */
-static int g_audit_action_enabled = -1;
-static int audit_action_is_enabled(void)
-{
-   if (g_audit_action_enabled < 0)
-   {
-      config_t cfg;
-      memset(&cfg, 0, sizeof cfg);
-      config_load(&cfg);
-      g_audit_action_enabled = cfg.audit_action_enabled ? 1 : 0;
-   }
-   return g_audit_action_enabled;
-}
-
-/* Emit exactly one governed-action audit row per pre_tool_check call, AFTER the
- * verdict is decided. Strictly side-effect-only: any failure here (hashing, log
- * write) leaves the verdict untouched — audit loss is acceptable, enforcement
- * drift is not. */
-static void guardrails_emit_action_audit(const char *tool_name, const char *input_json,
-                                         const char *guardrail_mode, session_state_t *state, int rc)
-{
-   if (!audit_action_is_enabled())
-      return;
-   const char *verdict;
-   if (rc == 2)
-      /* rc==2 covers both hard block and computer-use approval-required; the
-       * reason code distinguishes them. */
-      verdict = strstr(g_audit_reason, "approval") ? "approval_required" : "block";
-   else if (rc == 1 || rc == 3)
-      verdict = "rewrite";
-   else
-      verdict = rc == 0 ? "allow" : "unknown"; /* surface novel rc, don't hide it */
-   const char *reason = g_audit_reason[0] ? g_audit_reason : verdict;
-   const char *actor = (state && state->is_delegate) ? "delegate" : "primary";
-   const char *mode = guardrail_mode ? guardrail_mode : MODE_APPROVE;
-   /* Pre-init to the S1 sentinel so the wrapper is safe even if audit_args_hash
-    * changes behavior; audit_args_hash also writes the sentinel first. */
-   char args_hash[AUDIT_ARGS_HASH_LEN];
-   snprintf(args_hash, sizeof args_hash, "v1-");
-   audit_args_hash(tool_name, input_json, args_hash, sizeof args_hash);
-   long long task_id = state ? (long long)state->active_task_id : 0;
-   audit_action_log(actor, tool_name, args_hash, mode, reason, verdict, task_id);
-}
-
-int pre_tool_check(const char *tool_name, const char *input_json, session_state_t *state,
-                   const char *guardrail_mode, const char *cwd, char *msg_buf, size_t msg_len)
-{
-   /* Clear the reason BEFORE inner so a NULL-arg early return (or any path that
-    * sets no reason) cannot emit a stale reason_code from a prior call. */
-   g_audit_reason[0] = '\0';
-   int rc =
-       pre_tool_check_inner(tool_name, input_json, state, guardrail_mode, cwd, msg_buf, msg_len);
-   guardrails_emit_action_audit(tool_name, input_json, guardrail_mode, state, rc);
-   return rc;
 }

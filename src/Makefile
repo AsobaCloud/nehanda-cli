@@ -288,7 +288,7 @@ MCP_GIT_SRCS = mcp_git_query.c mcp_git_write.c mcp_git_branch.c mcp_git_pr.c git
 MCP_GIT_OBJS = $(MCP_GIT_SRCS:%.c=$(OBJDIR)/%.o)
 
 # --- Layer 0: Foundation (db, config, util, text, render, log, platform, cJSON) ---
-CORE_SRCS = db1/db.c db1/db_schema.c config.c config_sections.c config_database.c config_learning.c config_memory.c config_charter.c config_trigger.c config_kb_maintenance.c config_kb_curator.c config_server_api.c config_skills.c config_save.c config_mode.c config_fields.c toolset.c util.c util_url.c forge_credentials.c forge_app_token.c workspace_mirror.c report_enrichment.c delivery_target.c text.c render.c markdown.c json_fluent.c code_audit_graph.c log.c shutdown_forensics.c dstr.c yaml.c diff.c sse_parser.c \
+CORE_SRCS = db1/db.c db1/db_schema.c config.c config_sections.c config_database.c config_learning.c config_memory.c config_charter.c config_trigger.c config_kb_maintenance.c config_kb_curator.c config_server_api.c config_skills.c config_save.c config_mode.c config_fields.c toolset.c util.c util_url.c forge_credentials.c forge_app_token.c workspace_mirror.c report_enrichment.c audit_action.c delivery_target.c text.c render.c markdown.c json_fluent.c code_audit_graph.c log.c shutdown_forensics.c dstr.c yaml.c diff.c sse_parser.c \
             aimee_home.c shared/kb_paths.c provider_client.c kb_curator_provider.c \
             compact.c coord_closet.c fold_budget.c context_fold.c context_reduce.c fold_register.c fold_recall.c task_rail.c episode_seal.c platform_random.c slop_detect.c proxy_bootstrap.c reasoning_cap.c \
             client_integrations.c mcp_tools.c mcp_tool_profile.c mcp_tools_extended.c mcp_skill_tools.c mcp_tools_gateway.c events.c \
@@ -321,7 +321,7 @@ DB2_OBJS = $(DB2_SRCS:%.c=$(OBJDIR)/%.o)
 # --- Layer 1: Data & policy (memory, index, rules, guardrails, workspace) ---
 DATA_SRCS = code_match.c rel_types.c memory_fact_gate.c memory_extract_patterns.c memory_pii_gate.c memory_core.c memory_logic.c memory_effective.c memory_health.c memory_conflict.c memory_context.c memory_assemble.c memory_advanced.c memory_prospective.c memory_lifecycle.c memory_directives.c memory_maintenance.c memory_graph.c memory_graph_fusion.c memory_scan.c memory_improve.c memory_episodes.c \
             index.c extractors.c extractors_extra.c extractors_new_langs.c code_treesitter.c css_analyze.c css_oracle.c css_render_oracle.c css_render_cmd.c \
-            context_discover.c tasks.c learning_router.c learning_implicit.c dogfood.c working_profile.c guardrails.c guardrails_orchestrator.c guardrails_tdd.c workflow_learn.c session_state.c session_briefing.c file_safety.c branch_ownership.c integrity_gate.c conversation_context.c payload_rewrite.c guardrails_semantic.c guardrails_blast_radius.c gateway_policy.c gateway_pipeline.c gateway_delegate.c \
+            context_discover.c tasks.c learning_router.c learning_implicit.c dogfood.c working_profile.c guardrails.c guardrails_orchestrator.c guardrails_action_audit.c guardrails_tdd.c workflow_learn.c session_state.c session_briefing.c file_safety.c branch_ownership.c integrity_gate.c conversation_context.c payload_rewrite.c guardrails_semantic.c guardrails_blast_radius.c gateway_policy.c gateway_pipeline.c gateway_delegate.c \
             workspace.c worktree_gc.c workspace_manifest.c workspace_handle.c server/agent_config.c cmd_describe.c \
             history.c role_templates.c skill.c skill_rollback.c skill_review.c skill_curator.c conversation.c \
             trajectory_export.c trajectory_batch.c \

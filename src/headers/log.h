@@ -40,6 +40,11 @@ void audit_log(const char *event_type, const char *fmt, ...) __attribute__((form
 void audit_action_log(const char *actor, const char *tool, const char *args_hash, const char *mode,
                       const char *reason_code, const char *verdict, long long task_id);
 
+/* Last audit event key set by audit_log() on this thread (empty if none since
+ * the last reset). Used to derive a governed-action reason_code. */
+const char *audit_last_event(void);
+void audit_last_event_reset(void);
+
 /* Convenience macros */
 #define LOG_ERROR(mod, ...) aimee_log(LOG_ERROR, mod, __VA_ARGS__)
 #define LOG_WARN(mod, ...)  aimee_log(LOG_WARN, mod, __VA_ARGS__)
