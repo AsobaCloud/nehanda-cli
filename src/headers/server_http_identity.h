@@ -46,6 +46,13 @@ void server_http_identity_capture(int fd, int is_tcp, const char *buf);
  * capture and clear, i.e. during a route handler on the serving thread. */
 const char *server_http_identity_principal(void);
 
+/* The in-flight request's query string ("k=v&…", no '?'), or "" if none. Set by
+ * server_http_identity_set_query around the route call, cleared by _clear. Valid
+ * only during a route handler on the serving thread; points into the request
+ * buffer. Used by buffered handlers that read query params (e.g. events cursor). */
+void server_http_identity_set_query(const char *q);
+const char *server_http_identity_query(void);
+
 /* Copy the captured identity onto a (synthesized) connection — loopback_rpc's
  * hop 2. Safe to call with no prior capture: writes the un-attested defaults. */
 void server_http_identity_apply(server_conn_t *conn);
