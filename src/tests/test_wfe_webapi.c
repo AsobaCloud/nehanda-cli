@@ -321,7 +321,8 @@ int main(void)
       fclose(pf);
       assert(wf_api_proposal("wi_owned", buf, CAP) == 200);
       cJSON *o = parse_resp(buf);
-      assert(strstr(cJSON_GetObjectItemCaseSensitive(o, "proposal_md")->valuestring, "My proposal"));
+      assert(
+          strstr(cJSON_GetObjectItemCaseSensitive(o, "proposal_md")->valuestring, "My proposal"));
       assert(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(o, "truncated")));
       cJSON_Delete(o);
 
@@ -330,7 +331,8 @@ int main(void)
       /* Events pagination: add three more events (id-ascending), page by 2. */
       (void)db1_lifecycle_event_add("wi_owned", "draft", "advance", "engine", "", "", 0.0);
       (void)db1_lifecycle_event_add("wi_owned", "impl", "advance", "engine", "", "", 0.0);
-      (void)db1_lifecycle_event_add("wi_owned", "impl", "pause", "engine", "pending_human", "", 0.0);
+      (void)db1_lifecycle_event_add("wi_owned", "impl", "pause", "engine", "pending_human", "",
+                                    0.0);
       assert(wf_api_events("wi_owned", 0, 2, buf, CAP) == 200);
       o = parse_resp(buf);
       cJSON *evs = cJSON_GetObjectItemCaseSensitive(o, "events");

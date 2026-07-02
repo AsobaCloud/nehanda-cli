@@ -413,8 +413,7 @@ static const char *path_basename(const char *p)
 static int wf_owns(const db1_work_item_t *wi)
 {
    const char *principal = server_http_identity_principal();
-   return wi->submitter[0] && principal && principal[0] &&
-          strcmp(principal, wi->submitter) == 0;
+   return wi->submitter[0] && principal && principal[0] && strcmp(principal, wi->submitter) == 0;
 }
 
 /* shared: serialize one work-item row. The base keys (id..repo) are unchanged so

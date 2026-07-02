@@ -722,7 +722,8 @@ int main(void)
        * /all exact row must win over the /<id> prefix row (else "all" is parsed as a
        * work-item id under CAP_DASHBOARD_READ). */
       assert(server_http_route_caps("GET", "/v1/workflow/items/wi_x/events") == CAP_DASHBOARD_READ);
-      assert(server_http_route_caps("GET", "/v1/workflow/items/wi_x/proposal") == CAP_DASHBOARD_READ);
+      assert(server_http_route_caps("GET", "/v1/workflow/items/wi_x/proposal") ==
+             CAP_DASHBOARD_READ);
       assert(server_http_route_caps("GET", "/v1/workflow/items/all") == CAP_WORKFLOW_ADMIN);
       assert(server_http_route_caps("GET", "/v1/workflow/items/wi_x") == CAP_DASHBOARD_READ);
       /* Presence is session-scoped; the streaming routes carry caps too. */
