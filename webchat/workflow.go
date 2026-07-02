@@ -80,39 +80,76 @@ func (s *server) handleWorkflowSave(w http.ResponseWriter, r *http.Request) {
 	s.proxyWorkflow(w, r, http.MethodPost, "/v1/workflow/save", "")
 }
 
-// GET /api/workflow/items       — list work items (run-state)
-// GET /api/workflow/items/<id>  — one work item's run-state
+// Work-item run-state surface. Every call goes through v1RequestWebuser so the
+// aimee-server sees the caller's webuser: principal — the item read handlers scope
+// by ownership (submitter == principal), so the wrong identity would 403/empty.
+//
+//	GET  /api/workflow/items              — the caller's own work items
+//	GET  /api/workflow/items/all          — all items (operator view)
+//	GET  /api/workflow/items/<id>         — one item's run-state (owner-only)
+//	GET  /api/workflow/items/<id>/events  — lifecycle timeline (owner-only, ?after&limit)
+//	GET  /api/workflow/items/<id>/proposal— source markdown (owner-only)
+//	POST /api/workflow/items/<id>/gate    — approve/reject a parked human gate
 func (s *server) handleWorkflowItems(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/api/workflow/items" {
-		s.proxyWorkflow(w, r, http.MethodGet, "/v1/workflow/items", "")
+	// Exact list routes (no <id> segment).
+	if r.URL.Path == "/api/workflow/items" && r.Method == http.MethodGet {
+		s.webuserPass(w, r, http.MethodGet, "/v1/workflow/items", nil)
 		return
 	}
-	// POST /api/workflow/items/<id>/gate -> operator approve/reject of a parked
-	// human gate. <id> must be one safe segment.
-	if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/gate") {
-		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/workflow/items/"), "/gate")
-		if id == "" || strings.ContainsAny(id, "/.%") {
-			http.Error(w, `{"error":"bad path"}`, http.StatusBadRequest)
-			return
-		}
+	if r.URL.Path == "/api/workflow/items/all" && r.Method == http.MethodGet {
+		s.webuserPass(w, r, http.MethodGet, "/v1/workflow/items/all", nil)
+		return
+	}
+
+	// Sub-resource routes: /api/workflow/items/<id>[/events|/proposal|/gate].
+	rest := strings.TrimPrefix(r.URL.Path, "/api/workflow/items/")
+	id, suffix := rest, ""
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		id, suffix = rest[:i], rest[i:]
+	}
+	// <id> must be one safe segment (no separators/traversal/percent-encoding that
+	// could smuggle a '/' past this guard); the server's matcher is authoritative.
+	if id == "" || strings.ContainsAny(id, "/.%") {
+		http.Error(w, `{"error":"bad path"}`, http.StatusBadRequest)
+		return
+	}
+
+	switch {
+	case suffix == "/gate" && r.Method == http.MethodPost:
 		const maxBody = 1 << 20
 		body, _ := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 		if len(body) > maxBody {
 			http.Error(w, `{"error":"request too large"}`, http.StatusRequestEntityTooLarge)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), socketCallTimeout)
-		defer cancel()
-		st, data, err := s.v1RequestWebuser(ctx, currentUser(r), http.MethodPost,
-			"/v1/workflow/items/"+id+"/gate", body)
-		if err != nil {
-			http.Error(w, `{"error":"aimee-server unavailable"}`, http.StatusBadGateway)
-			return
+		s.webuserPass(w, r, http.MethodPost, "/v1/workflow/items/"+id+"/gate", body)
+	case suffix == "/events" && r.Method == http.MethodGet:
+		path := "/v1/workflow/items/" + id + "/events"
+		if r.URL.RawQuery != "" { // forward ?after=&limit= to the paginating handler
+			path += "?" + r.URL.RawQuery
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(st)
-		_, _ = w.Write(data)
+		s.webuserPass(w, r, http.MethodGet, path, nil)
+	case suffix == "/proposal" && r.Method == http.MethodGet:
+		s.webuserPass(w, r, http.MethodGet, "/v1/workflow/items/"+id+"/proposal", nil)
+	case suffix == "" && r.Method == http.MethodGet:
+		s.webuserPass(w, r, http.MethodGet, "/v1/workflow/items/"+id, nil)
+	default:
+		http.Error(w, `{"error":"bad path"}`, http.StatusBadRequest)
+	}
+}
+
+// webuserPass proxies to an aimee-server /v1 path under the caller's webuser
+// identity (so ownership scoping resolves) and streams the envelope back verbatim.
+func (s *server) webuserPass(w http.ResponseWriter, r *http.Request, method, v1path string, body []byte) {
+	ctx, cancel := context.WithTimeout(r.Context(), socketCallTimeout)
+	defer cancel()
+	st, data, err := s.v1RequestWebuser(ctx, currentUser(r), method, v1path, body)
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = fmt.Fprintf(w, `{"error":"workflow service unreachable"}`)
 		return
 	}
-	s.proxyWorkflow(w, r, http.MethodGet, "/v1/workflow/items/", "/api/workflow/items/")
+	w.WriteHeader(st)
+	_, _ = w.Write(data)
 }

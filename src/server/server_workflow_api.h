@@ -27,11 +27,31 @@ int wf_api_validate(const char *body, char *resp, int cap);
  * an empty prev_version and a non-existent file). 400 on invalid def/name. */
 int wf_api_save(const char *body, char *resp, int cap);
 
-/* GET /v1/workflow/items -- list work items (run-state rows). */
+/* GET /v1/workflow/items -- list work items OWNED BY the calling principal
+ * (run-state rows). Ownership = item.submitter == server_http_identity_principal().
+ * The Proposals page's default list. */
 int wf_api_items(char *resp, int cap);
 
-/* GET /v1/workflow/items/{id} -- one work item's run-state (workflow, pinned
- * version, current stage, state, pause reason). 404 if unknown. */
+/* GET /v1/workflow/items/all -- list ALL work items regardless of submitter.
+ * Route-gated by CAP_WORKFLOW_ADMIN (operator view). */
+int wf_api_items_all(char *resp, int cap);
+
+/* GET /v1/workflow/items/{id} -- one work item's run-state. Owner-only: 403 if
+ * the item's submitter is not the calling principal. 404 if unknown. */
 int wf_api_item(const char *id, char *resp, int cap);
+
+/* GET /v1/workflow/items/{id}/events?after=<id>&limit=<n> -- the append-only
+ * lifecycle timeline (proposal history), oldest-first, paginated by event id.
+ * Owner-only (403). Returns {events:[{id,stage,kind,actor,detail,cost_usd,
+ * created_at}], next_after}. `after` (default 0) returns events with id>after;
+ * `limit` is clamped to [1,200] (default 200); `next_after` is the id of the last
+ * event returned (echoes `after` when the page is empty). */
+int wf_api_events(const char *id, long after, int limit, char *resp, int cap);
+
+/* GET /v1/workflow/items/{id}/proposal -- the source proposal markdown the run is
+ * executing. Owner-only (403). Reads the item's server-minted proposal_path,
+ * confined to $AIMEE_HOME/workflows/proposals via a dirfd + openat(O_NOFOLLOW).
+ * Returns {proposal_md, truncated}; 404 if the file is missing. */
+int wf_api_proposal(const char *id, char *resp, int cap);
 
 #endif /* DEC_SERVER_WORKFLOW_API_H */
