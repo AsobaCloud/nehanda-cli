@@ -1867,6 +1867,10 @@ paths:
       summary: Probe an agent/provider
       requestBody: { content: { application/json: { schema: { type: object } } } }
       responses: { "200": { description: Probe result, content: { application/json: { schema: { type: object } } } } }
+  /agent/stats:
+    get:
+      summary: Per-delegate run statistics
+      responses: { "200": { description: Per-delegate run stats, content: { application/json: { schema: { type: object } } } } }
   /agent/setup:
     post:
       summary: Set up an agent (async)

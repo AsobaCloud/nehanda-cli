@@ -85,6 +85,12 @@ var methodRoutes = map[string]methodRoute{
 	"plugin.enable":            {http.MethodPost, "/v1/plugins/enable"},
 	"plugin.disable":           {http.MethodPost, "/v1/plugins/disable"},
 	"agent.list":               {http.MethodGet, "/v1/agent/list"},
+	"agent.stats":              {http.MethodGet, "/v1/agent/stats"},
+	"agent.add":                {http.MethodPost, "/v1/agent/add"},
+	"agent.remove":             {http.MethodPost, "/v1/agent/remove"},
+	"agent.enable":             {http.MethodPost, "/v1/agent/enable"},
+	"agent.disable":            {http.MethodPost, "/v1/agent/disable"},
+	"agent.probe":              {http.MethodPost, "/v1/agent/probe"},
 	"collab_rules.list":        {http.MethodGet, "/v1/collab_rules"},
 	"collab_rules.list_active": {http.MethodGet, "/v1/collab_rules/active"},
 	// Mutations + arg-bearing calls (POST, body carries the args; the server
@@ -157,6 +163,55 @@ func (s *server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	json.Unmarshal(agents, &arr)
 	count := len(arr)
 	json.NewEncoder(w).Encode(map[string]any{"agents": arr, "count": count})
+}
+
+// handleAgentStats proxies GET /api/agents/stats -> RPC agent.stats, returning
+// the per-delegate run stats array ({stats:[{name,total_calls,successful_calls,
+// failed_calls,success_rate,avg_latency_ms,tokens,cost}]}). Never errors hard:
+// an empty roster or a stats-less server yields {"stats":[]} so the page renders.
+func (s *server) handleAgentStats(w http.ResponseWriter, r *http.Request) {
+	resp, err := s.socketCallForRequest(r, map[string]any{"method": "agent.stats"})
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil || resp == nil {
+		fmt.Fprint(w, `{"stats":[]}`)
+		return
+	}
+	if stats, ok := resp["stats"]; ok {
+		// Re-encode through the JSON writer (not string concatenation) so the
+		// envelope is always well-formed for the page's getJSON parser.
+		_ = json.NewEncoder(w).Encode(map[string]json.RawMessage{"stats": stats})
+		return
+	}
+	fmt.Fprint(w, `{"stats":[]}`)
+}
+
+// agentOpHandler proxies a roster mutation (add/remove/enable/disable/probe) to
+// its RPC method. The browser POSTs a CLI-style {"args":[...]} body mirroring the
+// `aimee agent <op>` argv (e.g. add -> [name,endpoint,model,"--provider","openai",
+// "--roles","summarize,format"]; remove/enable/disable/probe -> [name]). The
+// server's dispatch envelope is returned verbatim so the UI sees the same
+// {status|error,...} shape the CLI would.
+func (s *server) agentOpHandler(method string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Args []string `json:"args"`
+		}
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		req := map[string]any{"method": method}
+		if body.Args != nil {
+			req["args"] = body.Args
+		}
+		resp, err := s.socketCallForRequest(r, req)
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			writeJSONError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		// resp is map[string]json.RawMessage; the values marshal back verbatim.
+		_ = json.NewEncoder(w).Encode(resp)
+	}
 }
 
 func (s *server) handleDelegations(w http.ResponseWriter, r *http.Request) {
