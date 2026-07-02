@@ -26,6 +26,10 @@
 static _Thread_local long tl_peer_uid = -1;
 static _Thread_local attested_transport_t tl_transport = ATTEST_NONE;
 static _Thread_local char tl_principal[VAULT_PRINCIPAL_MAX] = "";
+/* Query string of the in-flight request ("k=v&…", no '?'); set around the route
+ * call, cleared with the rest. Points into the request buffer — read only within
+ * the handler. */
+static _Thread_local const char *tl_query = "";
 
 /* The shared secret that authenticates a webchat `webuser:` assertion is the
  * server.token file (0600, in AIMEE_HOME — the secret only the webchat backend
@@ -127,6 +131,17 @@ void server_http_identity_clear(void)
    tl_peer_uid = -1;
    tl_transport = ATTEST_NONE;
    tl_principal[0] = '\0';
+   tl_query = "";
+}
+
+void server_http_identity_set_query(const char *q)
+{
+   tl_query = q ? q : "";
+}
+
+const char *server_http_identity_query(void)
+{
+   return tl_query ? tl_query : "";
 }
 
 void http_error_json(char *resp, size_t cap, const char *msg)

@@ -12,10 +12,14 @@
 
 #ifndef _WIN32
 #include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 #include "aimee_home.h"
 #include "cJSON.h"
+#include "server_http_identity.h" /* server_http_identity_principal — ownership scoping */
 #include "wfe_def.h"
 #include "wfe_iface.h"
 #include "wfe_store.h"
@@ -395,7 +399,26 @@ int wf_api_save(const char *body, char *resp, int cap)
    return emit(o, resp, cap);
 }
 
-/* shared: serialize one work-item row */
+/* The basename of a path (last '/'-segment), or the whole string if none. Used
+ * to expose proposal_name without leaking the server FS path. */
+static const char *path_basename(const char *p)
+{
+   const char *slash = p ? strrchr(p, '/') : NULL;
+   return slash ? slash + 1 : (p ? p : "");
+}
+
+/* Ownership: true iff the item's submitter equals the calling principal (string
+ * compare; both must be non-empty). A NULL/empty submitter (CLI/legacy/system
+ * rows) is owned by nobody, so owner-only reads refuse it — fail-closed. */
+static int wf_owns(const db1_work_item_t *wi)
+{
+   const char *principal = server_http_identity_principal();
+   return wi->submitter[0] && principal && principal[0] &&
+          strcmp(principal, wi->submitter) == 0;
+}
+
+/* shared: serialize one work-item row. The base keys (id..repo) are unchanged so
+ * existing consumers keep working; the rest are additive Proposals-page fields. */
 static cJSON *item_to_json(const db1_work_item_t *wi)
 {
    cJSON *o = cJSON_CreateObject();
@@ -407,19 +430,41 @@ static cJSON *item_to_json(const db1_work_item_t *wi)
    cJSON_AddStringToObject(o, "mode", wi->mode);
    cJSON_AddStringToObject(o, "pause_reason", wi->pause_reason);
    cJSON_AddStringToObject(o, "repo", wi->repo);
+   /* additive: Proposals status fields (cheap DB columns only — no file IO). */
+   if (wi->proposal_path[0])
+      cJSON_AddStringToObject(o, "proposal_name", path_basename(wi->proposal_path));
+   cJSON_AddStringToObject(o, "pr_ref", wi->pr_ref);
+   cJSON_AddStringToObject(o, "submitter", wi->submitter);
+   cJSON_AddNumberToObject(o, "cum_cost_usd", wi->cum_cost_usd);
+   cJSON_AddNumberToObject(o, "work_item_max_cost_usd", wi->work_item_max_cost_usd);
+   cJSON_AddNumberToObject(o, "override_count", wi->override_count);
    return o;
 }
 
-int wf_api_items(char *resp, int cap)
+/* Shared list builder: emit every row for which `keep` returns true. */
+static int wf_items_filtered(char *resp, int cap, int (*keep)(const db1_work_item_t *))
 {
    cJSON *o = cJSON_CreateObject();
    cJSON *arr = cJSON_AddArrayToObject(o, "items");
    db1_work_item_t *rows = NULL;
    int n = db1_work_item_list(&rows);
    for (int i = 0; i < n; i++)
-      cJSON_AddItemToArray(arr, item_to_json(&rows[i]));
+      if (!keep || keep(&rows[i]))
+         cJSON_AddItemToArray(arr, item_to_json(&rows[i]));
    free(rows);
    return emit(o, resp, cap);
+}
+
+int wf_api_items(char *resp, int cap)
+{
+   /* Owner-scoped: only the caller's own proposals (closes the list IDOR). */
+   return wf_items_filtered(resp, cap, wf_owns);
+}
+
+int wf_api_items_all(char *resp, int cap)
+{
+   /* Unscoped operator view; route-gated by CAP_WORKFLOW_ADMIN. */
+   return wf_items_filtered(resp, cap, NULL);
 }
 
 int wf_api_item(const char *id, char *resp, int cap)
@@ -429,5 +474,119 @@ int wf_api_item(const char *id, char *resp, int cap)
    db1_work_item_t wi;
    if (db1_work_item_get(id, &wi) != 1)
       return err(resp, cap, 404, "work item not found");
+   if (!wf_owns(&wi))
+      return err(resp, cap, 403, "not your work item");
    return emit(item_to_json(&wi), resp, cap);
+}
+
+int wf_api_events(const char *id, long after, int limit, char *resp, int cap)
+{
+   if (!id || !id[0])
+      return err(resp, cap, 400, "missing work item id");
+   db1_work_item_t wi;
+   if (db1_work_item_get(id, &wi) != 1)
+      return err(resp, cap, 404, "work item not found");
+   if (!wf_owns(&wi))
+      return err(resp, cap, 403, "not your work item");
+   if (limit <= 0 || limit > 200)
+      limit = 200;
+
+   db1_lifecycle_event_t *evs = NULL;
+   int n = db1_lifecycle_event_list(id, &evs);
+   if (n < 0)
+      return err(resp, cap, 500, "could not read events");
+
+   cJSON *o = cJSON_CreateObject();
+   cJSON *arr = cJSON_AddArrayToObject(o, "events");
+   /* Events are id-ascending; take the first `limit` with id>after. next_after is
+    * the id of the LAST event actually returned (so the next poll continues from
+    * there, never re-reading or skipping — the item has a single writer). */
+   long next_after = after;
+   int emitted = 0;
+   for (int i = 0; i < n && emitted < limit; i++)
+   {
+      if (evs[i].id <= after)
+         continue;
+      cJSON *e = cJSON_CreateObject();
+      cJSON_AddNumberToObject(e, "id", (double)evs[i].id);
+      cJSON_AddStringToObject(e, "stage", evs[i].stage);
+      cJSON_AddStringToObject(e, "kind", evs[i].kind);
+      cJSON_AddStringToObject(e, "actor", evs[i].actor);
+      cJSON_AddStringToObject(e, "detail", evs[i].detail);
+      cJSON_AddNumberToObject(e, "cost_usd", evs[i].cost_usd);
+      cJSON_AddStringToObject(e, "created_at", evs[i].created_at);
+      cJSON_AddItemToArray(arr, e);
+      next_after = evs[i].id;
+      emitted++;
+   }
+   free(evs);
+   cJSON_AddNumberToObject(o, "next_after", (double)next_after);
+   return emit(o, resp, cap);
+}
+
+/* Max proposal markdown served back (submit caps the body at 1 MB; we enforce the
+ * same and flag `truncated` rather than reject, so an oversized file still renders. */
+#define WF_PROPOSAL_MAX (1 * 1024 * 1024)
+
+int wf_api_proposal(const char *id, char *resp, int cap)
+{
+   if (!id || !id[0])
+      return err(resp, cap, 400, "missing work item id");
+   db1_work_item_t wi;
+   if (db1_work_item_get(id, &wi) != 1)
+      return err(resp, cap, 404, "work item not found");
+   if (!wf_owns(&wi))
+      return err(resp, cap, 403, "not your work item");
+   if (!wi.proposal_path[0])
+      return err(resp, cap, 404, "no proposal file");
+
+   /* proposal_path is a server-minted flat file in $AIMEE_HOME/workflows/proposals.
+    * Confine race-free: open the fixed dir, then openat the BASENAME with O_NOFOLLOW.
+    * A basename with any '/' (or . / ..) is rejected — there are no mid-path
+    * components to race, so this is TOCTOU/symlink safe. */
+   const char *base = path_basename(wi.proposal_path);
+   if (!base[0] || strchr(base, '/') || strcmp(base, ".") == 0 || strcmp(base, "..") == 0)
+      return err(resp, cap, 403, "unsafe proposal path");
+
+   const char *home = aimee_home();
+   char dir[1024];
+   snprintf(dir, sizeof dir, "%s/workflows/proposals", home ? home : "/tmp");
+   int dfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+   if (dfd < 0)
+      return err(resp, cap, 404, "proposals dir unavailable");
+   int fd = openat(dfd, base, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+   int oerr = errno;
+   close(dfd);
+   if (fd < 0)
+      /* O_NOFOLLOW makes a symlinked entry fail ELOOP — refuse it as forbidden
+       * (never followed) rather than reporting a plain not-found. */
+      return err(resp, cap, oerr == ELOOP ? 403 : 404,
+                 oerr == ELOOP ? "proposal not a regular file" : "proposal file not found");
+
+   struct stat stt;
+   if (fstat(fd, &stt) != 0 || !S_ISREG(stt.st_mode))
+   {
+      close(fd);
+      return err(resp, cap, 403, "proposal not a regular file");
+   }
+
+   char *buf = malloc(WF_PROPOSAL_MAX + 1);
+   if (!buf)
+   {
+      close(fd);
+      return err(resp, cap, 500, "out of memory");
+   }
+   size_t total = 0;
+   ssize_t r;
+   while (total < WF_PROPOSAL_MAX && (r = read(fd, buf + total, WF_PROPOSAL_MAX - total)) > 0)
+      total += (size_t)r;
+   close(fd);
+   buf[total] = '\0';
+   int truncated = (off_t)total < stt.st_size;
+
+   cJSON *o = cJSON_CreateObject();
+   cJSON_AddStringToObject(o, "proposal_md", buf);
+   cJSON_AddBoolToObject(o, "truncated", truncated);
+   free(buf);
+   return emit(o, resp, cap);
 }

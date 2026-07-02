@@ -8,11 +8,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "cJSON.h"
 #include "db1.h"
 #include "server/server_workflow_api.h"
 #include "wfe_def.h"
+#include "wfe_store.h"
+
+/* Stub the one identity accessor server_workflow_api references (rather than link
+ * the full attestation stack). Test-controlled so we can drive both the non-owner
+ * (deny) and owner (allow) paths of the ownership check. */
+static const char *g_test_principal = "";
+const char *server_http_identity_principal(void)
+{
+   return g_test_principal;
+}
 
 #define CAP (64 * 1024)
 
@@ -60,6 +71,9 @@ int main(void)
    char wfdir[128];
    snprintf(wfdir, sizeof wfdir, "%s/workflows", home);
    mkdir(wfdir, 0755);
+   char pdir[160];
+   snprintf(pdir, sizeof pdir, "%s/workflows/proposals", home);
+   mkdir(pdir, 0755);
    setenv("AIMEE_HOME", home, 1);
    assert(db1_init(":memory:") == 0);
 
@@ -254,6 +268,104 @@ int main(void)
       cJSON_Delete(o);
    }
    assert(wf_api_item("no-such-item", buf, CAP) == 404);
+   assert(wf_api_events("no-such-item", 0, 200, buf, CAP) == 404);
+   assert(wf_api_proposal("no-such-item", buf, CAP) == 404);
+
+   /* --- ownership: a work item submitted by another principal is not readable ---
+    * The test runs with an un-attested (empty) principal, so an item whose submitter
+    * is set is owned by nobody-in-this-context: the per-item reads must 403 (the
+    * IDOR closure). The owner-allowed path + pagination + proposal read-back are
+    * exercised live (a request carrying the matching webuser principal). */
+   {
+      assert(db1_work_item_create("wi_owned", "", "wi_owned.md", "build", "v1", "draft",
+                                  "autonomous") == 0);
+      assert(db1_work_item_set_submitter("wi_owned", "webuser:someone-else") == 0);
+      (void)db1_lifecycle_event_add("wi_owned", "draft", "create", "user", "", "", 0.0);
+
+      assert(wf_api_item("wi_owned", buf, CAP) == 403);
+      assert(wf_api_events("wi_owned", 0, 200, buf, CAP) == 403);
+      assert(wf_api_proposal("wi_owned", buf, CAP) == 403);
+
+      /* The owner-scoped list must not leak the non-owned item... */
+      assert(wf_api_items(buf, CAP) == 200);
+      cJSON *o = parse_resp(buf);
+      cJSON *items = cJSON_GetObjectItemCaseSensitive(o, "items");
+      assert(cJSON_IsArray(items) && cJSON_GetArraySize(items) == 0);
+      cJSON_Delete(o);
+
+      /* ...but the operator "all" view returns it, enriched with the new fields. */
+      assert(wf_api_items_all(buf, CAP) == 200);
+      o = parse_resp(buf);
+      items = cJSON_GetObjectItemCaseSensitive(o, "items");
+      assert(cJSON_IsArray(items) && cJSON_GetArraySize(items) == 1);
+      cJSON *it = cJSON_GetArrayItem(items, 0);
+      assert(strcmp(cJSON_GetObjectItemCaseSensitive(it, "submitter")->valuestring,
+                    "webuser:someone-else") == 0);
+      assert(strcmp(cJSON_GetObjectItemCaseSensitive(it, "proposal_name")->valuestring,
+                    "wi_owned.md") == 0);
+      assert(cJSON_HasObjectItem(it, "cum_cost_usd") && cJSON_HasObjectItem(it, "pr_ref"));
+      cJSON_Delete(o);
+   }
+
+   /* --- owner-allowed path: events pagination + proposal read-back + symlink guard.
+    * Drive the stub principal to match the item's submitter so wf_owns permits. --- */
+   {
+      g_test_principal = "webuser:someone-else";
+
+      /* Proposal read-back: write the source file the item references. */
+      char pfile[256];
+      snprintf(pfile, sizeof pfile, "%s/wi_owned.md", pdir);
+      FILE *pf = fopen(pfile, "wb");
+      assert(pf);
+      fputs("# My proposal\n\nbody\n", pf);
+      fclose(pf);
+      assert(wf_api_proposal("wi_owned", buf, CAP) == 200);
+      cJSON *o = parse_resp(buf);
+      assert(strstr(cJSON_GetObjectItemCaseSensitive(o, "proposal_md")->valuestring, "My proposal"));
+      assert(cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(o, "truncated")));
+      cJSON_Delete(o);
+
+      assert(wf_api_item("wi_owned", buf, CAP) == 200); /* owner sees it now */
+
+      /* Events pagination: add three more events (id-ascending), page by 2. */
+      (void)db1_lifecycle_event_add("wi_owned", "draft", "advance", "engine", "", "", 0.0);
+      (void)db1_lifecycle_event_add("wi_owned", "impl", "advance", "engine", "", "", 0.0);
+      (void)db1_lifecycle_event_add("wi_owned", "impl", "pause", "engine", "pending_human", "", 0.0);
+      assert(wf_api_events("wi_owned", 0, 2, buf, CAP) == 200);
+      o = parse_resp(buf);
+      cJSON *evs = cJSON_GetObjectItemCaseSensitive(o, "events");
+      assert(cJSON_IsArray(evs) && cJSON_GetArraySize(evs) == 2);
+      long next_after = (long)cJSON_GetObjectItemCaseSensitive(o, "next_after")->valuedouble;
+      long last_id =
+          (long)cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(evs, 1), "id")->valuedouble;
+      assert(next_after == last_id); /* cursor = id of the LAST returned event */
+      cJSON_Delete(o);
+      /* Next page continues past the cursor with no gap/dup (4 events total). */
+      assert(wf_api_events("wi_owned", next_after, 200, buf, CAP) == 200);
+      o = parse_resp(buf);
+      evs = cJSON_GetObjectItemCaseSensitive(o, "events");
+      assert(cJSON_GetArraySize(evs) == 2);
+      assert((long)cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(evs, 0), "id")->valuedouble >
+             next_after);
+      cJSON_Delete(o);
+
+      /* Symlink guard: an item whose proposal file is a symlink (even to a readable
+       * file) is refused by openat(O_NOFOLLOW) → 403, never followed. */
+      char secret[256], link[256];
+      snprintf(secret, sizeof secret, "%s/secret.txt", home);
+      FILE *sf = fopen(secret, "wb");
+      assert(sf);
+      fputs("TOP SECRET\n", sf);
+      fclose(sf);
+      snprintf(link, sizeof link, "%s/wi_link.md", pdir);
+      assert(symlink(secret, link) == 0);
+      assert(db1_work_item_create("wi_link", "", "wi_link.md", "build", "v1", "draft",
+                                  "autonomous") == 0);
+      assert(db1_work_item_set_submitter("wi_link", "webuser:someone-else") == 0);
+      assert(wf_api_proposal("wi_link", buf, CAP) == 403); /* symlink not followed */
+
+      g_test_principal = "";
+   }
 
    free(buf);
    printf("ok\n");

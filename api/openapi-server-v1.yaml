@@ -435,13 +435,75 @@ paths:
               schema: { type: object }
   /workflow/items:
     get:
-      summary: List workflow work items (run-state rows)
+      summary: List the caller's own workflow work items (submitter-scoped run-state rows)
       responses:
         "200":
-          description: "{items:[{id,workflow,version,stage,state,mode,pause_reason,repo}]}"
+          description: "{items:[{id,workflow,version,stage,state,mode,pause_reason,repo,proposal_name,pr_ref,submitter,cum_cost_usd,work_item_max_cost_usd,override_count}]}"
           content:
             application/json:
               schema: { type: object }
+  /workflow/items/all:
+    get:
+      summary: List ALL work items regardless of submitter (operator view, CAP_WORKFLOW_ADMIN)
+      responses:
+        "200":
+          description: All work-item run-state rows
+          content:
+            application/json:
+              schema: { type: object }
+  /workflow/items/{id}/events:
+    get:
+      summary: The item's lifecycle timeline (proposal history), owner-only, paginated by event id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: after
+          in: query
+          required: false
+          schema: { type: integer }
+          description: Return events with id greater than this cursor (default 0)
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer }
+          description: Max events to return, clamped to [1,200] (default 200)
+      responses:
+        "200":
+          description: "{events:[{id,stage,kind,actor,detail,cost_usd,created_at}], next_after}"
+          content:
+            application/json:
+              schema: { type: object }
+        "403":
+          description: Not the caller's work item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /workflow/items/{id}/proposal:
+    get:
+      summary: The source proposal markdown the run is executing (owner-only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: "{proposal_md, truncated}"
+          content:
+            application/json:
+              schema: { type: object }
+        "403":
+          description: Not the caller's work item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "404":
+          description: Proposal file not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /workflow/items/{id}:
     get:
       summary: One work item's run-state
