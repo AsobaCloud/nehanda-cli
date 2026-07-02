@@ -82,11 +82,28 @@ static void test_null_fields_render_empty(void)
    assert(strstr(log, "\"tool\":\"Read\""));
 }
 
+static void test_control_char_escaping(void)
+{
+   set_home();
+   audit_log_open();
+   /* a tool name with a tab, CR, and a raw control byte (0x01) must be escaped
+    * to valid JSON, not emitted raw (would break the S3 reader). */
+   audit_action_log("primary",
+                    "a\tb\rc\x01"
+                    "d",
+                    "v1-0", "approve", "blocked", "block", 0);
+   audit_log_close();
+
+   char *log = read_audit_log();
+   assert(strstr(log, "a\\tb\\rc\\u0001d")); /* \t \r and , no raw control bytes */
+}
+
 int main(void)
 {
    test_row_format();
    test_json_escaping();
    test_null_fields_render_empty();
+   test_control_char_escaping();
    printf("test_audit_action_log: all passed\n");
    return 0;
 }
