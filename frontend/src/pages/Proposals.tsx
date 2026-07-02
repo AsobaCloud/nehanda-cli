@@ -32,6 +32,34 @@ interface WfEvent {
 }
 
 const POLL_MS = 4000;
+const DRAFT_KEY = "aimee_proposal_draft"; // cleared on logout (App.tsx)
+const SCAFFOLD = `## Goal
+
+## Motivation
+
+## Approach
+
+## Risks
+
+## Tests
+`;
+
+interface Draft {
+  title: string;
+  body: string;
+  workflow: string;
+  repo: string;
+}
+const emptyDraft = (): Draft => ({ title: "", body: SCAFFOLD, workflow: "build", repo: "" });
+function loadDraft(): Draft {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (raw) return { ...emptyDraft(), ...(JSON.parse(raw) as Partial<Draft>) };
+  } catch {
+    /* corrupt/absent draft → start fresh */
+  }
+  return emptyDraft();
+}
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url, { headers: { "X-CSRF-Token": window._csrf || "" } });
@@ -116,6 +144,11 @@ export default function Proposals() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
   const [gateMsg, setGateMsg] = useState("");
+  const [composing, setComposing] = useState(false);
+  const [draft, setDraft] = useState<Draft>(loadDraft);
+  const [defs, setDefs] = useState<string[]>([]);
+  const [submitMsg, setSubmitMsg] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const afterRef = useRef(0); // events pagination cursor for the open proposal
   const reqRef = useRef(0); // monotonic open token: stale async loads (older selection) no-op
 
@@ -129,13 +162,38 @@ export default function Proposals() {
 
   useEffect(() => {
     refreshList();
+    // Workflow choices for the composer's picker (falls back to "build").
+    getJSON<{ defs: { name: string }[] }>("/api/workflow/defs")
+      .then((d) => setDefs((d.defs || []).map((x) => x.name)))
+      .catch(() => setDefs([]));
   }, [refreshList]);
+
+  // Persist the in-progress draft locally (device-local; cleared on logout).
+  useEffect(() => {
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch {
+      /* quota/full — drafting still works in-memory */
+    }
+  }, [draft]);
+
+  const startNew = useCallback(() => {
+    setComposing(true);
+    setSelId(null);
+    setDetail(null);
+    setSubmitMsg("");
+  }, []);
+  const updateDraft = useCallback(
+    (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch })),
+    [],
+  );
 
   // Load a proposal's full detail: the item row, its source markdown, and the head
   // of its event timeline (resetting the pagination cursor).
   const openProposal = useCallback((id: string) => {
     const myReq = ++reqRef.current; // invalidates any still-in-flight prior load
     const live = () => myReq === reqRef.current;
+    setComposing(false);
     setSelId(id);
     setLoading(true);
     setEvents([]);
@@ -171,6 +229,43 @@ export default function Proposals() {
       if (live()) setLoading(false);
     });
   }, []);
+
+  // Submit the composed proposal for autonomous execution. proposal_md is the H1
+  // title + body; on success the draft is cleared and we open the new run's detail.
+  const submitProposal = useCallback(async () => {
+    const title = draft.title.trim();
+    const body = draft.body.trim();
+    if (!body) {
+      setSubmitMsg("Proposal body is empty.");
+      return;
+    }
+    const md = title ? `# ${title}\n\n${body}` : body;
+    setSubmitting(true);
+    setSubmitMsg("");
+    try {
+      const { status: st, data } = await postJSON<{ work_item_id?: string; error?: string }>(
+        "/api/dev/submit",
+        { proposal_md: md, workflow: draft.workflow || "build", repo: draft.repo || "" },
+      );
+      if (st >= 200 && st < 300 && data.work_item_id) {
+        try {
+          localStorage.removeItem(DRAFT_KEY);
+        } catch {
+          /* ignore */
+        }
+        setDraft(emptyDraft());
+        setComposing(false);
+        refreshList();
+        openProposal(data.work_item_id); // flow straight into watching it run
+      } else {
+        setSubmitMsg(data.error || `submit failed (HTTP ${st})`);
+      }
+    } catch {
+      setSubmitMsg("submit failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }, [draft, refreshList, openProposal]);
 
   // Poll the open proposal while it's active: refresh the row and append only new
   // events (after=cursor, so no re-fetch/dup). Keyed on selId alone (not detail) so
@@ -249,6 +344,19 @@ export default function Proposals() {
             Refresh
           </button>
         </div>
+        <button
+          onClick={startNew}
+          style={{
+            ...btn,
+            width: "100%",
+            background: composing ? "#eef4ff" : "#2563eb",
+            color: composing ? "#2563eb" : "#fff",
+            borderColor: "#2563eb",
+            marginBottom: 8,
+          }}
+        >
+          + New proposal
+        </button>
         <label style={{ fontSize: 12, color: "#666", display: "flex", alignItems: "center", gap: 6 }}>
           <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
           Show all (operator)
@@ -293,15 +401,25 @@ export default function Proposals() {
         </div>
       </div>
 
-      {/* main: selected proposal detail */}
+      {/* main: composer (new proposal) OR selected proposal detail */}
       <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: 16 }}>
-        {!detail && (
+        {composing && (
+          <Composer
+            draft={draft}
+            defs={defs}
+            update={updateDraft}
+            onSubmit={() => void submitProposal()}
+            submitting={submitting}
+            submitMsg={submitMsg}
+          />
+        )}
+        {!composing && !detail && (
           <div style={{ color: "#888", fontSize: 14, marginTop: 20 }}>
-            Select a proposal to see its status and history.
+            Select a proposal to see its status and history, or start a new one.
             <Spinner loading={loading} text="loading…" />
           </div>
         )}
-        {detail && (
+        {!composing && detail && (
           <>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
               <strong style={{ fontSize: 18 }}>{detail.proposal_name || detail.id}</strong>
@@ -350,6 +468,100 @@ export default function Proposals() {
         )}
       </div>
     </div>
+  );
+}
+
+function Composer({
+  draft,
+  defs,
+  update,
+  onSubmit,
+  submitting,
+  submitMsg,
+}: {
+  draft: Draft;
+  defs: string[];
+  update: (patch: Partial<Draft>) => void;
+  onSubmit: () => void;
+  submitting: boolean;
+  submitMsg: string;
+}) {
+  // Always include the draft's stored workflow as an option, even if it isn't in the
+  // fetched defs (a stale/renamed def), so the select never renders blank.
+  const base = defs.length ? defs : ["build"];
+  const workflows = base.includes(draft.workflow) ? base : [draft.workflow, ...base];
+  return (
+    <div style={{ maxWidth: 820 }}>
+      <strong style={{ fontSize: 18 }}>New proposal</strong>
+      <div style={{ fontSize: 12, color: "#888", margin: "4px 0 12px" }}>
+        Describe the change; aimee runs the chosen workflow end-to-end and parks at human
+        gates. Draft is saved locally on this device (cleared on logout).
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+        <L label="Title">
+          <input
+            value={draft.title}
+            onChange={(e) => update({ title: e.target.value })}
+            placeholder="Short proposal title (becomes the H1)"
+            style={inp}
+            disabled={submitting}
+          />
+        </L>
+        <L label="Workflow">
+          <select
+            value={draft.workflow}
+            onChange={(e) => update({ workflow: e.target.value })}
+            style={inp}
+            disabled={submitting}
+          >
+            {workflows.map((w) => (
+              <option key={w} value={w}>
+                {w}
+              </option>
+            ))}
+          </select>
+        </L>
+      </div>
+      <L label="Repo (optional)">
+        <input
+          value={draft.repo}
+          onChange={(e) => update({ repo: e.target.value })}
+          placeholder="owner/name or clone URL (blank = default)"
+          style={inp}
+          disabled={submitting}
+        />
+      </L>
+      <L label="Proposal (Markdown)">
+        <textarea
+          value={draft.body}
+          onChange={(e) => update({ body: e.target.value })}
+          rows={18}
+          style={{ ...inp, fontFamily: "monospace", fontSize: 13, lineHeight: 1.5 }}
+          disabled={submitting}
+        />
+      </L>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+        <button
+          onClick={onSubmit}
+          disabled={submitting}
+          style={{ ...btn, background: "#2563eb", color: "#fff", borderColor: "#2563eb" }}
+        >
+          {submitting ? "Submitting…" : `Submit → run "${draft.workflow || "build"}"`}
+        </button>
+        {submitMsg && <span style={{ fontSize: 12, color: "#c00" }}>{submitMsg}</span>}
+      </div>
+    </div>
+  );
+}
+
+function L({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label style={{ display: "block", marginTop: 8 }}>
+      <span style={{ color: "#888", fontSize: 12, display: "block", marginBottom: 2 }}>
+        {label}
+      </span>
+      {children}
+    </label>
   );
 }
 
@@ -448,4 +660,12 @@ const btn: React.CSSProperties = {
   borderRadius: 4,
   background: "#fff",
   cursor: "pointer",
+};
+const inp: React.CSSProperties = {
+  fontSize: 13,
+  padding: "5px 7px",
+  border: "1px solid #ccc",
+  borderRadius: 4,
+  width: "100%",
+  boxSizing: "border-box",
 };
