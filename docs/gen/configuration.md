@@ -22,10 +22,11 @@ aimee config set <key> <value>    # set one value
 
 Structured options (arrays, nested objects — e.g. `ensemble.reference_models`) are not CLI-settable; they are written into the config file under the sections listed at the end.
 
-## CLI-settable keys (135)
+## CLI-settable keys (136)
 
 | Key | Type | Description |
 |-----|------|-------------|
+| `audit_action_enabled` | bool | — |
 | `autonomous` | bool | Run autonomously (auto-advance preauthorized gates) vs interactive. |
 | `cache_aware_rewrite_enabled` | bool | Rewrite prompts to align with the provider's prompt cache. |
 | `cache_min_chars` | int | Minimum prompt size (chars) before cache-shaping applies. |
@@ -162,7 +163,7 @@ Structured options (arrays, nested objects — e.g. `ensemble.reference_models`)
 | `virtual_context_enabled` | bool | Enable virtual-context assembly. |
 | `wfe_live_forge_enabled` | bool | — |
 
-> **Undocumented** (add to `CFG_KEY_DESC` in gen-reference-docs.py): `wfe_live_forge_enabled`
+> **Undocumented** (add to `CFG_KEY_DESC` in gen-reference-docs.py): `audit_action_enabled`, `wfe_live_forge_enabled`
 
 ## Config-file sections (51)
 

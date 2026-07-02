@@ -1193,7 +1193,7 @@ static int is_write_intent(const char *tool_name, cJSON *root)
    return 0;
 }
 
-int pre_tool_check(const char *tool_name, const char *input_json, session_state_t *state,
+int pre_tool_check_inner(const char *tool_name, const char *input_json, session_state_t *state,
                    const char *guardrail_mode, const char *cwd, char *msg_buf, size_t msg_len)
 {
    if (!tool_name || !input_json || !state)

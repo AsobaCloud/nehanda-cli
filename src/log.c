@@ -116,6 +116,19 @@ static void audit_rotate(const char *path)
    }
 }
 
+/* Last audit event key on this thread. Lets pre_tool_check derive a stable
+ * reason_code from a block site's existing audit_log("<key>",...) call without
+ * threading extra state through the guardrail function. */
+static __thread char g_last_audit_event[48];
+void audit_last_event_reset(void)
+{
+   g_last_audit_event[0] = '\0';
+}
+const char *audit_last_event(void)
+{
+   return g_last_audit_event;
+}
+
 void audit_log_open(void)
 {
    if (audit_fp)
@@ -140,8 +153,104 @@ void audit_log_close(void)
    }
 }
 
+/* JSON-escape src into dst (bounded), RFC 8259 §7 compliant for control bytes so
+ * a model-controlled field (e.g. tool_name) cannot emit an invalid audit line.
+ * Reserves 6 bytes per iteration for the worst case (\uXXXX). */
+static void audit_json_escape(char *dst, size_t dstsz, const char *src)
+{
+   size_t ep = 0;
+   if (!src)
+      src = "";
+   for (size_t i = 0; src[i] && ep + 6 < dstsz; i++)
+   {
+      unsigned char c = (unsigned char)src[i];
+      if (c == '"' || c == '\\')
+      {
+         dst[ep++] = '\\';
+         dst[ep++] = (char)c;
+      }
+      else if (c == '\n')
+      {
+         dst[ep++] = '\\';
+         dst[ep++] = 'n';
+      }
+      else if (c == '\r')
+      {
+         dst[ep++] = '\\';
+         dst[ep++] = 'r';
+      }
+      else if (c == '\t')
+      {
+         dst[ep++] = '\\';
+         dst[ep++] = 't';
+      }
+      else if (c < 0x20)
+      {
+         ep += (size_t)snprintf(dst + ep, dstsz - ep, "\\u%04x", c);
+      }
+      else
+      {
+         dst[ep++] = (char)c;
+      }
+   }
+   dst[ep] = '\0';
+}
+
+/* Rotate audit.log if it has reached AUDIT_MAX_SIZE. Caller MUST hold log_mutex.
+ * Single source of truth for both audit_log and audit_action_log. */
+static void audit_maybe_rotate_locked(void)
+{
+   if (!audit_fp)
+      return;
+   char path[4096];
+   snprintf(path, sizeof(path), "%s/audit.log", config_default_dir());
+   struct stat st;
+   if (stat(path, &st) == 0 && st.st_size >= AUDIT_MAX_SIZE)
+   {
+      fclose(audit_fp);
+      audit_fp = NULL;
+      audit_rotate(path);
+      audit_fp = fopen(path, "a");
+      if (audit_fp)
+         platform_set_permissions(path, 0600);
+   }
+}
+
+void audit_action_log(const char *actor, const char *tool, const char *args_hash, const char *mode,
+                      const char *reason_code, const char *verdict, long long task_id)
+{
+   char ts[32];
+   format_timestamp(ts, sizeof(ts));
+
+   char e_actor[128], e_tool[128], e_hash[96], e_mode[64], e_reason[96], e_verdict[32];
+   audit_json_escape(e_actor, sizeof e_actor, actor);
+   audit_json_escape(e_tool, sizeof e_tool, tool);
+   audit_json_escape(e_hash, sizeof e_hash, args_hash);
+   audit_json_escape(e_mode, sizeof e_mode, mode);
+   audit_json_escape(e_reason, sizeof e_reason, reason_code);
+   audit_json_escape(e_verdict, sizeof e_verdict, verdict);
+
+   /* No stderr mirror: tool_action fires on every governed call and would flood
+    * the server log. The row goes only to the audit file. */
+   pthread_mutex_lock(&log_mutex);
+
+   if (audit_fp)
+   {
+      fprintf(audit_fp,
+              "{\"ts\":\"%s\",\"kind\":\"tool_action\",\"actor\":\"%s\",\"tool\":\"%s\","
+              "\"args_hash\":\"%s\",\"mode\":\"%s\",\"reason_code\":\"%s\",\"verdict\":\"%s\","
+              "\"task_id\":%lld}\n",
+              ts, e_actor, e_tool, e_hash, e_mode, e_reason, e_verdict, task_id);
+      fflush(audit_fp);
+      audit_maybe_rotate_locked();
+   }
+
+   pthread_mutex_unlock(&log_mutex);
+}
+
 void audit_log(const char *event_type, const char *fmt, ...)
 {
+   snprintf(g_last_audit_event, sizeof g_last_audit_event, "%s", event_type ? event_type : "");
    char ts[32];
    format_timestamp(ts, sizeof(ts));
 
@@ -181,20 +290,7 @@ void audit_log(const char *event_type, const char *fmt, ...)
       fprintf(audit_fp, "{\"ts\":\"%s\",\"event\":\"%s\",\"detail\":\"%s\"}\n", ts, event_type,
               escaped);
       fflush(audit_fp);
-
-      /* Check rotation after each write */
-      char path[4096];
-      snprintf(path, sizeof(path), "%s/audit.log", config_default_dir());
-      struct stat st;
-      if (stat(path, &st) == 0 && st.st_size >= AUDIT_MAX_SIZE)
-      {
-         fclose(audit_fp);
-         audit_fp = NULL;
-         audit_rotate(path);
-         audit_fp = fopen(path, "a");
-         if (audit_fp)
-            platform_set_permissions(path, 0600);
-      }
+      audit_maybe_rotate_locked();
    }
 
    pthread_mutex_unlock(&log_mutex);
