@@ -116,6 +116,19 @@ static void audit_rotate(const char *path)
    }
 }
 
+/* Last audit event key on this thread. Lets pre_tool_check derive a stable
+ * reason_code from a block site's existing audit_log("<key>",...) call without
+ * threading extra state through the guardrail function. */
+static __thread char g_last_audit_event[48];
+void audit_last_event_reset(void)
+{
+   g_last_audit_event[0] = '\0';
+}
+const char *audit_last_event(void)
+{
+   return g_last_audit_event;
+}
+
 void audit_log_open(void)
 {
    if (audit_fp)
@@ -237,6 +250,7 @@ void audit_action_log(const char *actor, const char *tool, const char *args_hash
 
 void audit_log(const char *event_type, const char *fmt, ...)
 {
+   snprintf(g_last_audit_event, sizeof g_last_audit_event, "%s", event_type ? event_type : "");
    char ts[32];
    format_timestamp(ts, sizeof(ts));
 
