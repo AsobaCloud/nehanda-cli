@@ -140,6 +140,7 @@ function LogoutButton() {
     e.preventDefault();
     localStorage.removeItem('aimee_chat_tabs');
     localStorage.removeItem('aimee_active_chat_tab');
+    localStorage.removeItem('aimee_proposal_draft');
     fetch('/logout', {
       method: 'POST',
       headers: { 'X-CSRF-Token': window._csrf || '' },
