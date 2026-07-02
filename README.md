@@ -8,6 +8,11 @@ codebase as a live graph. Any model, any provider. Cheap delegates for the grunt
 Guardrails it cannot write past. Hand it a proposal and it ships the change itself: design,
 build, review, PR. Your context follows you anywhere. Nothing locks you in.
 
+The memory and the code index are a **hybrid vector-graph**: vector recall fused with a typed
+knowledge graph and your code's call graph, ranked together. That is why it surfaces what the
+plain vector search behind most AI memory misses, the caller three files away, the decision
+from another session, the constraint that never shared a keyword with your query.
+
 Point any tool's OpenAI or Anthropic compatible API at aimee and it runs the turn on any
 model reachable over that wire: Claude, GPT, Gemini, Mistral, MiniMax, a model on your own
 GPU, or any other OpenAI or Anthropic compatible provider. Or run aimee beside your tool over
@@ -39,7 +44,7 @@ context. aimee also compresses what each turn sends upstream, so even your main 
 drops. It tracks cost and success per delegate and routes better over time.
 
 **Run the models yourself.** aimee ships a self hosted inference stack: embeddings,
-reranking, and synthesis baked into one GPU container. The knowledge base curates entirely
+reranking, and synthesis baked into one CPU or GPU container. The knowledge base curates entirely
 on your hardware with no outside API calls, and the same local model doubles as a free
 delegate. Swap the model tier with a single image, or run the CPU build for retrieval on any
 box. See [kb LLM backends](docs/KB_LLM_BACKENDS.md).
