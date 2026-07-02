@@ -128,6 +128,67 @@ double db1_token_audit_cost_for_delegation(const char *delegation_id)
    return total;
 }
 
+int db1_token_audit_session_split(const char *session_id,
+                                  db1_token_audit_session_split_t *out)
+{
+   if (!out)
+      return -1;
+   memset(out, 0, sizeof(*out));
+   if (!session_id || !session_id[0])
+      return -1;
+   sqlite3 *db = db1_conn();
+   if (!db)
+      return -1;
+
+   /* One pass grouped by the supervisor/worker predicate: an empty (or NULL)
+    * delegation_id is a primary-agent turn (is_supervisor=1); a non-empty one is
+    * a delegate child. Realized rows only, so estimated/avoided/partial spend
+    * never inflates the reduction numbers. */
+   static const char *sql = "SELECT (delegation_id IS NULL OR delegation_id = '') AS is_supervisor,"
+                            " COUNT(*), COALESCE(SUM(prompt_tokens), 0),"
+                            " COALESCE(SUM(completion_tokens), 0),"
+                            " COALESCE(SUM(cache_write_tokens), 0),"
+                            " COALESCE(SUM(cache_read_tokens), 0),"
+                            " COALESCE(SUM(estimated_cost_usd), 0.0)"
+                            " FROM token_audit"
+                            " WHERE session_id = ? AND " TA_REALIZED
+                            " GROUP BY is_supervisor";
+   sqlite3_stmt *stmt = NULL;
+   if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+      return -1;
+   sqlite3_bind_text(stmt, 1, session_id, -1, SQLITE_TRANSIENT);
+   while (sqlite3_step(stmt) == SQLITE_ROW)
+   {
+      int is_supervisor = sqlite3_column_int(stmt, 0);
+      int calls = sqlite3_column_int(stmt, 1);
+      int64_t prompt = sqlite3_column_int64(stmt, 2);
+      int64_t completion = sqlite3_column_int64(stmt, 3);
+      int64_t cache_write = sqlite3_column_int64(stmt, 4);
+      int64_t cache_read = sqlite3_column_int64(stmt, 5);
+      double cost = sqlite3_column_double(stmt, 6);
+      if (is_supervisor)
+      {
+         out->supervisor_calls = calls;
+         out->supervisor_prompt_tokens = prompt;
+         out->supervisor_completion_tokens = completion;
+         out->supervisor_cache_write_tokens = cache_write;
+         out->supervisor_cache_read_tokens = cache_read;
+         out->supervisor_cost_usd = cost;
+      }
+      else
+      {
+         out->worker_calls = calls;
+         out->worker_prompt_tokens = prompt;
+         out->worker_completion_tokens = completion;
+         out->worker_cache_write_tokens = cache_write;
+         out->worker_cache_read_tokens = cache_read;
+         out->worker_cost_usd = cost;
+      }
+   }
+   sqlite3_finalize(stmt);
+   return 0;
+}
+
 int db1_token_audit_totals(int since_hours, db1_token_audit_totals_t *out)
 {
    if (!out)
