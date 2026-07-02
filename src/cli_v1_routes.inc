@@ -309,6 +309,7 @@ static const struct
     {"agent", "local", "agent.local", NULL, NULL, 300000},
     {"agent", "remove", "agent.remove", NULL, NULL, 0},
     {"agent", "enable", "agent.enable", NULL, NULL, 0},
+    {"agent", "roles", "agent.roles", NULL, NULL, 0},
     {"agent", "disable", "agent.disable", NULL, NULL, 0},
     {"agent", "probe", "agent.probe", NULL, NULL, 300000},
     {"mcp", "audit", "mcp.audit", NULL, "items", 0},
