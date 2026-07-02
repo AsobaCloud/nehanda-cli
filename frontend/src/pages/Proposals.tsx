@@ -490,6 +490,42 @@ function Composer({
   // fetched defs (a stale/renamed def), so the select never renders blank.
   const base = defs.length ? defs : ["build"];
   const workflows = base.includes(draft.workflow) ? base : [draft.workflow, ...base];
+
+  // "Draft with a delegate": one tool-free LLM completion (server-side
+  // /api/proposal/draft) turns the title + notes into proposal markdown, shown as a
+  // PREVIEW the user explicitly accepts — so it never silently clobbers their notes.
+  const [drafting, setDrafting] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [draftErr, setDraftErr] = useState("");
+  const busy = drafting || submitting;
+
+  const generate = async () => {
+    if (drafting) return; // re-entrancy guard (the button is also disabled while busy)
+    setDraftErr("");
+    setPreview(null);
+    const title = draft.title.trim();
+    const body = draft.body.trim();
+    if (!title && !body) {
+      setDraftErr("Add a title or some notes first.");
+      return;
+    }
+    // Title + notes are the SUBJECT; the server system prompt frames them as data.
+    const prompt = `Title: ${title || "(untitled)"}\n\nNotes / requirements:\n${body || "(none)"}`;
+    setDrafting(true);
+    try {
+      const { status: st, data } = await postJSON<{ text?: string; error?: string }>(
+        "/api/proposal/draft",
+        { prompt },
+      );
+      if (st >= 200 && st < 300 && data.text) setPreview(data.text);
+      else setDraftErr(data.error || `draft failed (HTTP ${st})`);
+    } catch {
+      setDraftErr("draft failed");
+    } finally {
+      setDrafting(false);
+    }
+  };
+
   return (
     <div style={{ maxWidth: 820 }}>
       <strong style={{ fontSize: 18 }}>New proposal</strong>
@@ -504,7 +540,7 @@ function Composer({
             onChange={(e) => update({ title: e.target.value })}
             placeholder="Short proposal title (becomes the H1)"
             style={inp}
-            disabled={submitting}
+            disabled={busy}
           />
         </L>
         <L label="Workflow">
@@ -512,7 +548,7 @@ function Composer({
             value={draft.workflow}
             onChange={(e) => update({ workflow: e.target.value })}
             style={inp}
-            disabled={submitting}
+            disabled={busy}
           >
             {workflows.map((w) => (
               <option key={w} value={w}>
@@ -528,7 +564,7 @@ function Composer({
           onChange={(e) => update({ repo: e.target.value })}
           placeholder="owner/name or clone URL (blank = default)"
           style={inp}
-          disabled={submitting}
+          disabled={busy}
         />
       </L>
       <L label="Proposal (Markdown)">
@@ -537,18 +573,56 @@ function Composer({
           onChange={(e) => update({ body: e.target.value })}
           rows={18}
           style={{ ...inp, fontFamily: "monospace", fontSize: 13, lineHeight: 1.5 }}
-          disabled={submitting}
+          disabled={busy}
         />
       </L>
+
+      {preview !== null && (
+        <div
+          style={{
+            border: "1px solid #bcd4ff",
+            background: "#f6f9ff",
+            borderRadius: 6,
+            padding: 10,
+            marginTop: 10,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <strong style={{ fontSize: 13 }}>Delegate draft — preview</strong>
+            <button
+              onClick={() => {
+                update({ body: preview });
+                setPreview(null);
+              }}
+              style={{ ...btn, background: "#2563eb", color: "#fff", borderColor: "#2563eb" }}
+            >
+              Use this draft
+            </button>
+            <button onClick={() => setPreview(null)} style={btn}>
+              Discard
+            </button>
+            <span style={{ fontSize: 11, color: "#888" }}>Replaces the body above.</span>
+          </div>
+          <div
+            style={{ fontSize: 13, lineHeight: 1.5, maxHeight: 320, overflow: "auto" }}
+            dangerouslySetInnerHTML={{ __html: renderMd(preview) }}
+          />
+        </div>
+      )}
+
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
         <button
           onClick={onSubmit}
-          disabled={submitting}
+          disabled={busy}
           style={{ ...btn, background: "#2563eb", color: "#fff", borderColor: "#2563eb" }}
         >
           {submitting ? "Submitting…" : `Submit → run "${draft.workflow || "build"}"`}
         </button>
+        <button onClick={() => void generate()} disabled={busy} style={btn}>
+          {drafting ? "Drafting…" : "✨ Draft with a delegate"}
+        </button>
         {submitMsg && <span style={{ fontSize: 12, color: "#c00" }}>{submitMsg}</span>}
+        {draftErr && <span style={{ fontSize: 12, color: "#c00" }}>{draftErr}</span>}
       </div>
     </div>
   );

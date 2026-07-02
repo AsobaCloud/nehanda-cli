@@ -20,6 +20,7 @@ static const struct
     {"agent.cli_oauth_poll", "POST", "/v1/agent/cli_oauth_poll"},
     {"agent.cli_oauth_start", "POST", "/v1/agent/cli_oauth_start"},
     {"agent.disable", "POST", "/v1/agent/disable"},
+    {"agent.draft", "POST", "/v1/agent/draft"},
     {"agent.enable", "POST", "/v1/agent/enable"},
     {"agent.episodes", "POST", "/v1/agent/episodes"},
     {"agent.list", "GET", "/v1/agent/list"},

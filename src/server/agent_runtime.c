@@ -273,6 +273,65 @@ int agent_run(agent_config_t *cfg, const char *role, const char *system_prompt,
    return agent_run_ex(cfg, role, system_prompt, user_prompt, max_tokens, 0.3, out);
 }
 
+/* One-shot, TOOL-FREE text generation for UI drafting (e.g. "draft this proposal
+ * with a delegate"). Deliberately NOT the agentic delegate path: it selects a
+ * single non-CLI (HTTP-provider) agent — preferring `agent_name` if given, else
+ * the default, else the first enabled non-CLI agent — clones it, forces
+ * write_enforce off, and calls the plain-completion agent_execute() directly.
+ * No provider-CLI, no exec role, no worktree, no tools: the model can only return
+ * text. Returns 0 on success (out->response holds the text), -1 otherwise.
+ * Provider-CLI agents are refused as drafters precisely because they are agentic. */
+int agent_generate(agent_config_t *cfg, const char *agent_name, const char *system_prompt,
+                   const char *user_prompt, int max_tokens, double temperature, agent_result_t *out)
+{
+   memset(out, 0, sizeof(*out));
+   if (!cfg || !user_prompt || !user_prompt[0])
+   {
+      snprintf(out->error, sizeof(out->error), "empty prompt");
+      return -1;
+   }
+   /* Pick a non-CLI (non-agentic) drafter. */
+   agent_t *pick = NULL;
+   if (agent_name && agent_name[0])
+   {
+      agent_t *a = agent_find(cfg, agent_name);
+      if (a && a->enabled && !agent_uses_provider_cli(a))
+         pick = a;
+   }
+   if (!pick && cfg->default_agent[0])
+   {
+      agent_t *a = agent_find(cfg, cfg->default_agent);
+      if (a && a->enabled && !agent_uses_provider_cli(a))
+         pick = a;
+   }
+   for (int i = 0; !pick && i < cfg->agent_count; i++)
+      if (cfg->agents[i].enabled && !agent_uses_provider_cli(&cfg->agents[i]))
+         pick = &cfg->agents[i];
+   if (!pick)
+   {
+      snprintf(out->error, sizeof(out->error), "no non-CLI delegate available for drafting");
+      return -1;
+   }
+
+   agent_t local = *pick; /* clone before mutating (workers never touch shared cfg);
+                           * agent_t holds only fixed-size buffers, so a shallow copy
+                           * owns no shared pointers. */
+   agent_apply_runtime_config(&local);
+   local.write_enforce = 0; /* belt-and-suspenders; not the primary safeguard */
+   /* THE tool-safety guarantee: this calls agent_execute() directly — the plain
+    * single request->response completion path that has NO tool loop at all. Tool
+    * execution lives only in the separate agent_execute_with_tools_for_role(),
+    * which we never call. So regardless of the agent's tools_enabled flag, a draft
+    * can only return text: it cannot run a tool, read/write files, or touch a repo.
+    * The non-CLI filter above is secondary (provider-CLI agents are agentic and
+    * don't serve plain HTTP completions anyway). */
+   int rc = agent_execute(&local, system_prompt, user_prompt, max_tokens, temperature, out);
+   snprintf(out->agent_name, MAX_AGENT_NAME, "%s", local.name);
+   if (rc == 0)
+      provider_catalog_record_success(local.name);
+   return rc;
+}
+
 /* Run one fan-out task on a specifically named configured agent (resolved like
  * aux_router.c), not by role. The selected agent_t is CLONED before any runtime
  * mutation so concurrent parallel workers never write the shared cfg-owned

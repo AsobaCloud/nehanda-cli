@@ -1933,6 +1933,11 @@ paths:
     get:
       summary: Per-delegate run statistics
       responses: { "200": { description: Per-delegate run stats, content: { application/json: { schema: { type: object } } } } }
+  /agent/draft:
+    post:
+      summary: One-shot tool-free text generation (proposal drafting) via a non-CLI delegate
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: "{text, agent}", content: { application/json: { schema: { type: object } } } } }
   /agent/setup:
     post:
       summary: Set up an agent (async)
