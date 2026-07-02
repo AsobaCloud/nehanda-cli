@@ -435,13 +435,75 @@ paths:
               schema: { type: object }
   /workflow/items:
     get:
-      summary: List workflow work items (run-state rows)
+      summary: List the caller's own workflow work items (submitter-scoped run-state rows)
       responses:
         "200":
-          description: "{items:[{id,workflow,version,stage,state,mode,pause_reason,repo}]}"
+          description: "{items:[{id,workflow,version,stage,state,mode,pause_reason,repo,proposal_name,pr_ref,submitter,cum_cost_usd,work_item_max_cost_usd,override_count}]}"
           content:
             application/json:
               schema: { type: object }
+  /workflow/items/all:
+    get:
+      summary: List ALL work items regardless of submitter (operator view, CAP_WORKFLOW_ADMIN)
+      responses:
+        "200":
+          description: All work-item run-state rows
+          content:
+            application/json:
+              schema: { type: object }
+  /workflow/items/{id}/events:
+    get:
+      summary: The item's lifecycle timeline (proposal history), owner-only, paginated by event id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: after
+          in: query
+          required: false
+          schema: { type: integer }
+          description: Return events with id greater than this cursor (default 0)
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer }
+          description: Max events to return, clamped to [1,200] (default 200)
+      responses:
+        "200":
+          description: "{events:[{id,stage,kind,actor,detail,cost_usd,created_at}], next_after}"
+          content:
+            application/json:
+              schema: { type: object }
+        "403":
+          description: Not the caller's work item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /workflow/items/{id}/proposal:
+    get:
+      summary: The source proposal markdown the run is executing (owner-only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: "{proposal_md, truncated}"
+          content:
+            application/json:
+              schema: { type: object }
+        "403":
+          description: Not the caller's work item
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "404":
+          description: Proposal file not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /workflow/items/{id}:
     get:
       summary: One work item's run-state
@@ -1247,8 +1309,8 @@ paths:
       description: >-
         Proxies the kb cross-repo dependency query. Returns confidence-tiered
         edges with evidence + a version stamp, or the AMBIGUOUS review queue when
-        status=ambiguous. The canonical query is OUT-only today (S4a); direction
-        in/both is rejected with 400 until reverse traversal lands.
+        status=ambiguous. direction: out = deps OF the project (default), in =
+        repos that depend ON the project (--reverse), both = union.
       requestBody:
         required: true
         content:
@@ -1258,9 +1320,14 @@ paths:
               required: [project]
               properties:
                 project: { type: string }
-                direction: { type: string, enum: [out], default: out }
+                direction: { type: string, enum: [out, in, both], default: out }
                 min_tier: { type: string, enum: [high, medium, tentative] }
                 status: { type: string, enum: [ambiguous] }
+                dry_run:
+                  type: boolean
+                  description: >-
+                    Offline candidate inspection — emit every band down to LOW plus
+                    inline AMBIGUOUS candidates, writing nothing (acceptance #4).
       responses:
         "200":
           description: Cross-repo dependency edges or ambiguous review queue
@@ -1862,6 +1929,15 @@ paths:
       summary: Probe an agent/provider
       requestBody: { content: { application/json: { schema: { type: object } } } }
       responses: { "200": { description: Probe result, content: { application/json: { schema: { type: object } } } } }
+  /agent/stats:
+    get:
+      summary: Per-delegate run statistics
+      responses: { "200": { description: Per-delegate run stats, content: { application/json: { schema: { type: object } } } } }
+  /agent/draft:
+    post:
+      summary: One-shot tool-free text generation (proposal drafting) via a non-CLI delegate
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: "{text, agent}", content: { application/json: { schema: { type: object } } } } }
   /agent/setup:
     post:
       summary: Set up an agent (async)

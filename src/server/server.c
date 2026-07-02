@@ -1228,6 +1228,8 @@ static const server_method_dispatch_t server_dispatch_table[] = {
     {"agent.enable", handle_agent_enable},
     {"agent.disable", handle_agent_disable},
     {"agent.probe", handle_agent_probe},
+    {"agent.stats", handle_agent_stats},
+    {"agent.draft", handle_agent_draft},
     {"agent.setup", handle_agent_setup},
     {"agent.setup_poll", handle_agent_setup_poll},
     {"agent.cli_oauth_start", handle_agent_cli_oauth_start},

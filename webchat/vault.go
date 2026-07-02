@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // serverToken reads the shared server.token secret (0600, in the aimee config
@@ -36,13 +37,20 @@ func (s *server) serverToken() string {
 // vault. Returns an error if the server.token or username is missing (fail-
 // closed: no assertion is sent without the trust secret).
 func (s *server) v1RequestWebuser(ctx context.Context, username, method, path string, body []byte) (int, []byte, error) {
+	return s.v1RequestWebuserT(ctx, username, method, path, body, socketCallTimeout)
+}
+
+// v1RequestWebuserT is v1RequestWebuser with an explicit client timeout, for the
+// few endpoints that legitimately hold the request open longer than the default
+// socketCallTimeout (e.g. a synchronous one-shot LLM draft).
+func (s *server) v1RequestWebuserT(ctx context.Context, username, method, path string, body []byte, timeout time.Duration) (int, []byte, error) {
 	token := s.serverToken()
 	if token == "" || username == "" {
 		return http.StatusUnauthorized, nil, errNoVaultTrust
 	}
 	sock := s.aimeeHTTPSockPath()
 	client := &http.Client{
-		Timeout: socketCallTimeout,
+		Timeout: timeout,
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				return (&net.Dialer{}).DialContext(ctx, "unix", sock)

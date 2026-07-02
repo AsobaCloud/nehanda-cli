@@ -12,6 +12,7 @@
 #include "agent_coord.h"
 #include "agent_eval.h"
 #include "log.h"
+#include "audit_action.h"
 #include "trace_analysis.h"
 #include "workspace.h"
 #include "commands.h"
@@ -126,6 +127,7 @@ void cmd_hooks(app_ctx_t *ctx, int argc, char **argv)
    config_t cfg;
    config_load(&cfg);
    audit_log_open();
+   audit_ensure_key(); /* provision the per-action audit key (best-effort) */
 
    /* Read JSON from stdin -- hook input is small (tool name + args) */
    char input[65536];

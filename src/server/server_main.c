@@ -21,6 +21,7 @@
 #include "events.h"
 #include "agent_exec.h"
 #include "log.h"
+#include "audit_action.h"
 #include "platform_path.h"
 #include "platform_process.h"
 #include "shutdown_forensics.h"
@@ -144,6 +145,7 @@ static int run_server(const char *socket_path, log_level_t log_level)
    /* Initialize logging */
    log_init(log_level);
    audit_log_open();
+   audit_ensure_key(); /* provision the per-action audit key (best-effort) */
 
    /* Activate the GitHub App installation-token provider for the server's forge
     * identity. Inert unless AIMEE_FORGE_APP_* is set (see forge_app_token.c). */

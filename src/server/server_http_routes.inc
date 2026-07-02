@@ -767,9 +767,47 @@ static int rh_wf_items(const route_req_t *rq, char *resp, int cap)
    (void)rq;
    return wf_api_items(resp, cap);
 }
+static int rh_wf_items_all(const route_req_t *rq, char *resp, int cap)
+{
+   (void)rq;
+   return wf_api_items_all(resp, cap);
+}
 static int rh_wf_item(const route_req_t *rq, char *resp, int cap)
 {
    return wf_api_item(rq->id, resp, cap);
+}
+/* Parse an unsigned long query param ("k=v&…") from the request's query string;
+ * returns `dflt` when the key is absent or unparseable. */
+static long rh_query_long(const char *key, long dflt)
+{
+   const char *q = server_http_identity_query();
+   size_t klen = strlen(key);
+   for (const char *p = q; p && *p;)
+   {
+      const char *amp = strchr(p, '&');
+      if (strncmp(p, key, klen) == 0 && p[klen] == '=')
+      {
+         char *end = NULL;
+         long v = strtol(p + klen + 1, &end, 10);
+         if (end != p + klen + 1)
+            return v;
+         return dflt;
+      }
+      if (!amp)
+         break;
+      p = amp + 1;
+   }
+   return dflt;
+}
+static int rh_wf_events(const route_req_t *rq, char *resp, int cap)
+{
+   long after = rh_query_long("after", 0);
+   int limit = (int)rh_query_long("limit", 200);
+   return wf_api_events(rq->id, after, limit, resp, cap);
+}
+static int rh_wf_proposal(const route_req_t *rq, char *resp, int cap)
+{
+   return wf_api_proposal(rq->id, resp, cap);
 }
 
 /* The POST /v1/rpc bridge was retired once every dispatch method gained a
@@ -1972,6 +2010,8 @@ static const http_route_t g_v1_routes[] = {
     {"POST", "/v1/agent/enable", NULL, RM_EXACT, "agent.enable", 0, rh_dispatch_op},
     {"POST", "/v1/agent/disable", NULL, RM_EXACT, "agent.disable", 0, rh_dispatch_op},
     {"POST", "/v1/agent/probe", NULL, RM_EXACT, "agent.probe", 0, rh_dispatch_op},
+    {"GET", "/v1/agent/stats", NULL, RM_EXACT, "agent.stats", 0, rh_dispatch_op},
+    {"POST", "/v1/agent/draft", NULL, RM_EXACT, "agent.draft", 0, rh_dispatch_op},
     {"POST", "/v1/agent/setup", NULL, RM_EXACT, "agent.setup", 0, rh_dispatch_op},
     {"POST", "/v1/agent/setup_poll", NULL, RM_EXACT, "agent.setup_poll", 0, rh_dispatch_op},
     {"POST", "/v1/agent/cli_oauth_start", NULL, RM_EXACT, "agent.cli_oauth_start", 0,
@@ -2187,9 +2227,16 @@ static const http_route_t g_v1_routes[] = {
     {"POST", "/v1/workflow/validate", NULL, RM_EXACT, NULL, CAP_DASHBOARD_READ, rh_wf_validate},
     {"POST", "/v1/workflow/save", NULL, RM_EXACT, NULL, CAP_SESSION_ADMIN, rh_wf_save},
     {"GET", "/v1/workflow/items", NULL, RM_EXACT, NULL, CAP_DASHBOARD_READ, rh_wf_items},
+    /* Operator view of ALL items (not submitter-scoped) — exact row precedes the
+     * /<id> prefix row so "all" isn't parsed as a work-item id. */
+    {"GET", "/v1/workflow/items/all", NULL, RM_EXACT, NULL, CAP_WORKFLOW_ADMIN, rh_wf_items_all},
     /* Operator-only: approve/reject the human gate a run is parked at. The
-     * suffix row precedes the bare /<id> row. */
+     * suffix rows precede the bare /<id> row. */
     {"POST", "/v1/workflow/items/", "/gate", RM_PREFIX, NULL, CAP_WORKFLOW_ADMIN, rh_workflow_gate},
+    /* Proposal read surfaces (ownership enforced in-handler, not by the route cap):
+     * the timeline and the source markdown, owner-scoped in wf_api_*. */
+    {"GET", "/v1/workflow/items/", "/events", RM_PREFIX, NULL, CAP_DASHBOARD_READ, rh_wf_events},
+    {"GET", "/v1/workflow/items/", "/proposal", RM_PREFIX, NULL, CAP_DASHBOARD_READ, rh_wf_proposal},
     {"GET", "/v1/workflow/items/", NULL, RM_PREFIX, NULL, CAP_DASHBOARD_READ, rh_wf_item},
 
     {"GET", "/v1/sessions", NULL, RM_EXACT, NULL, CAP_SESSION_READ, rh_sessions_list},

@@ -1,0 +1,22 @@
+{
+  "_pair_id": "basic_tool_q",
+  "model": "claude-3-5-sonnet-20241022",
+  "max_tokens": 1024,
+  "system": [
+    { "type": "text", "text": "You are a helpful coding assistant." }
+  ],
+  "messages": [
+    { "role": "user", "content": [ { "type": "text", "text": "read foo.c and summarize it" } ] }
+  ],
+  "tools": [
+    {
+      "name": "Read",
+      "description": "Read a file",
+      "input_schema": {
+        "type": "object",
+        "properties": { "path": { "type": "string" } },
+        "required": [ "path" ]
+      }
+    }
+  ]
+}
