@@ -874,6 +874,7 @@ static const subcmd_t session_subcmds[] = {
     {"show", "Show session details and delegation timeline", session_subcmd_show},
     {"search", "Search session history by keyword", session_subcmd_search},
     {"stats", "Show session and delegation statistics [--since DATE]", session_subcmd_stats},
+    {"tokens", "Show supervisor-vs-worker token split for a session [--json]", session_subcmd_tokens},
     {"brief", "Show the persisted session-start briefing [--session SID | --list]",
      session_subcmd_brief},
     {NULL, NULL, NULL},
