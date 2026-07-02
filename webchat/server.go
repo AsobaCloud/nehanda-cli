@@ -185,6 +185,7 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/workflow/items", s.requireAuth(s.handleWorkflowItems))
 	mux.HandleFunc("/api/workflow/items/", s.requireAuth(s.handleWorkflowItems))
 	mux.HandleFunc("/api/dev/submit", s.requireAuth(s.handleDevSubmit))
+	mux.HandleFunc("/api/proposal/draft", s.requireAuth(s.handleProposalDraft))
 
 	// Credential vault (WP-C.2c): the user re-presents their login password to
 	// unlock; calls carry the server.token bearer + X-Aimee-Webuser so

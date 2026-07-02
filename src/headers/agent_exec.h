@@ -42,6 +42,14 @@ int agent_run_named(agent_config_t *cfg, const char *name, const char *role,
                     const char *system_prompt, const char *user_prompt, int max_tokens,
                     double temperature, agent_result_t *out);
 
+/* One-shot, TOOL-FREE text generation for UI drafting: selects a single non-CLI
+ * (HTTP-provider) agent (prefer `agent_name`, else default, else first enabled
+ * non-CLI) and runs the plain-completion agent_execute() — no tools, no worktree,
+ * no exec role. The model can only return text (out->response). 0 on success. */
+int agent_generate(agent_config_t *cfg, const char *agent_name, const char *system_prompt,
+                   const char *user_prompt, int max_tokens, double temperature,
+                   agent_result_t *out);
+
 /* Like agent_run but forces tool execution regardless of agent config */
 int agent_run_with_tools(agent_config_t *cfg, const char *role, const char *system_prompt,
                          const char *user_prompt, int max_tokens, agent_result_t *out);
