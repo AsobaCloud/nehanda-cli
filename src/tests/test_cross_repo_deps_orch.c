@@ -126,6 +126,43 @@ static void test_end_to_end(void)
    printf("ok\n");
 }
 
+/* Reverse traversal (§B --reverse / direction=in): querying the DEFINER lists the
+ * repos that depend ON it, and each reverse edge is byte-identical to the forward
+ * edge the OUT query emits. Runs immediately after test_end_to_end so the only
+ * seeded data is moonlight-qt -> moonlight-common-c (HIGH, import-corroborated). */
+static void test_reverse_direction(void)
+{
+   printf("test_reverse_direction... ");
+   xrepo_dep_edge_t *edges = NULL;
+   size_t n = 0;
+   int trunc = 0;
+
+   /* IN on the definer: exactly one dependent, moonlight-qt, same tier/evidence as OUT. */
+   xrepo_deps_opts_t in = {.direction = XREPO_DIR_IN, .min_tier = XREPO_TIER_MEDIUM};
+   int rc = canonical_index_cross_repo_deps("moonlight-common-c", &in, &edges, &n, &trunc);
+   assert(rc == 0 && n == 1);
+   assert(strcmp(edges[0].caller_repo, "moonlight-qt") == 0);
+   assert(strcmp(edges[0].definer_repo, "moonlight-common-c") == 0);
+   assert(edges[0].tier == XREPO_TIER_HIGH);
+   assert(edges[0].import_corroborated == 1);
+   assert(strcmp(edges[0].example_symbol, "LiStartConnection") == 0);
+   free(edges);
+
+   /* IN on the caller: nothing depends on moonlight-qt. */
+   rc = canonical_index_cross_repo_deps("moonlight-qt", &in, &edges, &n, &trunc);
+   assert(rc == 0 && n == 0);
+   free(edges);
+
+   /* BOTH on the caller: the forward OUT edge, no reverse edge -> exactly one. */
+   xrepo_deps_opts_t both = {.direction = XREPO_DIR_BOTH, .min_tier = XREPO_TIER_MEDIUM};
+   rc = canonical_index_cross_repo_deps("moonlight-qt", &both, &edges, &n, &trunc);
+   assert(rc == 0 && n == 1);
+   assert(strcmp(edges[0].caller_repo, "moonlight-qt") == 0);
+   assert(strcmp(edges[0].definer_repo, "moonlight-common-c") == 0);
+   free(edges);
+   printf("ok\n");
+}
+
 /* A symbol defined in two trusted repos that A imports NEITHER of, called in A:
  * multi-definer without corroboration -> AMBIGUOUS -> review queue (no edge). */
 static void test_ambiguous_to_review(void)
@@ -171,6 +208,43 @@ static void test_ambiguous_to_review(void)
       if (strcmp(rows[i].symbol, "AmbiguousThing") == 0)
          found = 1;
    assert(found);
+   printf("ok\n");
+}
+
+/* --dry-run (acceptance #4): the AMBIGUOUS candidate the pipeline holds back
+ * (AmbiguousThing, route-backed multi-definer, seeded by test_ambiguous_to_review)
+ * is captured in-memory via the _ex out params rather than written — offline
+ * inspection sees it inline while normal output never does. */
+static void test_dry_run_candidates(void)
+{
+   printf("test_dry_run_candidates... ");
+   xrepo_deps_opts_t opts = {
+       .direction = XREPO_DIR_OUT, .min_tier = XREPO_TIER_MEDIUM, .dry_run = 1};
+   xrepo_dep_edge_t *edges = NULL;
+   size_t n = 0;
+   int trunc = 0;
+   xrepo_amb_cand_t *amb = NULL;
+   size_t amb_n = 0;
+   assert(canonical_index_cross_repo_deps_ex("moonlight-qt", &opts, &edges, &n, &trunc, &amb,
+                                             &amb_n) == 0);
+   /* the ambiguous candidate is surfaced in-memory (not as an emitted edge). */
+   int found = 0;
+   for (size_t i = 0; i < amb_n; i++)
+      if (strcmp(amb[i].symbol, "AmbiguousThing") == 0 &&
+          strcmp(amb[i].caller_repo, "moonlight-qt") == 0)
+         found = 1;
+   assert(found);
+   /* AmbiguousThing is never an emitted edge, dry-run or not. */
+   for (size_t i = 0; i < n; i++)
+      assert(strcmp(edges[i].example_symbol, "AmbiguousThing") != 0);
+   free(edges);
+   free(amb);
+
+   /* the plain API ignores ambiguous candidates and never captures them. */
+   edges = NULL;
+   n = 0;
+   assert(canonical_index_cross_repo_deps("moonlight-qt", &opts, &edges, &n, &trunc) == 0);
+   free(edges);
    printf("ok\n");
 }
 
@@ -1035,7 +1109,9 @@ int main(void)
    db2_test_shim_open();
    test_empty_graceful();
    test_end_to_end();
+   test_reverse_direction();
    test_ambiguous_to_review();
+   test_dry_run_candidates();
    test_structural_edge_gate();
    test_cold_start_rebuild_to_gate();
    test_vendor_canonical_preference();

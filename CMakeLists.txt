@@ -30,8 +30,9 @@ option(WITH_TLS "Enable in-client TLS for https:// remote aimee-servers" ON)
 # CA bundle and no external TLS library.
 option(AIMEE_LEAN "Lean build profile: size-optimized, no UI" OFF)
 # Thin-client-only profile: configure and build ONLY the `aimee` CLI target,
-# skipping aimee-server / aimee-kb / aimee-gateway / aimee-webchat and the test
-# suite. The thin client links only Threads (+ OpenSSL for https), so this lets
+# skipping the unit-test suite (aimee-server / aimee-kb / aimee-gateway /
+# aimee-webchat are not CMake targets at all — they build via `make -C src`).
+# The thin client links only Threads (+ OpenSSL for https), so this lets
 # a release/packaging box build it with no Go, libpq, zstd, PAM, or libsecret
 # toolchain. Composes with AIMEE_LEAN for a size-optimized, stripped binary.
 option(AIMEE_THIN_CLIENT "Build only the aimee thin client (no server/kb/gateway/webchat)" OFF)
@@ -373,6 +374,7 @@ set(DB1_SRCS
     ${AIMEE_SRC_DIR}/db1/interaction_events.c
     ${AIMEE_SRC_DIR}/db1/mcp_osv_cache.c
     ${AIMEE_SRC_DIR}/db1/wfe_store.c
+    ${AIMEE_SRC_DIR}/db1/wfe_binding.c
 )
 
 set(DB2_SRCS
@@ -480,6 +482,8 @@ set(CORE_SRCS
     ${AIMEE_SRC_DIR}/config_save.c
     ${AIMEE_SRC_DIR}/util.c
     ${AIMEE_SRC_DIR}/util_url.c
+    ${AIMEE_SRC_DIR}/audit_action.c
+    ${AIMEE_SRC_DIR}/audit_ledger.c
     ${AIMEE_SRC_DIR}/report_enrichment.c
     ${AIMEE_SRC_DIR}/delivery_target.c
     ${AIMEE_SRC_DIR}/text.c
@@ -527,6 +531,13 @@ set(CORE_SRCS
     ${AIMEE_SRC_DIR}/workflow/wfe_validate.c
     ${AIMEE_SRC_DIR}/workflow/wfe_canonical.c
     ${AIMEE_SRC_DIR}/workflow/wfe_custom.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_manager_artifacts.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_externalization.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_enforce.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_deliver.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_advance.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_router.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_router_catalog.c
     ${AIMEE_SRC_DIR}/vendor/cJSON.c
     ${PLATFORM_CORE_SRCS}
 )
@@ -564,6 +575,7 @@ set(DATA_SRCS
     ${AIMEE_SRC_DIR}/working_profile.c
     ${AIMEE_SRC_DIR}/guardrails.c
     ${AIMEE_SRC_DIR}/guardrails_orchestrator.c
+    ${AIMEE_SRC_DIR}/guardrails_action_audit.c
     ${AIMEE_SRC_DIR}/guardrails_tdd.c
     ${AIMEE_SRC_DIR}/workflow_learn.c
     ${AIMEE_SRC_DIR}/session_state.c
@@ -622,6 +634,7 @@ set(AGENT_SRCS
     ${AIMEE_SRC_DIR}/server/model_sampling.c
     ${AIMEE_SRC_DIR}/server/agent_adapter.c
     ${AIMEE_SRC_DIR}/server/primary_session_adapter.c
+    ${AIMEE_SRC_DIR}/server/primary_cli_ingestor.c
     ${AIMEE_SRC_DIR}/server/agent_policy.c
     ${AIMEE_SRC_DIR}/server/agent_policy_intercept.c
     ${AIMEE_SRC_DIR}/server/agent_tasks.c
@@ -898,6 +911,9 @@ set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/cmd_hooks_scope.c
     ${AIMEE_SRC_DIR}/server/server_session_start_stubs.c
     ${AIMEE_SRC_DIR}/workflow/wfe_engine.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_advance_exec.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_block_resolve.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_bind_ingress.c
     ${AIMEE_SRC_DIR}/workflow/wfe_blocks.c
     ${AIMEE_SRC_DIR}/workflow/wfe_approval.c
     ${AIMEE_SRC_DIR}/workflow/wfe_verdict.c
@@ -1211,6 +1227,13 @@ add_executable(aimee
     ${AIMEE_SRC_DIR}/workflow/wfe_validate.c
     ${AIMEE_SRC_DIR}/workflow/wfe_canonical.c
     ${AIMEE_SRC_DIR}/workflow/wfe_custom.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_manager_artifacts.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_externalization.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_enforce.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_deliver.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_advance.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_router.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_router_catalog.c
 )
 target_include_directories(aimee PRIVATE ${AIMEE_SRC_DIR} ${AIMEE_SRC_DIR}/headers ${AIMEE_SRC_DIR}/vendor/headers ${AIMEE_SRC_DIR}/db1 ${AIMEE_SRC_DIR}/db2 ${AIMEE_SRC_DIR}/workflow)
 target_compile_options(aimee PRIVATE ${AIMEE_COMMON_WARNINGS})
@@ -1260,77 +1283,6 @@ if(WITH_TLS)
     endif()
 endif()
 
-# aimee-webchat (Go) and aimee-gateway are full-build-only components; the
-# thin-client profile skips them so packaging needs no Go toolchain.
-if(NOT AIMEE_THIN_CLIENT)
-
-find_program(GO_EXECUTABLE go)
-if(NOT GO_EXECUTABLE)
-    message(FATAL_ERROR "Go is required to build aimee-webchat")
-endif()
-
-file(GLOB WEBCHAT_GO_SRCS CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/webchat/*.go"
-)
-list(APPEND WEBCHAT_GO_SRCS
-    "${CMAKE_SOURCE_DIR}/webchat/go.mod"
-    "${CMAKE_SOURCE_DIR}/webchat/go.sum"
-)
-set(WEBCHAT_BIN "${CMAKE_BINARY_DIR}/bin/aimee-webchat${CMAKE_EXECUTABLE_SUFFIX}")
-add_custom_command(
-    OUTPUT "${WEBCHAT_BIN}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_BINARY_DIR}/bin"
-    COMMAND "${GO_EXECUTABLE}" build -o "${WEBCHAT_BIN}" .
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/webchat"
-    DEPENDS ${WEBCHAT_GO_SRCS}
-    COMMENT "Building Go aimee-webchat"
-    VERBATIM
-)
-add_custom_target(aimee-webchat ALL DEPENDS "${WEBCHAT_BIN}")
-
-add_executable(aimee-gateway
-    ${AIMEE_SRC_DIR}/gateway/gateway_main.c
-    ${AIMEE_SRC_DIR}/gateway/gateway_ctx.c
-    ${AIMEE_SRC_DIR}/gateway/platform_registry.c
-    ${AIMEE_SRC_DIR}/gateway/delivery_router.c
-    ${AIMEE_SRC_DIR}/gateway/session_key.c
-    ${AIMEE_SRC_DIR}/gateway/platform_telegram.c
-    ${AIMEE_SRC_DIR}/gateway/platform_ntfy.c
-    ${AIMEE_SRC_DIR}/gateway/platform_webhook.c
-    ${AIMEE_SRC_DIR}/gateway/stt.c
-    ${AIMEE_SRC_DIR}/gateway/tts.c
-    ${AIMEE_SRC_DIR}/gateway/pairing.c
-    ${AIMEE_SRC_DIR}/gateway/gateway_pairing.c
-    ${AIMEE_SRC_DIR}/gateway/mirror.c
-    ${AIMEE_SRC_DIR}/posix/agent_bridge.c
-    ${AIMEE_SRC_DIR}/posix/cli_client.c
-    ${AIMEE_SRC_DIR}/proxy_bootstrap.c
-    ${AIMEE_SRC_DIR}/vendor/cJSON.c
-    ${AIMEE_SRC_DIR}/delivery_target.c
-    ${AIMEE_SRC_DIR}/aimee_home.c
-    ${AIMEE_SRC_DIR}/log.c
-    ${AIMEE_SRC_DIR}/platform_random.c
-    ${AIMEE_SRC_DIR}/posix/platform_process.c
-    ${AIMEE_SRC_DIR}/shutdown_forensics.c
-)
-target_include_directories(aimee-gateway PRIVATE
-    ${AIMEE_SRC_DIR}
-    ${AIMEE_SRC_DIR}/headers
-    ${AIMEE_SRC_DIR}/vendor/headers
-)
-target_compile_options(aimee-gateway PRIVATE ${AIMEE_COMMON_WARNINGS})
-target_link_libraries(aimee-gateway PRIVATE Threads::Threads)
-# OpenSSL only where present (POSIX); the gateway is a Linux/Docker component and
-# is not built on Windows, but keep the link guarded to match the other targets.
-if(OpenSSL_FOUND)
-    target_link_libraries(aimee-gateway PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-endif()
-if(WIN32)
-    target_compile_definitions(aimee-gateway PRIVATE AIMEE_WINDOWS _WIN32_WINNT=0x0A00)
-    target_link_libraries(aimee-gateway PRIVATE ws2_32 bcrypt winhttp advapi32)
-endif()
-
-endif() # NOT AIMEE_THIN_CLIENT (webchat + gateway)
 
 # Generate embedded help data from docs/agent.md
 set(AGENT_HELP_HEADER "${AIMEE_SRC_DIR}/agent_help_data.h")
@@ -1358,10 +1310,14 @@ add_custom_target(agent_help_header DEPENDS "${AGENT_HELP_HEADER}")
 add_dependencies(aimee agent_help_header)
 
 # --- Non-thin-client targets ------------------------------------------------
-# Everything below (the agent tool-prompt / DB schema codegen, aimee-server,
-# aimee-kb, and the test suite) belongs to the full build. The thin-client-only
-# profile (-DAIMEE_THIN_CLIENT=ON) ships just the `aimee` CLI above and skips
-# these so packaging needs no Go / libpq / zstd / server deps.
+# CMake builds ONLY the `aimee` thin client (+ the unit-test suite below).
+# aimee-server, aimee-kb, aimee-gateway and aimee-webchat are Linux/Docker
+# components built EXCLUSIVELY via `make -C src` (see src/Makefile); their CMake
+# targets were removed because CMake's source lists are not maintained for the
+# full server build (they drifted ~188 files behind src/Makefile) and no CI gate
+# ever built them. The block below is the agent tool-prompt / DB schema codegen
+# and the unit-test suite, which the thin-client-only profile
+# (-DAIMEE_THIN_CLIENT=ON) skips.
 if(NOT AIMEE_THIN_CLIENT)
 
 set(TOOL_PROMPTS_HEADER "${AIMEE_SRC_DIR}/tool_prompts_data.h")
@@ -1396,85 +1352,7 @@ add_custom_command(
 add_custom_target(schema_data_header DEPENDS "${SCHEMA_DATA_HEADER}")
 add_dependencies(aimee-core schema_data_header)
 
-add_executable(aimee-server
-    ${SERVER_SRCS}
-    ${SERVER_DATA_SRCS}
-    ${AGENT_SRCS}
-    ${SERVER_CORE_SRCS}
-    ${DB1_SRCS}
-    ${GIT_SRCS}
-    # server.c's hooks.pre handler intercepts agent memory writes via the
-    # transport-free helpers in memory_redirect.c (classify/bash/rematerialize);
-    # it lives in CMD_SRCS, which the server does not otherwise link.
-    ${AIMEE_SRC_DIR}/memory_redirect.c
-)
-add_dependencies(aimee-server agent_help_header tool_prompts_header schema_data_header)
-target_include_directories(aimee-server PRIVATE
-    ${AIMEE_SRC_DIR}
-    ${AIMEE_SRC_DIR}/headers
-    ${AIMEE_SRC_DIR}/vendor/headers
-    ${AIMEE_SRC_DIR}/db1
-    ${AIMEE_SRC_DIR}/db2
-    ${AIMEE_SRC_DIR}/workflow
-)
-target_compile_options(aimee-server PRIVATE ${AIMEE_COMMON_WARNINGS})
-target_compile_definitions(aimee-server PRIVATE AIMEE_DB2_DISABLED)
-target_link_libraries(aimee-server PRIVATE Threads::Threads ${ZSTD_LIBRARY})
-if(OpenSSL_FOUND)
-    target_link_libraries(aimee-server PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-endif()
-if(NOT WIN32)
-    target_link_libraries(aimee-server PRIVATE SQLite::SQLite3 m)
-endif()
-if(WIN32)
-    target_compile_definitions(aimee-server PRIVATE AIMEE_WINDOWS _WIN32_WINNT=0x0A00)
-    target_link_libraries(aimee-server PRIVATE ws2_32 bcrypt winhttp advapi32)
-endif()
 
-if(APPLE)
-    target_link_libraries(aimee-server PRIVATE ${SECURITY_FRAMEWORK} ${COREFOUNDATION_FRAMEWORK})
-endif()
-
-add_executable(aimee-kb
-    ${KB_SRCS}
-    ${AIMEE_SRC_DIR}/dashboard_kb.c
-    ${KB_DATA_SRCS}
-    ${KB_CORE_SRCS}
-    ${DB2_SRCS}
-    ${KB_PLATFORM_EXTRA_SRCS}
-)
-add_dependencies(aimee-kb schema_data_header)
-target_include_directories(aimee-kb PRIVATE
-    ${AIMEE_SRC_DIR}
-    ${AIMEE_SRC_DIR}/headers
-    ${AIMEE_SRC_DIR}/vendor/headers
-    ${AIMEE_SRC_DIR}/db1
-    ${AIMEE_SRC_DIR}/db2
-)
-target_compile_options(aimee-kb PRIVATE ${AIMEE_COMMON_WARNINGS})
-target_compile_definitions(aimee-kb PRIVATE AIMEE_DB1_DISABLED AIMEE_DISABLE_DB2_SQLITE_SHIM)
-target_link_libraries(aimee-kb PRIVATE Threads::Threads ${ZSTD_LIBRARY})
-if(NOT WIN32)
-    target_link_libraries(aimee-kb PRIVATE m)
-endif()
-if(AIMEE_HAVE_LIBPQ)
-    target_include_directories(aimee-kb PRIVATE ${LIBPQ_INCLUDE_DIRS})
-    target_link_directories(aimee-kb PRIVATE ${LIBPQ_LIBRARY_DIRS})
-    target_link_libraries(aimee-kb PRIVATE ${LIBPQ_LIBRARIES})
-    target_compile_options(aimee-kb PRIVATE ${LIBPQ_CFLAGS_OTHER})
-else()
-    target_compile_definitions(aimee-kb PRIVATE AIMEE_DISABLE_POSTGRES)
-endif()
-if(OpenSSL_FOUND)
-    target_link_libraries(aimee-kb PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-endif()
-if(WIN32)
-    target_compile_definitions(aimee-kb PRIVATE AIMEE_WINDOWS _WIN32_WINNT=0x0A00)
-    target_link_libraries(aimee-kb PRIVATE ws2_32 bcrypt winhttp advapi32)
-endif()
-if(APPLE)
-    target_link_libraries(aimee-kb PRIVATE ${SECURITY_FRAMEWORK} ${COREFOUNDATION_FRAMEWORK})
-endif()
 
 add_custom_target(module-boundary-check
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check-module-boundary.py" --src-dir "${AIMEE_SRC_DIR}" --require-dirs

@@ -48,17 +48,6 @@ interface DefResponse {
   def: GraphDef;
   error?: string;
 }
-interface RunItem {
-  id: string;
-  workflow: string;
-  version: string;
-  stage: string;
-  state: string;
-  mode: string;
-  pause_reason: string;
-  repo: string;
-}
-
 /* ---- personas + delegates (the per-step assignment options) ---- */
 
 interface PersonaInfo {
@@ -303,10 +292,9 @@ async function sendJSON<T>(
   return { status: r.status, data };
 }
 
-export default function Workflows() {
+export default function EditWorkflows() {
   const [defs, setDefs] = useState<DefRow[]>([]);
   const [blocks, setBlocks] = useState<BlockDef[]>([]);
-  const [items, setItems] = useState<RunItem[]>([]);
   const [graph, setGraph] = useState<GraphDef | null>(null);
   const [version, setVersion] = useState("");
   const [pos, setPos] = useState<Record<string, { x: number; y: number }>>({});
@@ -315,16 +303,10 @@ export default function Workflows() {
     kind: "ok" | "err" | "info";
     msg: string;
   } | null>(null);
-  const [runItem, setRunItem] = useState<RunItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [personas, setPersonas] = useState<PersonaInfo[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [managePersonas, setManagePersonas] = useState(false);
-  // Autonomous-development intake (submit a proposal -> a run on the chosen workflow).
-  const [proposalMd, setProposalMd] = useState("");
-  const [submitMsg, setSubmitMsg] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [gateMsg, setGateMsg] = useState("");
   // This tab's selected project (per-tab project space). Held so the workflow
   // context can scope to it; execution-in-project flows through a chat session's
   // cwd today, so this primarily persists the selection + offers clone here.
@@ -335,64 +317,7 @@ export default function Workflows() {
     getJSON<{ defs: DefRow[] }>("/api/workflow/defs")
       .then((d) => setDefs(d.defs || []))
       .catch(() => {});
-    getJSON<{ items: RunItem[] }>("/api/workflow/items")
-      .then((d) => setItems(d.items || []))
-      .catch(() => {});
   }, []);
-
-  // Submit a proposal for autonomous execution on the open workflow (default
-  // "build"). The run proceeds server-side; refresh the run list to show it.
-  const submitProposal = useCallback(async () => {
-    const md = proposalMd.trim();
-    if (!md) {
-      setSubmitMsg("Proposal is empty.");
-      return;
-    }
-    setSubmitting(true);
-    setSubmitMsg("");
-    try {
-      const wf = graph?.name || "build";
-      const { status, data } = await postJSON<{ work_item_id?: string; error?: string }>(
-        "/api/dev/submit",
-        { proposal_md: md, workflow: wf },
-      );
-      if (status >= 200 && status < 300 && data.work_item_id) {
-        setSubmitMsg(`Submitted ${data.work_item_id} on "${wf}".`);
-        setProposalMd("");
-        refreshLists();
-      } else {
-        setSubmitMsg(data.error || `submit failed (HTTP ${status})`);
-      }
-    } catch {
-      setSubmitMsg("submit failed");
-    } finally {
-      setSubmitting(false);
-    }
-  }, [proposalMd, graph, refreshLists]);
-
-  // Approve / reject the human gate the selected run is parked at. Operator-only
-  // server-side (CAP_WORKFLOW_ADMIN); the scheduler resumes the run on approve.
-  const decideGate = useCallback(
-    async (decision: "approve" | "reject") => {
-      if (!runItem) return;
-      setGateMsg("");
-      try {
-        const { status, data } = await postJSON<{ error?: string }>(
-          `/api/workflow/items/${encodeURIComponent(runItem.id)}/gate`,
-          { decision },
-        );
-        if (status >= 200 && status < 300) {
-          setGateMsg(decision === "approve" ? "Approved — resuming." : "Rejected.");
-          refreshLists();
-        } else {
-          setGateMsg(data.error || `failed (HTTP ${status})`);
-        }
-      } catch {
-        setGateMsg("failed");
-      }
-    },
-    [runItem, refreshLists],
-  );
 
   // The persona list feeds both the per-step persona pickers and the manager;
   // refreshed after any persona create/edit/delete.
@@ -427,7 +352,6 @@ export default function Workflows() {
         setVersion(d.version);
         setPos(autoLayout(d.def));
         setSelected(null);
-        setRunItem(null);
         setStatus(d.valid ? null : { kind: "err", msg: d.error || "invalid" });
       })
       .finally(() => setLoading(false));
@@ -579,25 +503,27 @@ export default function Workflows() {
   }, []);
 
   const sel = graph?.nodes.find((n) => n.id === selected) || null;
-  // The editor shows the CURRENT on-disk def. A run is pinned to a specific
-  // version; only when that matches the open def does the graph truly depict
-  // what the run is executing — so only then do we highlight the current stage.
-  const runMatchesOpenDef = !!(
-    runItem &&
-    graph &&
-    runItem.workflow === graph.name &&
-    !!version &&
-    runItem.version === version
-  );
-  const activeStage =
-    runMatchesOpenDef && graph?.nodes.some((n) => n.id === runItem!.stage)
-      ? runItem!.stage
-      : null;
 
   const center = (id: string) => {
     const p = pos[id];
     return p ? { x: p.x + NODE_W / 2, y: p.y + NODE_H / 2 } : { x: 0, y: 0 };
   };
+
+  // Size the SVG to the actual node extents (plus a margin) so the overflow box
+  // can scroll to every node. A fixed 1600×1000 canvas clipped the scroll region,
+  // so deep workflows (x grows ~230px/depth) or nodes dragged right/down became
+  // unreachable. Keep a floor so a small graph still fills the viewport.
+  const CANVAS_PAD = 80;
+  let canvasW = 1600;
+  let canvasH = 1000;
+  if (graph) {
+    for (const n of graph.nodes) {
+      const p = pos[n.id];
+      if (!p) continue;
+      canvasW = Math.max(canvasW, p.x + NODE_W + CANVAS_PAD);
+      canvasH = Math.max(canvasH, p.y + NODE_H + CANVAS_PAD);
+    }
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -666,49 +592,6 @@ export default function Workflows() {
               <Badge
                 label={b.custom ? "custom" : b.produces}
                 variant={b.custom ? "info" : "neutral"}
-              />
-            </div>
-          ))}
-        </Panel>
-        <Panel title="Submit proposal">
-          <textarea
-            value={proposalMd}
-            onChange={(e) => setProposalMd(e.target.value)}
-            placeholder="Describe the change (Markdown). aimee runs the workflow end-to-end and parks at human gates."
-            rows={4}
-            style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 12 }}
-          />
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-            <button onClick={() => void submitProposal()} disabled={submitting} style={btn}>
-              {submitting ? "Submitting…" : `Run on "${graph?.name || "build"}"`}
-            </button>
-            {submitMsg && (
-              <span style={{ fontSize: 11, color: "#667" }}>{submitMsg}</span>
-            )}
-          </div>
-        </Panel>
-        <Panel title="Runs" count={items.length}>
-          {items.map((it) => (
-            <div
-              key={it.id}
-              onClick={() => {
-                setRunItem(it);
-                if (it.workflow !== graph?.name) openDef(it.workflow);
-              }}
-              style={{ ...row, fontWeight: runItem?.id === it.id ? 600 : 400 }}
-            >
-              <span>
-                {it.workflow}/{it.stage}
-              </span>
-              <Badge
-                label={it.state}
-                variant={
-                  it.state === "accepted"
-                    ? "success"
-                    : it.state === "active"
-                      ? "running"
-                      : "neutral"
-                }
               />
             </div>
           ))}
@@ -787,7 +670,7 @@ export default function Workflows() {
           }}
           onClick={() => setSelected(null)}
         >
-          <svg width={1600} height={1000} style={{ display: "block" }}>
+          <svg width={canvasW} height={canvasH} style={{ display: "block" }}>
             <defs>
               <marker
                 id="arrow"
@@ -849,7 +732,6 @@ export default function Workflows() {
             {graph?.nodes.map((n) => {
               const p = pos[n.id] || { x: 0, y: 0 };
               const isSel = n.id === selected;
-              const isActive = n.id === activeStage;
               return (
                 <g
                   key={n.id}
@@ -862,9 +744,9 @@ export default function Workflows() {
                     width={NODE_W}
                     height={NODE_H}
                     rx={6}
-                    fill={isActive ? "#fff7e0" : "#fff"}
-                    stroke={isSel ? "#2563eb" : isActive ? "#e0a800" : "#ccc"}
-                    strokeWidth={isSel || isActive ? 2 : 1}
+                    fill="#fff"
+                    stroke={isSel ? "#2563eb" : "#ccc"}
+                    strokeWidth={isSel ? 2 : 1}
                   />
                   <text x={8} y={20} fontSize={13} fontWeight={600} fill="#222">
                     {nodeTitle(n)}
@@ -905,42 +787,6 @@ export default function Workflows() {
             />
           )}
         </Panel>
-        {runItem && (
-          <Panel title="Run state">
-            <Field k="workflow" v={runItem.workflow} />
-            <Field k="stage" v={runItem.stage} />
-            <Field k="state" v={runItem.state} />
-            <Field k="pause" v={runItem.pause_reason || "—"} />
-            <Field k="version" v={runItem.version.slice(0, 12)} />
-            {runItem.pause_reason === "pending_human" && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-                <button onClick={() => void decideGate("approve")} style={btn}>
-                  Approve
-                </button>
-                <button
-                  onClick={() => void decideGate("reject")}
-                  style={{ ...btn, background: "#fbeaea", color: "#a33" }}
-                >
-                  Reject
-                </button>
-                {gateMsg && <span style={{ fontSize: 11, color: "#667" }}>{gateMsg}</span>}
-              </div>
-            )}
-            {graph &&
-              runItem.workflow === graph.name &&
-              runItem.version &&
-              version &&
-              runItem.version !== version && (
-                <div style={{ color: "#c80", fontSize: 12, marginTop: 6 }}>
-                  ⚠ This run is pinned to version {runItem.version.slice(0, 12)}
-                  , but the editor is showing the <b>current</b> def (
-                  {version.slice(0, 12)}). The graph may not match what the run
-                  is executing, so the stage highlight is hidden until they
-                  match.
-                </div>
-              )}
-          </Panel>
-        )}
       </div>
 
       {managePersonas && (

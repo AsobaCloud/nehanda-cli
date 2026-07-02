@@ -121,7 +121,11 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", s.requireAuth(s.handleRoot))
 	mux.HandleFunc("/chat", s.requireAuth(s.handleSPA))
 	mux.HandleFunc("/dashboard", s.requireAuth(s.handleSPA))
-	mux.HandleFunc("/workflows", s.requireAuth(s.handleSPA))
+	// Workflow surfaces: "Edit Workflows" (the def/graph editor) and "Workflow
+	// Actions" (author → autonomous-run → status/history). Both are SPA routes so a
+	// hard refresh / direct link serves index.html and React Router takes over.
+	mux.HandleFunc("/edit-workflows", s.requireAuth(s.handleSPA))
+	mux.HandleFunc("/workflow-actions", s.requireAuth(s.handleSPA))
 	mux.HandleFunc("/projects", s.requireAuth(s.handleSPA))
 	// Code-graph visualization (§8): a read-only SPA page backed by the /api/graph/*
 	// proxies (which forward aimee-server's index_graph_* MCP tools).
@@ -185,6 +189,7 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/workflow/items", s.requireAuth(s.handleWorkflowItems))
 	mux.HandleFunc("/api/workflow/items/", s.requireAuth(s.handleWorkflowItems))
 	mux.HandleFunc("/api/dev/submit", s.requireAuth(s.handleDevSubmit))
+	mux.HandleFunc("/api/proposal/draft", s.requireAuth(s.handleProposalDraft))
 
 	// Credential vault (WP-C.2c): the user re-presents their login password to
 	// unlock; calls carry the server.token bearer + X-Aimee-Webuser so
@@ -207,6 +212,12 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 
 	// Live endpoints backed by aimee-server socket
 	mux.HandleFunc("/api/agents", s.requireAuth(s.handleAgents))
+	mux.HandleFunc("GET /api/agents/stats", s.requireAuth(s.handleAgentStats))
+	mux.HandleFunc("POST /api/agents/add", s.requireAuth(s.agentOpHandler("agent.add")))
+	mux.HandleFunc("POST /api/agents/remove", s.requireAuth(s.agentOpHandler("agent.remove")))
+	mux.HandleFunc("POST /api/agents/enable", s.requireAuth(s.agentOpHandler("agent.enable")))
+	mux.HandleFunc("POST /api/agents/disable", s.requireAuth(s.agentOpHandler("agent.disable")))
+	mux.HandleFunc("POST /api/agents/probe", s.requireAuth(s.agentOpHandler("agent.probe")))
 	mux.HandleFunc("/api/rules", s.requireAuth(s.handleCollabRulesList))
 	mux.HandleFunc("/api/rules/active", s.requireAuth(s.handleCollabRulesActive))
 	mux.HandleFunc("POST /api/rules/{id}/{action}", s.requireAuth(s.handleCollabRuleAction))

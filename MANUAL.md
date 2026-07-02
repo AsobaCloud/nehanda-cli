@@ -145,7 +145,7 @@ are two ways to stand it up:
 ### 3.1 Run the services in Docker (recommended)
 
 The combined image co-locates both binaries in one container; Postgres (pgvector)
-and a CPU embedder come up alongside it:
+comes up alongside it, and the CPU inference gateway is bundled in the image:
 
 ```bash
 git clone https://github.com/RakuenSoftware/aimee.git
@@ -153,12 +153,13 @@ cd aimee
 docker compose -f compose.combined.yaml up --build -d
 ```
 
-The server fronts the `/v1` API on `:8740` (default bearer `aimee-local-dev`) and
+The server fronts the `/v1` API over native TLS on `:8743` (default bearer
+`aimee-local-dev`; plaintext `:8740` is loopback-only and not published) and
 reaches the in-container kb on `:8741`:
 
 ```bash
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/health
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/kb/status
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/health
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/kb/status
 ```
 
 Split the two binaries into separate containers with `compose.server.yaml` when
@@ -186,13 +187,13 @@ add `-G "MinGW Makefiles" -DWITH_TLS=OFF` (no TLS; terminate TLS at a proxy).
 Point the client at the server per-invocation, via the environment, or persist it:
 
 ```bash
-aimee --server http://my-host:8740 --server-token=aimee-local-dev status
+aimee --server https://my-host:8743 --server-token=aimee-local-dev status
 
-export AIMEE_SERVER_URL=http://my-host:8740
+export AIMEE_SERVER_URL=https://my-host:8743
 export AIMEE_SERVER_TOKEN=aimee-local-dev
 aimee status
 
-aimee remote set http://my-host:8740 aimee-local-dev   # persists to <aimee_home>/remote.conf
+aimee remote set https://my-host:8743 aimee-local-dev   # persists to <aimee_home>/remote.conf
 aimee remote status                                    # resolved transport + /v1/health probe
 aimee remote clear                                     # revert to a local Unix socket
 ```
@@ -387,7 +388,7 @@ corresponding `config_*.c` module.
 | `embedding_command` | string | External command that produces embeddings (sidecar). |
 | `embedding_model` | string | Embedding model name. |
 | `embedding_endpoint` | string | Embedding service URL. |
-| `embedding_dim` | int | Embedding dimensionality; must match the embedder model. Default `2560` (pplx-embed-v1-4b); set `1024` for the pplx-embed-v1-0.6b tier. |
+| `embedding_dim` | int | Embedding dimensionality; must match the embedder model. `1024` for the CPU tier (Qwen3-Embedding-0.6B), `2560` for the GPU tiers (Qwen3-Embedding-4B). |
 
 **Memory & retrieval**
 
@@ -1223,7 +1224,7 @@ selects its own git **project** to operate on:
   becomes the agent's working directory; webchat scope-validates it to the
   signed-in user's own workspace.
 - **Dashboard**, memory, reminders, and onboarding panels.
-- **Workflows**, a visual composer for [workflow](docs/WORKFLOWS.md)
+- **Edit Workflows**, a visual composer for [workflow](docs/WORKFLOWS.md)
   definitions (blocks rail, graph canvas, per-step persona/delegate assignment,
   plus a persona manager). Validate/Save persist server-side.
 - **Projects**, connect git repositories. Clone over HTTPS *or* SSH-form URLs
@@ -1407,36 +1408,40 @@ install only the thin client ([§3.2](#32-install-the-thin-client)) and point it
 the server. Four compose files ship, built from three images: `aimee-server`
 (`Dockerfile.server`), `aimee-kb` (`Dockerfile`), and the co-located
 `aimee-server+kb` (`Dockerfile.combined`). Every stack also brings up a
-`pgvector/pgvector:pg16` Postgres and a CPU embedder sidecar
-(`Dockerfile.embedder`); the kb auto-applies its DB2 schema (`pg_trgm`/`vector`
-extensions + tables) on first boot. The sidecar ships in two tiers (embedder +
-reranker in one image): the default `aimee-embedder` (`pplx-embed-v1-4b`/2560 +
-`ettin-reranker-1b`) and the lighter `aimee-embedder-0.6b` (`pplx-embed-v1-0.6b`/
-1024 + `ettin-reranker-400m`) via `AIMEE_EMBEDDER_IMAGE` + `embedding_dim: 1024`
-(or `AIMEE_EMBEDDING_DIM=1024`). Trade-offs:
-[retrieval-stack.md](docs/retrieval-stack.md#choosing-a-tier).
+`pgvector/pgvector:pg16` Postgres, and the kb auto-applies its DB2 schema
+(`pg_trgm` and `vector` extensions plus tables) on first boot. The combined image
+bundles a CPU inference gateway (embeddings, reranking, and synthesis) from the
+`aimee-kb` image family, so embedding and reranking work with nothing external.
+The CPU tier serves Qwen3-Embedding-0.6B at 1024 dims; the GPU tiers
+(`aimee-kb-gpu-small`, `aimee-kb-gpu-mid`) serve Qwen3-Embedding-4B at 2560 dims.
+To run a standalone embedder or curator LLM instead of the bundled gateway, use
+the `external-llm` compose profile. Backends and tiers:
+[KB_LLM_BACKENDS.md](docs/KB_LLM_BACKENDS.md) and
+[AIMEE_KB_SYNTH_TIERS.md](docs/AIMEE_KB_SYNTH_TIERS.md).
 
 | Compose file | Brings up | Use when |
 |--------------|-----------|----------|
-| `compose.combined.yaml` | **`aimee-server+kb`** (one container) + Postgres + embedder | **Recommended default.** Both binaries co-located; server `/v1` on `:8740`, kb `:8741`. |
-| `compose.server.yaml` | `aimee-server` + `aimee-kb` + Postgres + embedder | Split stack: scale/update/place server and kb independently. |
-| `compose.yaml` | `aimee-kb` + Postgres + embedder | The knowledge service alone: building block for a shared/scaled kb. |
+| `compose.combined.yaml` | **`aimee-server+kb`** (one container, inference bundled) + Postgres | **Recommended default.** Both binaries co-located; server `/v1` over TLS on `:8743`, kb `:8741`. |
+| `compose.server.yaml` | `aimee-server` + `aimee-kb` + Postgres + the `aimee-llm` inference gateway | Split stack: scale/update/place server and kb independently. |
+| `compose.yaml` | `aimee-kb` + Postgres + the `aimee-llm` inference gateway | The knowledge service alone: building block for a shared/scaled kb. |
 | `compose.server-standalone.yaml` | `aimee-server` only (SQLite DB1, no kb) | DB1-backed `/v1` with no shared knowledge. |
 
 **Bring up the recommended (combined) stack:**
 
 ```bash
 docker compose -f compose.combined.yaml up --build -d
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/health
-curl -H 'Authorization: Bearer aimee-local-dev' http://localhost:8740/v1/kb/status
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/health
+curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/kb/status
 ```
 
 The combined container runs **both** aimee binaries: the kb on loopback `:8741`
-inside the container, the server fronting `:8740` with
-`AIMEE_KB_API_URL=http://127.0.0.1:8741`. The split stack
+inside the container, the server fronting `/v1` over TLS on `:8743` (plaintext
+`:8740` is loopback-only) with `AIMEE_KB_API_URL=http://127.0.0.1:8741`. The split stack
 (`compose.server.yaml`) instead runs `aimee-kb` as its own container the server
-reaches at `http://aimee-kb:8741`. Add `--profile llm` to any stack to bring up a
-local llama.cpp server for the synthesis/curator passes. Each container runs as a
+reaches at `http://aimee-kb:8741`. The combined image already bundles the synthesis
+and curator gateway; to run a standalone llama.cpp curator LLM instead, add
+`--profile curator-llm` on the split stacks (`compose.server.yaml`, `compose.yaml`)
+or `--profile external-llm` on the combined stack. Each container runs as a
 non-root user; the kb uses Python sidecars (`scripts/embed-remote.py`,
 `llm-chat.py`, `curator-extract.py`, `learning-synthesize.py`) for embeddings,
 synthesis, and curation, with container defaults from `deploy/container/aimee.yaml`.
@@ -1595,7 +1600,7 @@ Vector search rides inside the same Postgres and scales with it:
 
 | Topology | Shape | When |
 |----------|-------|------|
-| **Containerized server + KB (default)** | `aimee-server` + `aimee-kb` as containers (combined or split) + Postgres + embedder ([§27.1](#271-containerized-deployment)); developers run only the thin client. | The recommended deployment for one user or a team. |
+| **Containerized server + KB (default)** | `aimee-server` + `aimee-kb` as containers (combined or split) + Postgres + a bundled inference gateway ([§27.1](#271-containerized-deployment)); developers run only the thin client. | The recommended deployment for one user or a team. |
 | **Single developer, source build** | One `aimee-server` + one local `aimee-kb` + local Postgres, all on one host via service units. | The `install.sh` no-Docker setup. |
 | **Shared KB** | Many users' `aimee-server` instances point at one `aimee-kb`/Postgres over HTTP. DB1 stays per-user/per-machine; only KB-scoped knowledge crosses the boundary. | A team or a single user across several machines wanting shared knowledge. |
 | **Scaled KB** | Several `aimee-kb` replicas behind a load balancer (`:8741`) over one Postgres (with pooling and, if needed, read replicas + pgvectorscale). | Many users and/or a large corpus where one KB instance or plain HNSW is the bottleneck. |
@@ -1658,7 +1663,7 @@ platform support in [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 | `AIMEE_KB_API_URL` / `AIMEE_KB_API_BEARER_TOKEN` | KB `/v1` HTTP endpoint and bearer token. Required for kb-backed (shared/vector) features; the server no longer autostarts `aimee-kb`. |
 | `AIMEE_KB_NO_AUTOSTART` | Deprecated no-op (the kb socket autostart was retired in #2747; the server only reaches kb via `AIMEE_KB_API_URL`). |
 | `AIMEE_DB1_URL` / `AIMEE_DB2_URL` | Storage URLs used by containerized/explicit deploys: DB1 `sqlite:///…` (server) and DB2 `postgresql://…/aimee_shared` (kb). |
-| `AIMEE_EMBEDDER_URL` | Embedding service endpoint for the kb (e.g. the embedder sidecar `http://embedder:8080`). |
+| `AIMEE_EMBEDDER_URL` | Embedding service endpoint for the kb (e.g. the `aimee-llm` gateway `http://aimee-llm:8742`). |
 | `AIMEE_SERVER_HTTP_BIND` / `AIMEE_KB_HTTP_BIND` | Bind the server/kb `/v1` listener on `0.0.0.0` (set `1` in containers so the published port is reachable). |
 | `AIMEE_WORKSPACES_DIR` | Mirror-tier workspace root (bare mirrors + reconstructed worktrees); containers mount a volume here (`/var/lib/aimee-workspaces`). |
 | `AIMEE_KB_MODE` | Install-time selector (`local`/`remote`) consumed by `install-deps.sh`/`install.sh`. |

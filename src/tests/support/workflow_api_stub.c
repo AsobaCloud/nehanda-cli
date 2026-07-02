@@ -40,7 +40,23 @@ int wf_api_items(char *resp, int cap)
 {
    return stub(resp, cap);
 }
+int wf_api_items_all(char *resp, int cap)
+{
+   return stub(resp, cap);
+}
 int wf_api_item(const char *id, char *resp, int cap)
+{
+   (void)id;
+   return stub(resp, cap);
+}
+int wf_api_events(const char *id, long after, int limit, char *resp, int cap)
+{
+   (void)id;
+   (void)after;
+   (void)limit;
+   return stub(resp, cap);
+}
+int wf_api_proposal(const char *id, char *resp, int cap)
 {
    (void)id;
    return stub(resp, cap);

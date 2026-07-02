@@ -1650,8 +1650,9 @@ paths:
           in: query
           required: false
           description: >-
-            Dependency direction. Only "out" is implemented today; "in"/"both"
-            return 501. Ignored when status=ambiguous.
+            Dependency direction: "out" = deps OF the project (default), "in" =
+            repos that depend ON the project (reverse), "both" = union. Ignored
+            when status=ambiguous.
           schema:
             type: string
             enum: [out, in, both]
@@ -1673,6 +1674,17 @@ paths:
           schema:
             type: string
             enum: [ambiguous]
+        - name: dry_run
+          in: query
+          required: false
+          description: >-
+            Offline candidate inspection: emit every confidence band (down to LOW,
+            overriding min_tier) plus the AMBIGUOUS candidates inline, and write
+            nothing (no review-queue rows). The response carries dry_run:true and an
+            additional `ambiguous` array alongside `deps`.
+          schema:
+            type: string
+            enum: ["1", "true"]
       responses:
         "200":
           description: Cross-repo dependency edges (or ambiguous review queue)
@@ -1686,8 +1698,6 @@ paths:
           description: Unauthorized
         "413":
           description: Response too large; narrow the query
-        "501":
-          description: Requested direction not yet implemented
         "503":
           description: Canonical index unavailable
 

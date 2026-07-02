@@ -6,17 +6,23 @@ How to point `aimee-kb` at the model backend that does its **embedding**,
 ## Principle: the kb runs no model
 
 `aimee-kb` is a thin DB2 / curator service. It **never** runs an LLM or embedder
-in-process — it *calls* one over HTTP. Inference lives in a separate **`aimee-llm`
-container** (the unified Vulkan llama.cpp image, CPU or GPU tier) or any external
-OpenAI-compatible endpoint. You only ever give the kb a **URL**.
+in-process — it *calls* one over HTTP. Inference lives in a separate **`aimee-kb-*`
+tier image** (`aimee-kb-cpu` / `aimee-kb-gpu-small` / `aimee-kb-gpu-mid` — the unified
+Vulkan llama.cpp stack, deployed as the SmoothNAS `aimee-llm` plugin) or any external
+OpenAI-compatible endpoint. You only ever give the kb a **URL**. The tiers themselves are
+documented in [AIMEE_KB_SYNTH_TIERS.md](AIMEE_KB_SYNTH_TIERS.md).
 
 ## Tiers — what each backend provides
 
 | Backend | Embedding / reranking | Synthesis | Embedding dim |
 | --- | --- | --- | --- |
-| **CPU `aimee-llm`** (default) | yes (Qwen3-0.6B + ettin) | **Tier-A** only (small model) | **1024** |
-| **GPU `aimee-llm`** | yes, higher quality (Qwen3-4B) | **Tier-A + Tier-B** | **2560** (set explicitly) |
+| **`aimee-kb-cpu`** (default) | Qwen3-Emb-0.6B + ettin-68m | **Tier-A** only (gemma-4-E4B, CPU) | **1024** |
+| **`aimee-kb-gpu-small`** | Qwen3-Emb-4B + ettin-400m | **Tier-A + Tier-B** (Gemma 4 12B) | **2560** (set explicitly) |
+| **`aimee-kb-gpu-mid`** | Qwen3-Emb-4B + ettin-400m | **Tier-A + Tier-B** (Gemma 4 26B-A4B) | **2560** (set explicitly) |
 | **External LLM** | per the endpoint | per the endpoint | per the endpoint |
+
+`gpu-small` and `gpu-mid` share the 2560-dim embedder, so a KB moves between them with no
+re-embed — pick by synth need, not by the KB.
 
 *Tier-A* = mechanical extract/index passes. *Tier-B* = reasoning passes (judge,
 resolve-entities, contradictions, **synthesize**, promote). A small CPU model is
@@ -26,7 +32,7 @@ when you point the kb at a capable container via `AIMEE_LLM_URL`.
 
 ## Zero-config default
 
-If **no** LLM is configured, the kb deployment brings up a **CPU `aimee-llm`
+If **no** LLM is configured, the kb deployment brings up a **CPU `aimee-kb-cpu`
 container beside it** and points itself at it — embedding, reranking, and Tier-A
 synthesis work out of the box with nothing to set. The operator only opts *up*:
 configure a GPU container or an external LLM and the CPU sibling is not started.
@@ -89,7 +95,7 @@ AIMEE_EMBEDDER_URL=https://embed.internal  # pin embedding elsewhere
 AIMEE_EMBEDDING_DIM=<that model's dim>
 ```
 
-**Default (nothing set):** the deploy brings up the CPU `aimee-llm` sibling;
+**Default (nothing set):** the deploy brings up the CPU `aimee-kb-cpu` sibling;
 retrieval + Tier-A synthesis work at 1024-dim with no configuration.
 
 ## Notes for plugin / compose operators

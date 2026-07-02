@@ -4,7 +4,9 @@ import { Routes, Route, Navigate, NavLink, useLocation } from 'react-router-dom'
 import { Toast } from '@rakuensoftware/smoothgui';
 import Chat from './pages/Chat';
 import Dashboard from './pages/Dashboard';
-import Workflows from './pages/Workflows';
+import EditWorkflows from './pages/EditWorkflows';
+import WorkflowActions from './pages/WorkflowActions';
+import Delegates from './pages/Delegates';
 import Projects from './pages/Projects';
 import Graph from './pages/Graph';
 import Editor from './pages/Editor';
@@ -62,7 +64,9 @@ type Tab = { label: string; icon: string; route: string };
 const NAV_ITEMS: Tab[] = [
   { label: 'Chat', icon: '💬', route: '/chat' },
   { label: 'Dashboard', icon: '📊', route: '/dashboard' },
-  { label: 'Workflows', icon: '🔀', route: '/workflows' },
+  { label: 'Edit Workflows', icon: '🔀', route: '/edit-workflows' },
+  { label: 'Workflow Actions', icon: '📝', route: '/workflow-actions' },
+  { label: 'Delegates', icon: '🤝', route: '/delegates' },
   { label: 'Projects', icon: '📁', route: '/projects' },
   { label: 'Graph', icon: '🕸️', route: '/graph' },
   { label: 'Editor', icon: '🖥️', route: '/editor' },
@@ -136,6 +140,7 @@ function LogoutButton() {
     e.preventDefault();
     localStorage.removeItem('aimee_chat_tabs');
     localStorage.removeItem('aimee_active_chat_tab');
+    localStorage.removeItem('aimee_proposal_draft');
     fetch('/logout', {
       method: 'POST',
       headers: { 'X-CSRF-Token': window._csrf || '' },
@@ -232,7 +237,9 @@ export default function App() {
               <Routes>
                 <Route path="/chat" element={<Chat />} />
                 <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/workflows" element={<Workflows />} />
+                <Route path="/edit-workflows" element={<EditWorkflows />} />
+                <Route path="/workflow-actions" element={<WorkflowActions />} />
+                <Route path="/delegates" element={<Delegates />} />
                 <Route path="/projects" element={<Projects />} />
                 <Route path="/graph" element={<Graph />} />
                 <Route path="/editor" element={<Editor />} />

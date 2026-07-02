@@ -36,6 +36,8 @@
 #include "agent_tools.h" /* agent_tools_set_tool_event_cb — /v1/runs tool events */
 #include "agent_types.h"
 #include "gateway_policy.h" /* gateway_policy_apply_request — tool-policing stage */
+#include "router_advise.h"  /* gw_stage_router — the request->workflow seam */
+#include "aimee_ir_serve.h" /* IR-routed /v1/responses parse */
 #include "memory.h"         /* memory_embed_text */
 #include "request_context.h"
 #include "response_dedup.h"
@@ -953,6 +955,7 @@ static int agent_execute_messages(const agent_t *agent, cJSON *messages, cJSON *
    const gw_stage_t stages[] = {
        {gw_stage_memory, messages, "memory"},
        {gw_stage_openai_tool_policing, NULL, "tool_policing"},
+       {gw_stage_router, NULL, "router"}, /* S1/S2: the unified request->workflow seam */
    };
    gw_pipeline_run_request(&gr, stages, sizeof(stages) / sizeof(stages[0]));
 
@@ -961,7 +964,13 @@ static int agent_execute_messages(const agent_t *agent, cJSON *messages, cJSON *
    cJSON *eff_tools = cJSON_GetObjectItemCaseSensitive(gw_raw, "tools") ? tools : NULL;
 
    int tok = agent_request_max_tokens(agent, max_tokens);
-   cJSON *req = driver->build_request(agent, messages, eff_tools, eff_system, tok, temperature);
+   /* Build the provider request VIA THE IR (no direct chat->provider translation)
+    * when the flag is on; legacy driver->build_request fallback otherwise. */
+   cJSON *req = NULL;
+   if (aimee_ir_path_enabled())
+      req = aimee_ir_build_from_chat(agent->model, messages, eff_tools, eff_system, driver->name);
+   if (!req)
+      req = driver->build_request(agent, messages, eff_tools, eff_system, tok, temperature);
    cJSON_Delete(gw_raw); /* instructions copied into req by build_request; tools was a reference */
    if (!req)
       return -1;
@@ -1017,8 +1026,17 @@ static int responses_stream_handler(const char *body, server_http_sse_event_emit
    responses_mint_id(created, id, sizeof(id));
    char frame[2048];
 
-   if (openai_parse_responses_to_chat(body, model, sizeof(model), &instructions, &messages, &tools,
-                                      &stream) != 0)
+   /* Route the Responses CLIENT parse through the IR (no direct Responses->chat
+    * translation) when the flag is on; fall back to the legacy translator on any
+    * failure or when off. Both feed the same downstream agent path. */
+   int rp_ok = 0;
+   if (aimee_ir_path_enabled())
+      rp_ok = (aimee_ir_responses_to_chat(body, model, sizeof(model), &instructions, &messages,
+                                          &tools, &stream) == 0);
+   if (!rp_ok)
+      rp_ok = (openai_parse_responses_to_chat(body, model, sizeof(model), &instructions, &messages,
+                                              &tools, &stream) == 0);
+   if (!rp_ok)
    {
       if (openai_format_responses_created(id, model, created, frame, sizeof(frame)) > 0)
          emit(ctx, "response.created", frame);

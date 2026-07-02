@@ -716,6 +716,16 @@ int main(void)
       assert(server_http_route_caps("POST", "/v1/personas") == CAP_SESSION_ADMIN);
       assert(server_http_route_caps("GET", "/v1/role_templates") == CAP_SESSION_READ);
       assert(server_http_route_caps("DELETE", "/v1/role_templates/qa") == CAP_SESSION_ADMIN);
+      /* Proposals read surfaces: the timeline + proposal-markdown reads share the
+       * dashboard-read cap (ownership is enforced in-handler, not by the route cap),
+       * while the operator "list all items" view requires CAP_WORKFLOW_ADMIN. The
+       * /all exact row must win over the /<id> prefix row (else "all" is parsed as a
+       * work-item id under CAP_DASHBOARD_READ). */
+      assert(server_http_route_caps("GET", "/v1/workflow/items/wi_x/events") == CAP_DASHBOARD_READ);
+      assert(server_http_route_caps("GET", "/v1/workflow/items/wi_x/proposal") ==
+             CAP_DASHBOARD_READ);
+      assert(server_http_route_caps("GET", "/v1/workflow/items/all") == CAP_WORKFLOW_ADMIN);
+      assert(server_http_route_caps("GET", "/v1/workflow/items/wi_x") == CAP_DASHBOARD_READ);
       /* Presence is session-scoped; the streaming routes carry caps too. */
       assert(server_http_route_caps("GET", "/v1/sessions") == CAP_SESSION_READ);
       assert(server_http_route_caps("POST", "/v1/sessions/s1/attach") == CAP_SESSION_READ);

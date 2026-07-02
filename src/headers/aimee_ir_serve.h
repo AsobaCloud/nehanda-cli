@@ -1,0 +1,44 @@
+/* aimee_ir_serve.h -- the live-path bridge (Slice 5): build an upstream provider
+ * request from an inbound Anthropic /v1/messages request VIA THE IR, replacing the
+ * legacy direct anthropic->openai translate_request. No client-shape -> provider-
+ * shape path; the request pivots through the canonical IR. Wired into the ingress
+ * behind a config flag, with legacy fallback until parity is proven live. */
+#ifndef DEC_AIMEE_IR_SERVE_H
+#define DEC_AIMEE_IR_SERVE_H 1
+
+#include <stddef.h>
+
+struct cJSON;
+
+/* Build the provider request body from `req` (an Anthropic Messages request) via
+ * the IR, targeting the backend named by `driver_name` ("chatgpt" -> Responses,
+ * else OpenAI chat). The served model is overridden to `agent_model` and, when
+ * `max_tokens_override > 0`, the token cap is set to it (mirrors the legacy path's
+ * agent shaping). Returns a malloc'd JSON string the caller frees, or NULL to fall
+ * back to the legacy translator. */
+char *aimee_ir_build_provider_body(const struct cJSON *req, const char *driver_name,
+                                   const char *agent_model, int max_tokens_override);
+
+/* 1 if the IR live-path flag is enabled (config-only: AIMEE_IR_PATH env). */
+int aimee_ir_path_enabled(void);
+
+/* Drop-in for openai_parse_responses_to_chat that routes the /v1/responses CLIENT
+ * parse THROUGH THE IR (responses_frontend_parse -> IR -> chat components), instead
+ * of a direct Responses->chat translation. Same out-param contract: `model` buffer,
+ * malloc'd `*instructions_out`, and detached `*messages_out`/`*tools_out` cJSON the
+ * caller owns; `*stream_out` mirrors the request. Returns 0, or -1 (caller falls
+ * back to the legacy translator). */
+int aimee_ir_responses_to_chat(const char *body, char *model, size_t model_n,
+                               char **instructions_out, struct cJSON **messages_out,
+                               struct cJSON **tools_out, int *stream_out);
+
+/* Build a provider request from the agent path's chat components (messages + tools
+ * + system) VIA THE IR, replacing driver->build_request's direct chat->provider
+ * translation. Assembles a chat request, parses it to the IR, overrides the served
+ * model, and builds for the backend named by `driver_name` ("chatgpt" -> Responses,
+ * else OpenAI). Returns a new cJSON the caller owns, or NULL to fall back. */
+struct cJSON *aimee_ir_build_from_chat(const char *agent_model, const struct cJSON *messages,
+                                       const struct cJSON *tools, const char *system,
+                                       const char *driver_name);
+
+#endif /* DEC_AIMEE_IR_SERVE_H */
