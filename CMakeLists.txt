@@ -574,6 +574,7 @@ set(DATA_SRCS
     ${AIMEE_SRC_DIR}/working_profile.c
     ${AIMEE_SRC_DIR}/guardrails.c
     ${AIMEE_SRC_DIR}/guardrails_orchestrator.c
+    ${AIMEE_SRC_DIR}/guardrails_action_audit.c
     ${AIMEE_SRC_DIR}/guardrails_tdd.c
     ${AIMEE_SRC_DIR}/workflow_learn.c
     ${AIMEE_SRC_DIR}/session_state.c

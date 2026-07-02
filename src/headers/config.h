@@ -305,6 +305,11 @@ typedef struct config
     * action (branch protection + scoped creds + break-glass) — never a code default,
     * per the security-roundtable deviation. */
    int wfe_live_forge_enabled;
+   /* audit_action_enabled: emit a per-tool-call governed-action row (kind=
+    * tool_action) to audit.log from pre_tool_check. Default-OFF until the
+    * trajectory_export reader ships (reader-before-writer); audit is passive and
+    * never changes an enforcement verdict. */
+   int audit_action_enabled;
    /* css_render_command: the render backend for the #4-full computed-style oracle.
     * A shell command (like embedding_command) that reads a {"html","css"} JSON
     * object on stdin and writes a computed-style snapshot JSON on stdout. It runs
