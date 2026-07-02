@@ -5,65 +5,47 @@ all share a **single embedder per deployment**. There is no two-tier (fast +
 deep) arrangement, one model embeds everything, and every vector column is
 sized to that model's output dimension.
 
+Retrieval is a **hybrid vector-graph**, not a vector store. Vector recall is fused with a
+typed knowledge graph (entities, relations, PageRank) and, for code, the call graph, plus a
+lexical BM25 signal, and the signals are combined by reciprocal-rank fusion (`memory_bm25_weight`,
+`semantic_weight`, and the `code_hybrid_weight_*` knobs). The embedder below feeds the vector
+half; the graph and lexical halves run beside it. That fusion is what lets recall cross a
+keyword gap or a repo boundary that plain vector search would miss.
+
 ## The embedder
 
-The embedder is any command that reads text on stdin and writes a JSON float
-array on stdout (`scripts/embedder-server.py` provides an HTTP sidecar wrapper
-for the HuggingFace / sentence-transformers stack). It ships in two tiers, one
-embedder and a cross-encoder reranker sized to the same tier, baked into one
-image. (The reranker emits a scalar score, so its size is a quality choice, not
-a dimension constraint.)
+Embedding and reranking are baked into the `aimee-kb-*` tier images — Qwen3-Embedding + an
+Ettin cross-encoder reranker — and served over HTTP (`/embed`, `/embed_batch`, `/rerank` on
+the gateway `:8742`). The KB calls them; it runs no model. See
+[AIMEE_KB_SYNTH_TIERS.md](AIMEE_KB_SYNTH_TIERS.md) for the tiers and
+[KB_LLM_BACKENDS.md](KB_LLM_BACKENDS.md) for pointing the KB at one. (The reranker emits a
+scalar score, so its size is a quality choice, not a dimension constraint.)
 
-| Image | Embedder (`embedding_dim`) | Reranker |
-|-------|----------------------------|----------|
-| `aimee-embedder` (default) | `pplx-embed-v1-0.6b` (`1024`) | `ettin-reranker-400m` |
-| `aimee-embedder-4b` | `pplx-embed-v1-4b` (`2560`) | `ettin-reranker-1b` |
+Two embedding widths ship:
 
-### Choosing a tier
+| Tier | Embedder (`embedding_dim`) | Reranker |
+|------|----------------------------|----------|
+| `aimee-kb-cpu` | Qwen3-Embedding-0.6B (`1024`) | ettin-68m |
+| `aimee-kb-gpu-small` / `-gpu-mid` | Qwen3-Embedding-4B (`2560`) | ettin-400m |
 
-Run one tier per deployment. The 0.6b/400m image is the default; the 4b/1b
-image is the higher-fidelity alternate for hosts with RAM to spare.
-
-**0.6b + 400m (default).** The low-latency tier, and the right default for most
-deployments.
-- ~2 GB of weights (embedder + reranker), a couple of GB resident, embeds in
-  ~0.2 s, roughly 5x faster than the 4b on a CPU host. Fast to pull, fast to
-  re-embed.
-- In practice the cross-encoder reranker dominates recall latency, not the
-  embedder, so the larger embedder buys less end-to-end than its size suggests.
-- Recall is slightly weaker than the 4b on large or noisy corpora and on
-  meaning-heavy queries, but fine for most workloads.
-
-**4b + 1b (higher fidelity).** Pick it when the host has the RAM and you want
-the best recall/ranking on large or noisy corpora.
-- Recall and ranking are noticeably better on meaning-over-keyword queries.
-- Costs: the model weights are several GB (slower image pull and first build),
-  the image holds ~20 GB resident in fp32 (~16 GB embedder + ~4 GB reranker),
-  and a CPU embed runs ~1–2 s versus the 0.6b's ~0.2 s. None of that is in the
-  request hot path, embedding happens at ingest and on the query, not per
-  token, but it sets a RAM floor and slows a cold re-embed of a large corpus.
-
-Rule of thumb: default to 0.6b/400m; step up to 4b/1b only when you have the RAM
-and need the extra recall. The retrieval pipeline (hybrid search, reranking,
-fusion) is identical either way, only the model sizes differ.
+The 4B/2560 tier has better recall on large or meaning-heavy corpora; the 0.6B/1024 tier is
+the low-footprint default. The retrieval pipeline (hybrid search, reranking, fusion) is
+identical either way — only the model sizes differ.
 
 ### Switching tiers
 
-The default `aimee-embedder` image bakes the 0.6b + 400m. To run the
-higher-fidelity tier, point at the `aimee-embedder-4b` image and set the
-dimension to match:
+Switch by deploying a different `aimee-kb-*` tier (the `aimee-llm` plugin image) and setting
+the width to match:
 
 ```bash
-AIMEE_EMBEDDER_IMAGE=ghcr.io/rakuensoftware/aimee-embedder-4b:latest
 AIMEE_EMBEDDING_DIM=2560   # or embedding_dim: 2560 in aimee.yaml
 ```
 
-No rebuild needed, both images are published. On an **empty** database that's
-all it takes. On a **populated** one the dimension change needs a re-embed (the
-`halfvec` columns are sized to `embedding_dim`, so 1024 and 2560 vectors can't
-share a column), see [Switching embedders on an existing
-database](#switching-embedders-on-an-existing-database) below. Build a custom
-pairing with `--build-arg EMBEDDER_MODEL=… --build-arg RERANKER_MODEL=…`.
+Both GPU tiers are 2560-dim, so moving between `gpu-small` and `gpu-mid` needs no re-embed.
+Moving between 1024 and 2560 is a model-identity **and** width change: on an **empty** DB
+just set the dim; on a **populated** one it's a drop-and-rebuild re-embed (the `halfvec`
+columns are sized to `embedding_dim`), which the `kb_meta` drift guard enforces — see
+[Switching embedders on an existing database](#switching-embedders-on-an-existing-database).
 
 ## Configuration
 
@@ -218,18 +200,15 @@ unchanged, since the dimension has not moved.
 ## Reranking
 
 An optional cross-encoder reranker refines the top-k of a recall before it is
-returned. It is served by the same embedder sidecar, sized to match the embedder
-tier: the default `aimee-embedder` image bakes the **1B** Ettin reranker
-(`cross-encoder/ettin-reranker-1b-v1`) alongside the 4B embedder; the
-`aimee-embedder-0.6b` image bakes the **400M** reranker
-(`cross-encoder/ettin-reranker-400m-v1`) alongside the 0.6B embedder. Build-time
-override: `--build-arg RERANKER_MODEL=<hf id>`.
+returned. It is baked into the same tier image and sized to match the embedder: the GPU tiers
+(`aimee-kb-gpu-small` / `-gpu-mid`) bake `cross-encoder/ettin-reranker-400m-v1`; the CPU
+tier bakes ettin-68m. Build-time override: `--build-arg RERANK_REPO=<hf id>`.
 
 It is configured independently of the embedder dimension:
 
 - `memory_rerank_enabled`, master toggle.
 - `memory_rerank_command`, the reranker command (the Ettin cross-encoder served
-  by the embedder sidecar, via `rerank-remote.py`).
+  by the inference gateway, via `rerank-remote.py`).
 - `memory_rerank_mode`, `memory_rerank_top_k`, strategy and depth.
 
 The reranker is dimension-agnostic, it scores `(query, candidate)` text pairs

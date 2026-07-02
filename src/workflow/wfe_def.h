@@ -41,6 +41,10 @@ typedef struct
    char name[WFE_ID_LEN];
    char start[WFE_ID_LEN]; /* entry node id (default: first node) */
    char version[65];       /* sha256 hex of canonical form (filled by compute_version) */
+   /* primary-as-manager (S0): an enforced workflow is one the router may bind a
+    * session to for substantive change; the validator requires it to terminate
+    * in a gate.deliver node (I2). Parsed from top-level `enforced: true`. */
+   int enforced;
    wfe_node_t *nodes;
    int n_nodes;
    cJSON *raw; /* owned parsed tree */

@@ -25,6 +25,10 @@ typedef enum
    WFE_ART_PR,
    WFE_ART_VERDICT,
    WFE_ART_APPROVAL,
+   /* primary-as-manager (S0): understand emits a scoped-intent record. split
+    * reuses WFE_ART_PLAN (a delegate packet-plan IS what `implement` fans out),
+    * so it composes with the existing implement block -- no new artifact. */
+   WFE_ART_INTENT, /* understand: a scoped-intent record (what/why/acceptance) */
    WFE_ART__COUNT
 } wfe_artifact_type_t;
 
@@ -44,6 +48,12 @@ typedef enum
    WFE_BLK_GATE_CI,         /* built-in: poll the PR's CI, fail-closed */
    WFE_BLK_CHECK_MERGEABLE, /* built-in: refuse on a merge conflict */
    WFE_BLK_CUSTOM,          /* config-defined block (spec carried on the node) */
+   /* primary-as-manager (S0): the interactive manager loop + delivery gate. */
+   WFE_BLK_UNDERSTAND,   /* primary scopes intent WITH the user -> intent */
+   WFE_BLK_SPLIT,        /* primary decomposes intent into delegate packets */
+   WFE_BLK_REVIEW,       /* primary reviews delegate output (read-only) -> verdict */
+   WFE_BLK_GATE_DELIVER, /* terminal enforcement gate: only crossable once the
+                          * upstream review + roundtable have passed */
    WFE_BLK__COUNT
 } wfe_block_type_t;
 

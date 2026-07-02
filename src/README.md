@@ -103,8 +103,8 @@ thin `aimee` and `aimee-webchat` targets do not link database,
 | `db2/memory_entity_graph.c` | Entity-relationship graph queries behind DB2 |
 | `memory_advanced.c` | Anti-patterns, style learning, compaction |
 | `cmd_index.c` | Code indexing CLI through aimee-kb |
-| `extractors.c` | Source parsing, definition extraction (JS/TS/Python/Go) |
-| `extractors_extra.c` | Language extractors (C#/Shell/CSS/Dart/C/C++/Lua) |
+| `extractors.c`, `extractors_extra.c` | Tree-sitter symbol and reference extraction across C, C++, C#, Python, Go, JavaScript, TypeScript, Rust, Java, Ruby, PHP, Kotlin, Swift, Dart, Lua, Bash, and CSS |
+| `db2/cross_repo_resolver.c`, `db2/cross_repo_deps.c` | Cross-repo dependency resolution for the code graph |
 | `db2/rules.c` | Rule storage and tier classification behind DB2 |
 | `db2/feedback.c` | Feedback recording and reinforcement behind DB2 |
 | `guardrails.c` | Path classification, pre-tool safety checks, worktree enforcement |
@@ -121,6 +121,8 @@ thin `aimee` and `aimee-webchat` targets do not link database,
 | `server/agent_policy.c` | Tool validation, policy, trace, metrics, env, manifest, contract |
 | `server/delegate_prompt.c`, `server/delegate_routing.c` | Delegate prompt/context shaping and route selection |
 | `server/agent_config.c` | Delegate config loading, routing, auth resolution |
+| `server/vault_service.c` | Server-sealed credential vault (agent and delegate keys, Codex OAuth) |
+| `context_fold.c`, `gateway_delegate.c` | Context economizer: deterministic context folding and ingress compression on the delegate and gateway path |
 | `server/agent_tools.c` | Tool execution (bash, read, write), checkpoints |
 | `server/delegate_plan.c` | Delegate packet planning |
 | `agent_eval.c` | Eval harness, task suites |
@@ -697,7 +699,7 @@ must be fast.
 #### 1. Run the server (Docker)
 
 The combined image co-locates both binaries in one container. Postgres (pgvector)
-and the embedder come up alongside it:
+comes up alongside it, and the CPU inference gateway is bundled in the image:
 
 ```bash
 git clone https://github.com/RakuenSoftware/aimee.git
@@ -933,14 +935,16 @@ Containers are the recommended deployment (developers then install only the
 [thin client](#2-install-the-thin-client)). Four compose files ship; pick by
 topology. They build from three images: **`aimee-server`** (`Dockerfile.server`),
 **`aimee-kb`** (`Dockerfile`), and **`aimee-server+kb`** (`Dockerfile.combined`).
-Every stack also brings up a `pgvector/pgvector:pg16` Postgres (DB2) and a CPU
-embedder sidecar (`Dockerfile.embedder`); the kb auto-applies its DB2 schema on
-first boot. The sidecar ships in two tiers (embedder + reranker baked into one
-image): the default `aimee-embedder` (`pplx-embed-v1-0.6b`, 1024-dim, +
-`ettin-reranker-400m`) and the higher-fidelity `aimee-embedder-4b`
-(`pplx-embed-v1-4b`, 2560-dim, + `ettin-reranker-1b`). Switch with
-`AIMEE_EMBEDDER_IMAGE` plus `embedding_dim: 2560` (or `AIMEE_EMBEDDING_DIM=2560`).
-Trade-offs: [retrieval-stack.md](../docs/retrieval-stack.md#choosing-a-tier).
+Every stack also brings up a `pgvector/pgvector:pg16` Postgres (DB2), and the kb
+auto-applies its DB2 schema on first boot. The combined image bundles a CPU
+inference gateway (embeddings, reranking, and synthesis) from the `aimee-kb` image
+family, so embedding and reranking work with nothing external. The CPU tier serves
+Qwen3-Embedding-0.6B at 1024 dims; the GPU tiers (`aimee-kb-gpu-small`,
+`aimee-kb-gpu-mid`) serve Qwen3-Embedding-4B at 2560 dims and add a GPU synth. To
+run a standalone embedder or curator LLM instead of the bundled gateway, use the
+`external-llm` compose profile. Backends and tiers:
+[KB_LLM_BACKENDS.md](../docs/KB_LLM_BACKENDS.md) and
+[AIMEE_KB_SYNTH_TIERS.md](../docs/AIMEE_KB_SYNTH_TIERS.md).
 
 > **`docker compose ... up --build` needs no credentials.** The browser UI
 > (`aimee-webchat`) is built into every image and on by default. Its frontend
@@ -953,9 +957,9 @@ Trade-offs: [retrieval-stack.md](../docs/retrieval-stack.md#choosing-a-tier).
 
 | File | Brings up | Use when |
 |------|-----------|----------|
-| `compose.combined.yaml` | **`aimee-server+kb`** (one container) + Postgres + embedder | **Recommended default**: both binaries co-located; server `/v1` over TLS on `:8743` (plaintext `:8740` loopback-only), kb `:8741` |
-| `compose.server.yaml` | `aimee-server` + `aimee-kb` + Postgres + embedder | Split stack: scale/update/place server and kb independently; server `/v1` over TLS on `:8743` (plaintext `:8740` loopback-only), kb `:8741` |
-| `compose.yaml` | `aimee-kb` + Postgres (pgvector) + embedder | The knowledge service (DB2 + vectors) on its own: building block for a shared/scaled kb |
+| `compose.combined.yaml` | **`aimee-server+kb`** (one container, inference bundled) + Postgres | **Recommended default**: both binaries co-located; server `/v1` over TLS on `:8743` (plaintext `:8740` loopback-only), kb `:8741` |
+| `compose.server.yaml` | `aimee-server` + `aimee-kb` + Postgres + the `aimee-llm` inference gateway | Split stack: scale/update/place server and kb independently; server `/v1` over TLS on `:8743` (plaintext `:8740` loopback-only), kb `:8741` |
+| `compose.yaml` | `aimee-kb` + Postgres (pgvector) + the `aimee-llm` inference gateway | The knowledge service (DB2 + vectors) on its own: building block for a shared/scaled kb |
 | `compose.server-standalone.yaml` | `aimee-server` only (SQLite DB1, no kb) | DB1-backed `/v1` endpoints with no shared knowledge |
 
 #### Combined server + kb (recommended)
@@ -967,8 +971,9 @@ docker compose -f compose.combined.yaml up --build -d
 One `aimee-server+kb` container runs **both** binaries: the kb on loopback `:8741`
 inside the container and the server fronting `/v1` over native TLS on `:8743`
 (plaintext `:8740` is loopback-only) with `AIMEE_KB_API_URL=http://127.0.0.1:8741`.
-Postgres + the embedder stay external. The TLS server and kb ports are published for
-direct inspection (`-k` accepts the self-signed cert):
+Postgres stays external; the CPU inference gateway is bundled inside the image. The
+TLS server and kb ports are published for direct inspection (`-k` accepts the
+self-signed cert):
 
 ```bash
 curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/health
@@ -985,7 +990,8 @@ docker compose -f compose.server.yaml up --build -d
 `aimee-server` and `aimee-kb` run as separate containers (many servers → one shared
 kb). The server fronts `/v1` over native TLS on `:8743` (plaintext `:8740` is
 loopback-only) and reaches the kb over HTTP
-(`AIMEE_KB_API_URL=http://aimee-kb:8741`); the kb owns Postgres + the embedder:
+(`AIMEE_KB_API_URL=http://aimee-kb:8741`); the kb owns Postgres and reaches the
+`aimee-llm` inference gateway:
 
 ```bash
 curl -k -H 'Authorization: Bearer aimee-local-dev' https://localhost:8743/v1/health
@@ -1004,7 +1010,7 @@ survive container recreation; the image declares it a `VOLUME`, so even a plain
 docker compose -f compose.yaml up --build -d
 ```
 
-Brings up just `aimee-kb` + Postgres + embedder, serving `/v1` on `:8741`: the
+Brings up just `aimee-kb` + Postgres + the `aimee-llm` gateway, serving `/v1` on `:8741`: the
 building block behind a shared or horizontally-scaled kb that many servers point at:
 
 ```bash

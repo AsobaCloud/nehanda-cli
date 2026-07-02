@@ -1,0 +1,23 @@
+{
+  "_pair_id": "basic_tool_q",
+  "model": "gpt-4o",
+  "max_tokens": 1024,
+  "messages": [
+    { "role": "system", "content": "You are a helpful coding assistant." },
+    { "role": "user", "content": "read foo.c and summarize it" }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "Read",
+        "description": "Read a file",
+        "parameters": {
+          "type": "object",
+          "properties": { "path": { "type": "string" } },
+          "required": [ "path" ]
+        }
+      }
+    }
+  ]
+}
