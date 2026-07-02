@@ -449,6 +449,61 @@ int handle_agent_list(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    return server_send_ok(conn, resp);
 }
 
+/* Per-delegate run statistics from the agent_log JOIN token_audit aggregate
+ * (db1_agent_log_agent_stats via agent_get_stats). An optional first positional
+ * arg filters to one delegate; with no args, every delegate that has recorded a
+ * call is returned (ordered by call count DESC). success_rate is 0..1; we also
+ * surface derived successful/failed counts so the UI needn't recompute them. */
+int handle_agent_stats(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
+{
+   (void)ctx;
+   char *argv[SERVER_AGENT_MAX_ARGS];
+   int argc = server_agent_args(req, argv, (int)(sizeof(argv) / sizeof(argv[0])));
+   const char *name = (argc >= 1 && argv[0][0]) ? argv[0] : NULL;
+
+   agent_stats_t stats[MAX_AGENTS]; /* MAX_AGENTS==16: a few KB on the stack */
+   int n = agent_get_stats(name, stats, MAX_AGENTS);
+   if (n < 0) /* DB/query failure returns a negative sentinel; emit no rows */
+      n = 0;
+
+   cJSON *resp = jo_ok();
+   cJSON *arr = cJSON_CreateArray();
+   for (int i = 0; i < n; i++)
+   {
+      int total = stats[i].total_calls;
+      if (total < 0)
+         total = 0;
+      /* success_rate is the DB aggregate over all recorded calls; clamp to [0,1]
+       * defensively (a corrupt aggregate must not yield negative/overflow counts)
+       * and derive whole counts so successful+failed == total. */
+      double sr = stats[i].success_rate;
+      if (!(sr >= 0.0))
+         sr = 0.0; /* also catches NaN */
+      else if (sr > 1.0)
+         sr = 1.0;
+      int successful = (int)(total * sr + 0.5);
+      if (successful > total)
+         successful = total;
+      int failed = total - successful;
+
+      cJSON *o = cJSON_CreateObject();
+      cJSON_AddStringToObject(o, "name", stats[i].name);
+      cJSON_AddNumberToObject(o, "total_calls", total);
+      cJSON_AddNumberToObject(o, "successful_calls", successful);
+      cJSON_AddNumberToObject(o, "failed_calls", failed);
+      cJSON_AddNumberToObject(o, "success_rate", sr);
+      cJSON_AddNumberToObject(o, "avg_latency_ms", stats[i].avg_latency_ms);
+      cJSON_AddNumberToObject(o, "prompt_tokens", stats[i].total_prompt_tokens);
+      cJSON_AddNumberToObject(o, "completion_tokens", stats[i].total_completion_tokens);
+      cJSON_AddNumberToObject(o, "cache_write_tokens", stats[i].total_cache_write_tokens);
+      cJSON_AddNumberToObject(o, "cache_read_tokens", stats[i].total_cache_read_tokens);
+      cJSON_AddNumberToObject(o, "estimated_cost_usd", stats[i].total_estimated_cost_usd);
+      cJSON_AddItemToArray(arr, o);
+   }
+   cJSON_AddItemToObject(resp, "stats", arr);
+   return server_send_ok(conn, resp);
+}
+
 int handle_agent_add(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
    (void)ctx;
