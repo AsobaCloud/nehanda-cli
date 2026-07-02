@@ -101,6 +101,35 @@ extern "C"
     * back to its parent's session via db1_cost_fold_record. */
    double db1_token_audit_cost_for_delegation(const char *delegation_id);
 
+   /* Per-session supervisor-vs-worker token split (realized rows only).
+    * "supervisor" = the primary agent's own turns for this session
+    * (delegation_id EMPTY/NULL); "worker" = delegate children (delegation_id
+    * NON-EMPTY). session_id is shared between a parent and its delegate
+    * children, so the delegation_id split — not the session_id — is what
+    * separates the expensive supervisor's spend from the (typically free)
+    * delegate workers. This is the authoritative readout the supervised
+    * benchmark uses to measure how much supervisor spend a run offloaded. */
+   typedef struct
+   {
+      int supervisor_calls;
+      int64_t supervisor_prompt_tokens;
+      int64_t supervisor_completion_tokens;
+      int64_t supervisor_cache_write_tokens;
+      int64_t supervisor_cache_read_tokens;
+      double supervisor_cost_usd;
+      int worker_calls;
+      int64_t worker_prompt_tokens;
+      int64_t worker_completion_tokens;
+      int64_t worker_cache_write_tokens;
+      int64_t worker_cache_read_tokens;
+      double worker_cost_usd;
+   } db1_token_audit_session_split_t;
+
+   /* Aggregate the split for one session_id. Returns 0 on success (including a
+    * session with no rows -> all-zero out), -1 on error / DB-not-initialized. */
+   int db1_token_audit_session_split(const char *session_id,
+                                     db1_token_audit_session_split_t *out);
+
    typedef struct
    {
       int total_calls;
