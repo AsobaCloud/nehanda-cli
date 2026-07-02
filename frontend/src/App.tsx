@@ -5,6 +5,7 @@ import { Toast } from '@rakuensoftware/smoothgui';
 import Chat from './pages/Chat';
 import Dashboard from './pages/Dashboard';
 import Workflows from './pages/Workflows';
+import Proposals from './pages/Proposals';
 import Delegates from './pages/Delegates';
 import Projects from './pages/Projects';
 import Graph from './pages/Graph';
@@ -64,6 +65,7 @@ const NAV_ITEMS: Tab[] = [
   { label: 'Chat', icon: '💬', route: '/chat' },
   { label: 'Dashboard', icon: '📊', route: '/dashboard' },
   { label: 'Workflows', icon: '🔀', route: '/workflows' },
+  { label: 'Proposals', icon: '📝', route: '/proposals' },
   { label: 'Delegates', icon: '🤝', route: '/delegates' },
   { label: 'Projects', icon: '📁', route: '/projects' },
   { label: 'Graph', icon: '🕸️', route: '/graph' },
@@ -235,6 +237,7 @@ export default function App() {
                 <Route path="/chat" element={<Chat />} />
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/workflows" element={<Workflows />} />
+                <Route path="/proposals" element={<Proposals />} />
                 <Route path="/delegates" element={<Delegates />} />
                 <Route path="/projects" element={<Projects />} />
                 <Route path="/graph" element={<Graph />} />
