@@ -696,7 +696,13 @@ int handle_agent_add(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    if (roles && roles[0])
       server_agent_set_roles_csv(ag, roles);
    else
-      server_agent_set_roles_csv(ag, "summarize,format,draft");
+      /* Default to the FULL capable role set, matching the client-side default
+       * (cmd_agent.c ag_set_default_delegate_roles). A capable coding delegate
+       * must not be silently crippled to summarize/format/draft when added
+       * without an explicit --roles: that regression left mistral/minimax/glm/
+       * codex unable to take `code`/`execute` work. */
+      server_agent_set_roles_csv(ag,
+                                 "code,review,explain,refactor,draft,execute,summarize,format,reason,search");
 
    const char *exec_roles = opt_get(&opts, "exec-roles");
    if (exec_roles && exec_roles[0])
@@ -932,6 +938,39 @@ int handle_agent_enable(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 int handle_agent_disable(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
    return handle_agent_set_enabled(ctx, conn, req, 0);
+}
+
+/* Surgically update ONLY an agent's roles, preserving endpoint/model/provider/
+ * auth/vault key (unlike agent.add, which resets the record). argv[0]=name,
+ * optional argv[1]=comma-separated roles; omitting the roles resets to the full
+ * default capable set. Fixes existing agents crippled to summarize/format/draft. */
+int handle_agent_roles(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
+{
+   (void)ctx;
+   char *argv[SERVER_AGENT_MAX_ARGS];
+   int argc = server_agent_args(req, argv, (int)(sizeof(argv) / sizeof(argv[0])));
+   if (argc < 1 || !argv[0][0])
+      return server_send_error(conn, "agent.roles requires name", NULL);
+
+   agent_config_t cfg;
+   if (agent_load_config(&cfg) != 0)
+      return server_send_error(conn, "agents.json not found or invalid", NULL);
+   agent_t *ag = agent_find(&cfg, argv[0]);
+   if (!ag)
+      return server_send_error(conn, "agent not found", NULL);
+
+   if (argc >= 2 && argv[1][0])
+      server_agent_set_roles_csv(ag, argv[1]);
+   else
+      server_agent_set_roles_csv(ag,
+                                 "code,review,explain,refactor,draft,execute,summarize,format,reason,search");
+
+   if (agent_save_config(&cfg) != 0)
+      return server_send_error(conn, "could not save agents.json", NULL);
+
+   cJSON *resp = server_agent_to_json(ag);
+   cJSON_AddStringToObject(resp, "status", "ok");
+   return server_send_ok(conn, resp);
 }
 
 int handle_agent_probe(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)

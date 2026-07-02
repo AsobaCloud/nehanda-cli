@@ -852,6 +852,30 @@ static void ag_enable(app_ctx_t *ctx, int argc, char **argv)
    printf("Agent '%s' enabled.\n", argv[0]);
 }
 
+/* Surgically update ONLY an agent's roles, preserving endpoint/model/provider/
+ * auth/vault key (unlike `agent add`, which resets the whole record). Fixes the
+ * config regression where capable coding delegates were left with just
+ * summarize/format/draft. Omit the csv to reset to the full default role set. */
+static void ag_roles(app_ctx_t *ctx, int argc, char **argv)
+{
+   (void)ctx;
+   if (argc < 1)
+      fatal("usage: aimee agent roles <name> [role1,role2,...]  "
+            "(omit roles to reset to the full default set)");
+   agent_t *ag = agent_find(&s_agent_cfg, argv[0]);
+   if (!ag)
+      fatal("agent '%s' not found", argv[0]);
+   if (argc >= 2 && argv[1] && argv[1][0])
+      ag_set_roles_csv(ag, argv[1]);
+   else
+      ag_set_default_delegate_roles(ag);
+   agent_save_config(&s_agent_cfg);
+   printf("Agent '%s' roles set to:", ag->name);
+   for (int i = 0; i < ag->role_count; i++)
+      printf(" %s", ag->roles[i]);
+   printf("\n");
+}
+
 static void ag_disable(app_ctx_t *ctx, int argc, char **argv)
 {
    (void)ctx;
@@ -1161,6 +1185,7 @@ static const subcmd_t agent_subcmds[] = {
     {"remove", "Remove an agent", ag_remove},
     {"enable", "Enable a disabled agent", ag_enable},
     {"disable", "Disable an agent", ag_disable},
+    {"roles", "Set delegate roles (omit roles for the full default set)", ag_roles},
     {"setup", "Interactive agent setup wizard", ag_setup},
     {"token", "Refresh or show agent auth token", ag_token},
     {NULL, NULL, NULL},
