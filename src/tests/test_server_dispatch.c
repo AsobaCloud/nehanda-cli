@@ -1029,6 +1029,10 @@ int handle_agent_probe(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
    return stub_handler(conn, "agent.probe");
 }
+int handle_agent_stats(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
+{
+   return stub_handler(conn, "agent.stats");
+}
 int handle_agent_setup(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
    return stub_handler(conn, "agent.setup");

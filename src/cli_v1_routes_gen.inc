@@ -28,6 +28,7 @@ static const struct
     {"agent.remove", "POST", "/v1/agent/remove"},
     {"agent.setup", "POST", "/v1/agent/setup"},
     {"agent.setup_poll", "POST", "/v1/agent/setup_poll"},
+    {"agent.stats", "GET", "/v1/agent/stats"},
     {"api.disable", "POST", "/v1/api/disable"},
     {"api.enable", "POST", "/v1/api/enable"},
     {"api.status", "GET", "/v1/api/status"},
