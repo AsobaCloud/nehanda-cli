@@ -140,6 +140,73 @@ void audit_log_close(void)
    }
 }
 
+/* JSON-escape src into dst (bounded). Mirrors the inline escaping in audit_log. */
+static void audit_json_escape(char *dst, size_t dstsz, const char *src)
+{
+   size_t ep = 0;
+   if (!src)
+      src = "";
+   for (size_t i = 0; src[i] && ep < dstsz - 2; i++)
+   {
+      if (src[i] == '"' || src[i] == '\\')
+         dst[ep++] = '\\';
+      if (src[i] == '\n')
+      {
+         dst[ep++] = '\\';
+         dst[ep++] = 'n';
+      }
+      else
+      {
+         dst[ep++] = src[i];
+      }
+   }
+   dst[ep] = '\0';
+}
+
+void audit_action_log(const char *actor, const char *tool, const char *args_hash, const char *mode,
+                      const char *reason_code, const char *verdict, long long task_id)
+{
+   char ts[32];
+   format_timestamp(ts, sizeof(ts));
+
+   char e_actor[128], e_tool[128], e_hash[96], e_mode[64], e_reason[96], e_verdict[32];
+   audit_json_escape(e_actor, sizeof e_actor, actor);
+   audit_json_escape(e_tool, sizeof e_tool, tool);
+   audit_json_escape(e_hash, sizeof e_hash, args_hash);
+   audit_json_escape(e_mode, sizeof e_mode, mode);
+   audit_json_escape(e_reason, sizeof e_reason, reason_code);
+   audit_json_escape(e_verdict, sizeof e_verdict, verdict);
+
+   pthread_mutex_lock(&log_mutex);
+
+   fprintf(stderr, "%s AUDIT tool_action: %s %s %s\n", ts, e_verdict, e_tool, e_reason);
+
+   if (audit_fp)
+   {
+      fprintf(audit_fp,
+              "{\"ts\":\"%s\",\"kind\":\"tool_action\",\"actor\":\"%s\",\"tool\":\"%s\","
+              "\"args_hash\":\"%s\",\"mode\":\"%s\",\"reason_code\":\"%s\",\"verdict\":\"%s\","
+              "\"task_id\":%lld}\n",
+              ts, e_actor, e_tool, e_hash, e_mode, e_reason, e_verdict, task_id);
+      fflush(audit_fp);
+
+      char path[4096];
+      snprintf(path, sizeof(path), "%s/audit.log", config_default_dir());
+      struct stat st;
+      if (stat(path, &st) == 0 && st.st_size >= AUDIT_MAX_SIZE)
+      {
+         fclose(audit_fp);
+         audit_fp = NULL;
+         audit_rotate(path);
+         audit_fp = fopen(path, "a");
+         if (audit_fp)
+            platform_set_permissions(path, 0600);
+      }
+   }
+
+   pthread_mutex_unlock(&log_mutex);
+}
+
 void audit_log(const char *event_type, const char *fmt, ...)
 {
    char ts[32];
