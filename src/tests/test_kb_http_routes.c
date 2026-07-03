@@ -2185,6 +2185,31 @@ int db2_code_projection_generations_list(const char *project, void *out, int max
 
 /* graph-feedback S3b (lessons route) stub: no outcome records in the hermetic
  * fixture, so the lessons artifact renders empty ("no lessons yet"). */
+int64_t db2_lessons_record_outcome(const char *session_id, const char *turn_id,
+                                   const char *project_id, int64_t generation_id,
+                                   const char *answer_outcome, const char *correction_text,
+                                   const char *finding_id, const char *actor_id,
+                                   const char *actor_source, int confirmed)
+{
+   (void)session_id;
+   (void)turn_id;
+   (void)project_id;
+   (void)generation_id;
+   (void)answer_outcome;
+   (void)correction_text;
+   (void)finding_id;
+   (void)actor_id;
+   (void)actor_source;
+   (void)confirmed;
+   return 1;
+}
+int db2_lessons_record_citation(int64_t outcome_id, const char *node_id, const char *stance)
+{
+   (void)outcome_id;
+   (void)node_id;
+   (void)stance;
+   return 0;
+}
 int db2_lessons_list_outcomes(const char *project_id, long long community_gen, void *out, int max)
 {
    (void)project_id;

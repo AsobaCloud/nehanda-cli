@@ -1445,6 +1445,8 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
 
    if (strcmp(path, "/v1/code/scan") == 0)
       return handle_post_code_scan_route(method, body, out_buf, out_cap);
+   if (strcmp(path, "/v1/code/lessons/observe") == 0)
+      return handle_post_code_lessons_observe_route(method, body, out_buf, out_cap);
    if (strcmp(path, "/v1/code/repo-trust") == 0) /* S7: admin; owner gate in handler */
       return handle_post_code_repo_trust_route(method, body, out_buf, out_cap, !vr.scope_kind[0]);
    /* POST /v1/ingest */
