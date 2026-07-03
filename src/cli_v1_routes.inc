@@ -309,6 +309,7 @@ static const struct
     {"agent", "local", "agent.local", NULL, NULL, 300000},
     {"agent", "remove", "agent.remove", NULL, NULL, 0},
     {"agent", "enable", "agent.enable", NULL, NULL, 0},
+    {"agent", "roles", "agent.roles", NULL, NULL, 0},
     {"agent", "disable", "agent.disable", NULL, NULL, 0},
     {"agent", "probe", "agent.probe", NULL, NULL, 300000},
     {"mcp", "audit", "mcp.audit", NULL, "items", 0},
@@ -6653,6 +6654,7 @@ static const struct
     {"agent.add", pt_print_agent_add},
     {"agent.remove", pt_print_agent_remove},
     {"agent.enable", pt_print_agent_enable},
+    {"agent.roles", pt_print_agent_enable},
     {"agent.disable", pt_print_agent_disable},
     {"agent.probe", pt_print_agent_probe},
     {"mcp.audit", pt_print_mcp_audit},
@@ -7135,6 +7137,7 @@ const char *cli_v1_route_for_method(const char *method, const char **verb_out)
       const char *path;
    } bespoke[] = {
        {"workspace.add", "POST", "/v1/workspaces"},
+       {"agent.roles", "POST", "/v1/agent/roles"},
        /* Detached-workspace runner reverse channel (aimee workspace serve); the
         * REST twins return the same {ok, have_op, op?} / {ok} as the NDJSON ops. */
        {"runner.poll", "POST", "/v1/runner/poll"},

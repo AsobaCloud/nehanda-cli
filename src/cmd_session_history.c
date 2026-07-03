@@ -3,6 +3,7 @@
 #include "db1.h"
 #include "commands.h"
 #include "config.h"
+#include "cJSON.h"
 #include <dirent.h>
 #include <stdio.h>
 #include <string.h>
@@ -239,6 +240,81 @@ void session_subcmd_stats(app_ctx_t *ctx, int argc, char **argv)
 
    if (since)
       fprintf(stderr, "\n(since %s)\n", since);
+}
+
+/* --- session tokens: supervisor-vs-worker token split for one session ---
+ * `aimee session tokens <session_id> [--json]`. Reads the DB1 token_audit
+ * ledger and reports the primary agent's own spend (delegation_id empty) vs
+ * delegate workers (delegation_id set) within that session. This is the
+ * measurement surface the supervised benchmark reads to quantify how much
+ * expensive-supervisor spend a run offloaded onto (typically free) workers. */
+static void tokens_add_bucket_json(cJSON *parent, const char *name, int calls, long long prompt,
+                                   long long completion, long long cache_read,
+                                   long long cache_write, double cost_usd)
+{
+   cJSON *b = cJSON_AddObjectToObject(parent, name);
+   cJSON_AddNumberToObject(b, "calls", calls);
+   cJSON_AddNumberToObject(b, "prompt_tokens", (double)prompt);
+   cJSON_AddNumberToObject(b, "completion_tokens", (double)completion);
+   cJSON_AddNumberToObject(b, "cache_read_tokens", (double)cache_read);
+   cJSON_AddNumberToObject(b, "cache_write_tokens", (double)cache_write);
+   cJSON_AddNumberToObject(b, "total_tokens", (double)(prompt + completion));
+   cJSON_AddNumberToObject(b, "cost_usd", cost_usd);
+}
+
+void session_subcmd_tokens(app_ctx_t *ctx, int argc, char **argv)
+{
+   const char *sid = NULL;
+   for (int i = 0; i < argc; i++)
+   {
+      if (argv[i][0] != '-' && !sid)
+         sid = argv[i];
+   }
+   if (!sid || !sid[0])
+   {
+      fprintf(stderr, "Usage: aimee session tokens <session_id> [--json]\n");
+      return;
+   }
+
+   db1_token_audit_session_split_t s;
+   if (db1_token_audit_session_split(sid, &s) != 0)
+   {
+      fprintf(stderr, "session tokens: no token data for '%s' (DB unavailable)\n", sid);
+      return;
+   }
+
+   long long sup_tok = s.supervisor_prompt_tokens + s.supervisor_completion_tokens;
+   long long wrk_tok = s.worker_prompt_tokens + s.worker_completion_tokens;
+
+   if (ctx->json_output)
+   {
+      cJSON *o = cJSON_CreateObject();
+      cJSON_AddStringToObject(o, "session_id", sid);
+      tokens_add_bucket_json(o, "supervisor", s.supervisor_calls, s.supervisor_prompt_tokens,
+                             s.supervisor_completion_tokens, s.supervisor_cache_read_tokens,
+                             s.supervisor_cache_write_tokens, s.supervisor_cost_usd);
+      tokens_add_bucket_json(o, "worker", s.worker_calls, s.worker_prompt_tokens,
+                             s.worker_completion_tokens, s.worker_cache_read_tokens,
+                             s.worker_cache_write_tokens, s.worker_cost_usd);
+      cJSON_AddNumberToObject(o, "total_tokens", (double)(sup_tok + wrk_tok));
+      char *js = cJSON_PrintUnformatted(o);
+      if (js)
+      {
+         printf("%s\n", js);
+         free(js);
+      }
+      cJSON_Delete(o);
+   }
+   else
+   {
+      printf("session %s\n", sid);
+      printf("  supervisor: calls=%d in=%lld out=%lld total=%lld cost=$%.4f\n", s.supervisor_calls,
+             (long long)s.supervisor_prompt_tokens, (long long)s.supervisor_completion_tokens,
+             sup_tok, s.supervisor_cost_usd);
+      printf("  worker:     calls=%d in=%lld out=%lld total=%lld cost=$%.4f\n", s.worker_calls,
+             (long long)s.worker_prompt_tokens, (long long)s.worker_completion_tokens, wrk_tok,
+             s.worker_cost_usd);
+   }
 }
 
 /* --- session brief: read the persisted session-start briefing ---

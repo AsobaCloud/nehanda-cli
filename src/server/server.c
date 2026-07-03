@@ -1227,6 +1227,7 @@ static const server_method_dispatch_t server_dispatch_table[] = {
     {"agent.local", handle_agent_local},
     {"agent.remove", handle_agent_remove},
     {"agent.enable", handle_agent_enable},
+    {"agent.roles", handle_agent_roles},
     {"agent.disable", handle_agent_disable},
     {"agent.probe", handle_agent_probe},
     {"agent.stats", handle_agent_stats},
