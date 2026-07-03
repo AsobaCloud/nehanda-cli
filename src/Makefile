@@ -527,7 +527,7 @@ endif
 
 # --- Gateway ---
 
-GATEWAY_SRCS = gateway/gateway_main.c gateway/gateway_ctx.c gateway/platform_registry.c \
+GATEWAY_SRCS = cli_v1_routes.c cli_v1_routes_b.c cli_v1_routes_c.c cli_v1_routes_d.c gateway/gateway_main.c gateway/gateway_ctx.c gateway/platform_registry.c \
                gateway/delivery_router.c gateway/session_key.c \
                gateway/platform_telegram.c gateway/platform_ntfy.c gateway/platform_webhook.c \
                gateway/stt.c gateway/tts.c gateway/pairing.c gateway/gateway_pairing.c gateway/mirror.c \
