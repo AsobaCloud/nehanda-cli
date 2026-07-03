@@ -1,6 +1,8 @@
 /* test_delegate_ensemble.c: unit tests for MoA ensemble fan-out and synthesis. */
 #include "aimee.h"
 #include "delegate_ensemble.h"
+#include "delegate_ensemble_internal.h" /* parse_model_json_lenient */
+#include "cJSON.h"
 #include "model_registry.h"
 #include <assert.h>
 #include <stdio.h>
@@ -1032,6 +1034,42 @@ static void test_roundtable_aggregator_fallback_synthesizes(void)
    printf("  test_roundtable_aggregator_fallback_synthesizes: ok\n");
 }
 
+/* The proximate cause of empty reviews on large diffs: a panelist returns a PROSE
+ * review that also contains `{...}` code snippets, wrapping the real
+ * {"items":[...]} object. The old first-'{'-to-last-'}' slice spanned unrelated
+ * braces and failed; the balanced-brace scan must still find the items object. */
+static void test_parse_lenient_prose_with_code_braces(void)
+{
+   const char *resp =
+       "Reviewing kb_graph_cycles:\n"
+       "The DFS `if (w == start && dsp >= 1) { emit(); }` looks correct, and the\n"
+       "struct `typedef struct { int a; } t;` is fine. Here is my verdict:\n"
+       "{\"items\":[{\"severity\":\"blocking\",\"category\":\"correctness\","
+       "\"location\":\"x.c:10\",\"summary\":\"off by one\",\"recommendation\":\"fix\"}],"
+       "\"overall\":\"one issue\"}\n"
+       "Note: the helper `free_all() { }` is also fine.\n";
+   cJSON *root = parse_model_json_lenient(resp);
+   assert(root != NULL);
+   cJSON *items = cJSON_GetObjectItemCaseSensitive(root, "items");
+   assert(cJSON_IsArray(items) && cJSON_GetArraySize(items) == 1);
+   cJSON *it0 = cJSON_GetArrayItem(items, 0);
+   assert(strcmp(cJSON_GetObjectItemCaseSensitive(it0, "severity")->valuestring, "blocking") == 0);
+   cJSON_Delete(root);
+
+   /* A brace inside a JSON string must not confuse the balance matcher. */
+   cJSON *r2 = parse_model_json_lenient("prose {\"items\":[],\"overall\":\"has } brace\"} tail");
+   assert(r2 != NULL);
+   assert(cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(r2, "items")));
+   cJSON_Delete(r2);
+
+   /* Bare JSON still parses; pure prose with no object yields NULL. */
+   cJSON *r3 = parse_model_json_lenient("{\"items\":[],\"overall\":\"ok\"}");
+   assert(r3 != NULL);
+   cJSON_Delete(r3);
+   assert(parse_model_json_lenient("no json here at all") == NULL);
+   printf("  test_parse_lenient_prose_with_code_braces: ok\n");
+}
+
 static void test_roundtable_review_parses_fenced_json(void)
 {
    reset_modes();
@@ -1342,6 +1380,7 @@ int main(void)
    test_panel_persona_name_assignment();
    test_roundtable_review_assigns_personas();
    test_roundtable_aggregator_fallback_synthesizes();
+   test_parse_lenient_prose_with_code_braces();
    test_roundtable_review_parses_fenced_json();
    test_roundtable_single_round_skips_scorer();
    test_roundtable_cost_capped_skips_question_pass();

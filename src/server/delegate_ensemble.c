@@ -71,12 +71,50 @@ static int count_successful(const agent_result_t *results, int count)
    return n;
 }
 
+/* Balance-match a JSON object starting at text[start]=='{'. Scans forward
+ * tracking brace depth, correctly skipping braces that appear INSIDE JSON string
+ * literals (respecting \-escapes), and returns the index just past the matching
+ * '}', or -1 if unbalanced. This is what lets us extract the real object out of a
+ * prose review that also contains `{...}` code snippets. */
+static long json_object_extent(const char *text, long start)
+{
+   int depth = 0;
+   int in_str = 0;
+   for (long i = start; text[i]; i++)
+   {
+      char c = text[i];
+      if (in_str)
+      {
+         if (c == '\\' && text[i + 1])
+            i++; /* skip the escaped char */
+         else if (c == '"')
+            in_str = 0;
+         continue;
+      }
+      if (c == '"')
+         in_str = 1;
+      else if (c == '{')
+         depth++;
+      else if (c == '}')
+      {
+         depth--;
+         if (depth == 0)
+            return i + 1;
+      }
+   }
+   return -1;
+}
+
 /* Parse JSON from a model response, tolerating a markdown code fence
- * (```json ... ```) or surrounding prose. Panelists given a persona system
- * prompt tend to wrap their JSON in a fence, which a strict cJSON_Parse rejects
- * — leaving the review with zero items and an empty artifact. Try a strict parse
- * first (bare JSON), then fall back to the substring from the first '{' to the
- * last '}'. Returns NULL if neither yields valid JSON; caller owns the result. */
+ * (```json ... ```) or surrounding prose. Panelists given a persona system prompt
+ * — especially on a large task, where the "raw JSON only" instruction is far up
+ * the context — frequently return their `{"items":[...]}` wrapped in prose that
+ * ALSO contains `{...}` code snippets. A naive first-'{'-to-last-'}' slice then
+ * spans unrelated braces and fails to parse, collapsing the review to zero items.
+ * Strategy: strict parse first (bare JSON); else scan every '{', balance-match a
+ * candidate object (string-aware), parse it, and prefer the first that carries an
+ * "items" array (the review contract), falling back to the first that parses at
+ * all. Returns NULL if nothing parses; caller owns the result. */
 cJSON *parse_model_json_lenient(const char *text)
 {
    if (!text || !text[0])
@@ -84,19 +122,39 @@ cJSON *parse_model_json_lenient(const char *text)
    cJSON *root = cJSON_Parse(text);
    if (root)
       return root;
-   const char *open = strchr(text, '{');
-   const char *close = strrchr(text, '}');
-   if (!open || !close || close < open)
-      return NULL;
-   size_t len = (size_t)(close - open) + 1;
-   char *buf = (char *)malloc(len + 1);
-   if (!buf)
-      return NULL;
-   memcpy(buf, open, len);
-   buf[len] = '\0';
-   root = cJSON_Parse(buf);
-   free(buf);
-   return root;
+
+   cJSON *first_valid = NULL;
+   for (long i = 0; text[i]; i++)
+   {
+      if (text[i] != '{')
+         continue;
+      long end = json_object_extent(text, i);
+      if (end < 0)
+         break; /* no balanced object from here on */
+      size_t len = (size_t)(end - i);
+      char *buf = (char *)malloc(len + 1);
+      if (!buf)
+         break;
+      memcpy(buf, text + i, len);
+      buf[len] = '\0';
+      cJSON *cand = cJSON_Parse(buf);
+      free(buf);
+      if (cand)
+      {
+         if (cJSON_IsArray(cJSON_GetObjectItemCaseSensitive(cand, "items")))
+         {
+            cJSON_Delete(first_valid);
+            return cand; /* the review contract object — best match */
+         }
+         if (!first_valid)
+            first_valid = cand; /* remember, keep scanning for an items object */
+         else
+            cJSON_Delete(cand);
+         /* skip past this object to avoid rescanning its inner braces */
+         i = end - 1;
+      }
+   }
+   return first_valid;
 }
 
 static int best_candidate(const agent_result_t *results, int count)
@@ -585,6 +643,17 @@ static char *build_round_prompt(const char *task, const char *artifact, const ch
       artifact = "";
    if (!peer_notes)
       peer_notes = "";
+   /* A one-line format reminder at the TOP as well as the bottom. On a large task
+    * the bottom "return only JSON" instruction is tens of KB down the context and
+    * long-context models drift to prose — which then parses to zero items. Leading
+    * with the contract keeps it salient. */
+   const char *head_note =
+       mode == ROUNDTABLE_REVIEW
+           ? "OUTPUT CONTRACT: reply with ONE raw JSON object "
+             "{\"items\":[...],\"overall\":\"...\"} "
+             "and nothing else — no prose, no markdown fences. Full schema is in the ROUND "
+             "INSTRUCTION below.\n\n"
+           : "";
    const char *brief_block = "";
    char *owned_brief_block = NULL;
    if (mode == ROUNDTABLE_REVIEW && brief && brief[0])
@@ -599,7 +668,8 @@ static char *build_round_prompt(const char *task, const char *artifact, const ch
    }
 
    size_t needed = strlen(task ? task : "") + strlen(artifact) + strlen(peer_notes) +
-                   strlen(brief_block) + strlen(mode_task) + strlen(role_hint) + 512;
+                   strlen(brief_block) + strlen(mode_task) + strlen(role_hint) + strlen(head_note) +
+                   512;
    char *prompt = malloc(needed);
    if (!prompt)
    {
@@ -607,10 +677,10 @@ static char *build_round_prompt(const char *task, const char *artifact, const ch
       return NULL;
    }
    snprintf(prompt, needed,
-            "You are one participant in an agent roundtable. Your role is to %s.\n\n"
+            "You are one participant in an agent roundtable. Your role is to %s.\n\n%s"
             "TASK:\n%s\n\nCURRENT SHARED ARTIFACT:\n%s\n\nPEER NOTES FROM PREVIOUS TURN:\n%s\n\n%s"
             "ROUND %d INSTRUCTION:\n%s\n",
-            role_hint, task ? task : "", artifact[0] ? artifact : "(none yet)",
+            role_hint, head_note, task ? task : "", artifact[0] ? artifact : "(none yet)",
             peer_notes[0] ? peer_notes : "(none yet)", brief_block, round, mode_task);
 
    free(owned_brief_block);
@@ -1277,11 +1347,19 @@ int delegate_ensemble_run(agent_config_t *acfg, const config_t *cfg, const char 
       order[i] = i;
    shuffle_indices(order, ref_count);
 
-   char synthesis_buf[16384];
-   if (build_synthesis_prompt(synthesis_buf, sizeof(synthesis_buf), prompt, results, order,
-                              cfg->ensemble_reference_models, ref_count) != 0)
+   /* Size the synthesis buffer to the actual content (was a fixed 16 KB stack
+    * buffer that returned -1 — collapsing the whole round — whenever the original
+    * prompt plus the panel's answers exceeded it, e.g. any real code review). */
+   size_t syn_cap = strlen(prompt) + 1024;
+   for (int i = 0; i < ref_count; i++)
+      if (results[i].response)
+         syn_cap += strlen(results[i].response) + 256;
+   char *synthesis_buf = malloc(syn_cap);
+   if (!synthesis_buf || build_synthesis_prompt(synthesis_buf, syn_cap, prompt, results, order,
+                                                cfg->ensemble_reference_models, ref_count) != 0)
    {
       aimee_log(LOG_ERROR, "delegate_ensemble", "failed to build synthesis prompt");
+      free(synthesis_buf);
       for (int i = 0; i < ref_count; i++)
          free(results[i].response);
       return -1;
@@ -1292,6 +1370,7 @@ int delegate_ensemble_run(agent_config_t *acfg, const config_t *cfg, const char 
 
    agent_result_t agg_result;
    int agg_rc = run_aggregator(acfg, cfg, synthesis_buf, &agg_result);
+   free(synthesis_buf);
 
    if (agg_rc == 0 && agg_result.response && agg_result.response[0])
    {
