@@ -10,6 +10,7 @@
 #include "db2/lifecycle.h"
 #include "kb/kb_graph_analytics.h"
 #include "kb/lessons_reflect.h"
+#include "kb/lessons_session_capture.h"
 #include "kb/prompt_sanitizer.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -850,4 +851,59 @@ int handle_get_code_lessons_route(const char *method, const char *query_string, 
    if (strcmp(method, "GET") != 0)
       return code_method_not_allowed(out_buf, out_cap);
    return handle_get_code_lessons(query_string, out_buf, out_cap);
+}
+
+/* POST /v1/code/lessons/observe  body: {project, session_id, node_ids:[...]}
+ *
+ * §3 live cite-capture: the server posts the file paths a session retrieved this
+ * turn; a node re-cited within the auto-useful window earns an agent-sourced,
+ * unconfirmed 'useful' outcome (inert until confirmed). Best-effort; the node-id
+ * space is the retrieval file-path space the /v1/code/hybrid trust tie-break reads. */
+int handle_post_code_lessons_observe(const char *body, char *out_buf, int out_cap)
+{
+   cJSON *root = cJSON_Parse(body ? body : "");
+   if (!root)
+      return code_scan_write_error(out_buf, out_cap, "invalid JSON body");
+   cJSON *jp = cJSON_GetObjectItemCaseSensitive(root, "project");
+   cJSON *js = cJSON_GetObjectItemCaseSensitive(root, "session_id");
+   cJSON *jn = cJSON_GetObjectItemCaseSensitive(root, "node_ids");
+   if (!cJSON_IsString(jp) || !jp->valuestring[0] || !cJSON_IsString(js) || !js->valuestring[0] ||
+       !cJSON_IsArray(jn))
+   {
+      cJSON_Delete(root);
+      return code_scan_write_error(out_buf, out_cap,
+                                   "requires project, session_id, and node_ids[]");
+   }
+   if (!db2_is_initialized())
+   {
+      cJSON_Delete(root);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"knowledge service not initialized\"}");
+      return 503;
+   }
+   int n = cJSON_GetArraySize(jn);
+   const char **nodes = calloc((size_t)(n > 0 ? n : 1), sizeof(*nodes));
+   int cnt = 0;
+   if (nodes)
+      for (int i = 0; i < n; i++)
+      {
+         cJSON *e = cJSON_GetArrayItem(jn, i);
+         if (cJSON_IsString(e) && e->valuestring[0])
+            nodes[cnt++] = e->valuestring;
+      }
+   int64_t gen = db2_code_projection_visible_id(jp->valuestring);
+   int recorded =
+       lessons_session_observe(jp->valuestring, gen > 0 ? gen : 0, js->valuestring, nodes, cnt);
+   free(nodes);
+   snprintf(out_buf, (size_t)out_cap, "{\"status\":\"ok\",\"observed\":%d,\"recorded\":%d}", cnt,
+            recorded < 0 ? 0 : recorded);
+   cJSON_Delete(root);
+   return 200;
+}
+
+int handle_post_code_lessons_observe_route(const char *method, const char *body, char *out_buf,
+                                           int out_cap)
+{
+   if (strcmp(method, "POST") != 0)
+      return code_method_not_allowed(out_buf, out_cap);
+   return handle_post_code_lessons_observe(body, out_buf, out_cap);
 }

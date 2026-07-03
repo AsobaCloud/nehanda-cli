@@ -157,7 +157,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-kb-client-memory \
                $(TESTPREFIX)/unit-test-kb-graph \
                $(TESTPREFIX)/unit-test-kb-rrf \
-               $(TESTPREFIX)/unit-test-kb-graph-analytics $(TESTPREFIX)/unit-test-lessons-cite-tracker $(TESTPREFIX)/unit-test-lessons-reflect $(TESTPREFIX)/unit-test-lessons-actuate $(TESTPREFIX)/unit-test-kb-doc-hash \
+               $(TESTPREFIX)/unit-test-kb-graph-analytics $(TESTPREFIX)/unit-test-lessons-cite-tracker $(TESTPREFIX)/unit-test-lessons-reflect $(TESTPREFIX)/unit-test-lessons-actuate $(TESTPREFIX)/unit-test-lessons-session-capture $(TESTPREFIX)/unit-test-kb-doc-hash \
                $(TESTPREFIX)/unit-test-prompt-sanitizer \
                $(TESTPREFIX)/unit-test-guardrails-blast-radius \
                $(TESTPREFIX)/unit-test-code-collect \
@@ -1716,6 +1716,7 @@ $(OBJDIR)/tests/test_kb_graph_analytics.o: C_FLAGS += -Ikb
 $(OBJDIR)/tests/test_lessons_cite_tracker.o: C_FLAGS += -Ikb
 $(OBJDIR)/tests/test_lessons_reflect.o: C_FLAGS += -Ikb
 $(OBJDIR)/tests/test_lessons_actuate.o: C_FLAGS += -Ikb
+$(OBJDIR)/tests/test_lessons_session_capture.o: C_FLAGS += -Ikb
 $(OBJDIR)/tests/test_prompt_sanitizer.o: C_FLAGS += -Ikb
 
 $(TESTPREFIX)/unit-test-kb-graph: $(OBJDIR)/tests/test_kb_graph.o \
@@ -1744,6 +1745,11 @@ $(TESTPREFIX)/unit-test-lessons-reflect: $(OBJDIR)/tests/test_lessons_reflect.o 
 $(TESTPREFIX)/unit-test-lessons-actuate: $(OBJDIR)/tests/test_lessons_actuate.o \
                                          $(OBJDIR)/kb/lessons_actuate.o
 	$(TESTLINK) -o $@ $^ $(L_CORE)
+
+$(TESTPREFIX)/unit-test-lessons-session-capture: $(OBJDIR)/tests/test_lessons_session_capture.o \
+                                                 $(OBJDIR)/kb/lessons_session_capture.o \
+                                                 $(OBJDIR)/kb/lessons_cite_tracker.o
+	$(TESTLINK) -o $@ $^ $(L_CORE) -lpthread
 
 $(TESTPREFIX)/unit-test-kb-doc-hash: $(OBJDIR)/tests/test_kb_doc_hash.o \
                                      $(OBJDIR)/kb/kb_doc_hash.o
@@ -3556,6 +3562,7 @@ $(TESTPREFIX)/unit-test-kb-http-routes: $(OBJDIR)/tests/test_kb_http_routes.o \
                      $(OBJDIR)/kb/kb_bandit_registry.o \
                      $(OBJDIR)/kb/http/kb_http_code.o \
                      $(OBJDIR)/kb/http/kb_http_code_graphfb.o $(OBJDIR)/kb/lessons_reflect.o \
+                                    $(OBJDIR)/kb/lessons_session_capture.o $(OBJDIR)/kb/lessons_cite_tracker.o \
                      $(OBJDIR)/kb/kb_rrf.o \
                      $(OBJDIR)/kb/kb_graph_analytics.o \
                      $(OBJDIR)/kb/prompt_sanitizer.o \
