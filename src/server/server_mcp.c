@@ -1,4 +1,5 @@
 /* server_mcp.c: handle mcp.call -- dispatches MCP tool calls within the server */
+#include "server_mcp_internal.h"
 #include "server.h"
 #include "aimee.h"
 #include "json_fluent.h" /* jo_ok */
@@ -70,7 +71,7 @@ static int mcp_appendf(char *buf, int pos, int cap, const char *fmt, ...)
    pos += n;
    return pos > cap ? cap : pos;
 }
-static cJSON *text_content(const char *text)
+cJSON *text_content(const char *text)
 {
    cJSON *arr = cJSON_CreateArray();
    cJSON *item = cJSON_CreateObject();
@@ -80,7 +81,7 @@ static cJSON *text_content(const char *text)
    return arr;
 }
 
-static cJSON *json_result_content(cJSON *result)
+cJSON *json_result_content(cJSON *result)
 {
    char *rendered = cJSON_PrintUnformatted(result);
    cJSON_Delete(result);
@@ -190,7 +191,7 @@ static int handle_mcp_ensemble_review(server_conn_t *conn, cJSON *args)
    cJSON_Delete(snap);
    return server_send_ok(conn, resp);
 }
-static cJSON *tool_get_help(cJSON *args)
+cJSON *tool_get_help(cJSON *args)
 {
    cJSON *jtopic = cJSON_IsObject(args) ? cJSON_GetObjectItemCaseSensitive(args, "topic") : NULL;
    const char *topic =
@@ -328,7 +329,7 @@ static void parse_filter_scope(cJSON *filter, const char **scope_type, const cha
    }
 }
 
-static cJSON *tool_search_memory(cJSON *args)
+cJSON *tool_search_memory(cJSON *args)
 {
    cJSON *jq = cJSON_GetObjectItemCaseSensitive(args, "query");
    if (!cJSON_IsString(jq))
@@ -365,7 +366,7 @@ static cJSON *tool_search_memory(cJSON *args)
    return text_content(buf);
 }
 
-static cJSON *tool_memory_mutate(cJSON *args)
+cJSON *tool_memory_mutate(cJSON *args)
 {
    cJSON *jv = cJSON_GetObjectItemCaseSensitive(args, "verb");
    if (!cJSON_IsString(jv))
@@ -450,7 +451,7 @@ static cJSON *tool_memory_mutate(cJSON *args)
    return text_content(buf);
 }
 
-static cJSON *tool_memory_ask(cJSON *args, cJSON **structured_out)
+cJSON *tool_memory_ask(cJSON *args, cJSON **structured_out)
 {
    cJSON *jq = cJSON_GetObjectItemCaseSensitive(args, "query");
    cJSON *jl = cJSON_GetObjectItemCaseSensitive(args, "limit");
@@ -510,7 +511,7 @@ static cJSON *tool_memory_ask(cJSON *args, cJSON **structured_out)
    return text_content(summary);
 }
 
-static cJSON *tool_search_graph(cJSON *args)
+cJSON *tool_search_graph(cJSON *args)
 {
    cJSON *jq = cJSON_GetObjectItemCaseSensitive(args, "query");
    cJSON *jl = cJSON_GetObjectItemCaseSensitive(args, "limit");
@@ -540,7 +541,7 @@ static cJSON *tool_search_graph(cJSON *args)
    return text_content(buf);
 }
 
-static cJSON *tool_get_episode(cJSON *args)
+cJSON *tool_get_episode(cJSON *args)
 {
    cJSON *jk = cJSON_GetObjectItemCaseSensitive(args, "episode_key");
    if (!cJSON_IsString(jk))
@@ -558,7 +559,7 @@ static cJSON *tool_get_episode(cJSON *args)
    return text_content(buf);
 }
 
-static cJSON *tool_get_entity(cJSON *args)
+cJSON *tool_get_entity(cJSON *args)
 {
    cJSON *je = cJSON_GetObjectItemCaseSensitive(args, "entity");
    if (!cJSON_IsString(je))
@@ -579,7 +580,7 @@ static cJSON *tool_get_entity(cJSON *args)
    return text_content(buf);
 }
 
-static cJSON *tool_get_entity_edges(cJSON *args)
+cJSON *tool_get_entity_edges(cJSON *args)
 {
    cJSON *je = cJSON_GetObjectItemCaseSensitive(args, "entity");
    cJSON *jl = cJSON_GetObjectItemCaseSensitive(args, "limit");
@@ -608,7 +609,7 @@ static cJSON *tool_get_entity_edges(cJSON *args)
    return text_content(buf);
 }
 
-static cJSON *tool_get_context_block(cJSON *args)
+cJSON *tool_get_context_block(cJSON *args)
 {
    cJSON *jq = cJSON_GetObjectItemCaseSensitive(args, "query");
    cJSON *jb = cJSON_GetObjectItemCaseSensitive(args, "block_type");
@@ -626,7 +627,7 @@ static cJSON *tool_get_context_block(cJSON *args)
    return result;
 }
 
-static cJSON *tool_memory_get(cJSON *args)
+cJSON *tool_memory_get(cJSON *args)
 {
    cJSON *jid = cJSON_GetObjectItemCaseSensitive(args, "id");
    cJSON *jh = cJSON_GetObjectItemCaseSensitive(args, "handle");
@@ -663,7 +664,7 @@ static cJSON *tool_memory_get(cJSON *args)
    return result;
 }
 
-static cJSON *tool_list_facts(void)
+cJSON *tool_list_facts(void)
 {
    memory_t facts[64];
    int count = kb_client_memory_list(TIER_L2, KIND_FACT, 64, facts, 64);
@@ -685,7 +686,7 @@ static cJSON *tool_list_facts(void)
    return text_content(buf);
 }
 
-static cJSON *tool_memory_briefing(cJSON *args)
+cJSON *tool_memory_briefing(cJSON *args)
 {
    int limit_tokens = MEMORY_BRIEFING_DEFAULT_LIMIT_TOKENS;
    cJSON *jlimit = cJSON_GetObjectItemCaseSensitive(args, "limit_tokens");
@@ -706,7 +707,7 @@ static cJSON *tool_memory_briefing(cJSON *args)
    return content;
 }
 
-static cJSON *tool_get_identity(void)
+cJSON *tool_get_identity(void)
 {
    config_t cfg;
    memset(&cfg, 0, sizeof(cfg));
@@ -729,7 +730,7 @@ static cJSON *tool_get_identity(void)
    return content;
 }
 
-static cJSON *tool_list_curiosity_items(cJSON *args)
+cJSON *tool_list_curiosity_items(cJSON *args)
 {
    cJSON *js = cJSON_GetObjectItemCaseSensitive(args, "state");
    cJSON *jl = cJSON_GetObjectItemCaseSensitive(args, "limit");
@@ -753,7 +754,7 @@ static cJSON *tool_list_curiosity_items(cJSON *args)
    return content;
 }
 
-static cJSON *tool_create_prospective_memory(cJSON *args)
+cJSON *tool_create_prospective_memory(cJSON *args)
 {
    cJSON *jt = cJSON_GetObjectItemCaseSensitive(args, "trigger_text");
    cJSON *ja = cJSON_GetObjectItemCaseSensitive(args, "action_text");
@@ -807,7 +808,7 @@ static cJSON *tool_create_prospective_memory(cJSON *args)
    return content;
 }
 
-static cJSON *tool_list_prospective_memories(cJSON *args)
+cJSON *tool_list_prospective_memories(cJSON *args)
 {
    const char *state = NULL;
    cJSON *jst = cJSON_GetObjectItemCaseSensitive(args, "state");
@@ -839,7 +840,7 @@ static cJSON *tool_list_prospective_memories(cJSON *args)
    return content;
 }
 
-static cJSON *tool_complete_prospective_memory(cJSON *args)
+cJSON *tool_complete_prospective_memory(cJSON *args)
 {
    cJSON *ji = cJSON_GetObjectItemCaseSensitive(args, "id");
    if (!cJSON_IsNumber(ji))
@@ -858,7 +859,7 @@ static cJSON *tool_complete_prospective_memory(cJSON *args)
    return text_content(buf);
 }
 
-static cJSON *tool_get_host(cJSON *args)
+cJSON *tool_get_host(cJSON *args)
 {
    cJSON *jn = cJSON_GetObjectItemCaseSensitive(args, "name");
    if (!cJSON_IsString(jn))
@@ -890,7 +891,7 @@ static cJSON *tool_get_host(cJSON *args)
    return text_content(buf);
 }
 
-static cJSON *tool_list_hosts(void)
+cJSON *tool_list_hosts(void)
 {
    agent_config_t cfg;
    if (agent_load_config(&cfg) != 0 || !cfg.network.ssh_entry[0])
@@ -929,9 +930,8 @@ static cJSON *tool_list_hosts(void)
    return text_content(buf);
 }
 
-#include "server_mcp_ast_grep.inc"
 
-static cJSON *tool_find_symbol(cJSON *args)
+cJSON *smcp_tool_find_symbol(cJSON *args)
 {
    cJSON *jid = cJSON_GetObjectItemCaseSensitive(args, "identifier");
    if (!cJSON_IsString(jid))
@@ -964,7 +964,7 @@ static cJSON *tool_find_symbol(cJSON *args)
    return text_content(buf);
 }
 
-static cJSON *tool_preview_blast_radius(cJSON *args)
+cJSON *tool_preview_blast_radius(cJSON *args)
 {
    cJSON *jproj = cJSON_GetObjectItemCaseSensitive(args, "project");
    cJSON *jpaths = cJSON_GetObjectItemCaseSensitive(args, "paths");
@@ -989,7 +989,7 @@ static cJSON *tool_preview_blast_radius(cJSON *args)
    return content;
 }
 
-static cJSON *tool_record_attempt(cJSON *args)
+cJSON *tool_record_attempt(cJSON *args)
 {
    cJSON *jap = cJSON_GetObjectItemCaseSensitive(args, "approach");
    cJSON *joc = cJSON_GetObjectItemCaseSensitive(args, "outcome");
@@ -1026,7 +1026,7 @@ static cJSON *tool_record_attempt(cJSON *args)
    return text_content(buf);
 }
 
-static cJSON *tool_list_attempts(cJSON *args)
+cJSON *tool_list_attempts(cJSON *args)
 {
    cJSON *jf = cJSON_GetObjectItemCaseSensitive(args, "filter");
    const char *filter = cJSON_IsString(jf) ? jf->valuestring : NULL;
@@ -1077,7 +1077,7 @@ static cJSON *tool_list_attempts(cJSON *args)
 
 /* --- Workflow tool handler --- */
 
-static cJSON *tool_store_workflow(cJSON *args)
+cJSON *tool_store_workflow(cJSON *args)
 {
    cJSON *jr = cJSON_GetObjectItemCaseSensitive(args, "rule");
    cJSON *jsig = cJSON_GetObjectItemCaseSensitive(args, "signal_type");
@@ -1132,7 +1132,7 @@ static cJSON *tool_store_workflow(cJSON *args)
 
 /* --- Note tool handlers --- */
 
-static cJSON *tool_create_note(cJSON *args)
+cJSON *smcp_tool_create_note(cJSON *args)
 {
    cJSON *jt = cJSON_GetObjectItemCaseSensitive(args, "title");
    cJSON *jc = cJSON_GetObjectItemCaseSensitive(args, "content");
@@ -1233,7 +1233,7 @@ static cJSON *render_notes_response(const char *json, const char *empty_msg, int
    return text_content(buf);
 }
 
-static cJSON *tool_list_notes(cJSON *args)
+cJSON *smcp_tool_list_notes(cJSON *args)
 {
    cJSON *jtg = cJSON_GetObjectItemCaseSensitive(args, "tag");
    cJSON *jlm = cJSON_GetObjectItemCaseSensitive(args, "limit");
@@ -1246,7 +1246,7 @@ static cJSON *tool_list_notes(cJSON *args)
    return out;
 }
 
-static cJSON *tool_search_notes(cJSON *args)
+cJSON *smcp_tool_search_notes(cJSON *args)
 {
    cJSON *jq = cJSON_GetObjectItemCaseSensitive(args, "query");
    if (!cJSON_IsString(jq))
@@ -1262,7 +1262,7 @@ static cJSON *tool_search_notes(cJSON *args)
 
 /* --- Coordinated job tools --- */
 
-static cJSON *tool_job_start(cJSON *args)
+cJSON *tool_job_start(cJSON *args)
 {
    cJSON *jp = cJSON_GetObjectItemCaseSensitive(args, "plan_id");
    if (!cJSON_IsNumber(jp))
@@ -1294,7 +1294,7 @@ static cJSON *tool_job_start(cJSON *args)
    return text_content(buf);
 }
 
-static cJSON *tool_job_status(cJSON *args)
+cJSON *tool_job_status(cJSON *args)
 {
    cJSON *jid = cJSON_GetObjectItemCaseSensitive(args, "job_id");
    if (!cJSON_IsNumber(jid))
@@ -1521,7 +1521,6 @@ static cJSON *dispatch_git_tool(server_ctx_t *ctx, server_conn_t *conn, const ch
    return content;
 }
 
-#include "server_mcp_call_table.inc"
 
 /* ── Discovery meta-tools (P2) ────────────────────────────────────────────────
  * find_tools / describe_tool introspect the FULL served catalog (unfiltered by

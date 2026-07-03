@@ -2,6 +2,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include "server_internal.h"
 #include "aimee.h"
 #include "harness_memory.h"        /* hmem_upsert (server owns DB1) */
 #include "harness_memory_audit.h"  /* hmem_audit */
@@ -62,7 +63,6 @@
 #include <time.h>
 #include <unistd.h>
 #include <string.h>
-#include "server_seed_config.inc" /* server_seed_config_defaults() */
 
 extern int hooks_ensure_cwd_worktree(session_state_t *state, const char *sid, const char *cwd);
 
@@ -339,8 +339,6 @@ static int handle_server_health(server_ctx_t *ctx, server_conn_t *conn, cJSON *r
    return server_send_ok(conn, resp);
 }
 
-#include "server_insights.inc"
-#include "server_api_status.inc"
 
 /* worktree.gc: remove abandoned session worktrees under the operator's git_root.
  * Server-side because the GC primitive lives in workspace.c (already linked into
@@ -649,9 +647,6 @@ static int handle_launch_run(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    return server_send_ok(conn, launch_resp);
 }
 
-#include "server_provider.inc"
-#include "server_provider_slots.inc"
-#include "server_eval.inc"
 
 static int handle_init_run(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {

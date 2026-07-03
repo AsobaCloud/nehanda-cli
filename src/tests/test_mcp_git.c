@@ -125,7 +125,210 @@ static void test_mcp_chdir_uses_cwd_argument(void)
    teardown_git_repo();
 }
 
-#include "test_mcp_git_session_cwd.inc"
+static void test_mcp_chdir_session_cwd_precedes_proxy_cwd(void)
+{
+   setup_git_repo();
+
+   char proxy_repo[sizeof(g_tmpdir)];
+   snprintf(proxy_repo, sizeof(proxy_repo), "%s", g_tmpdir);
+
+   char tracked_repo[256];
+   strcpy(tracked_repo, "/tmp/aimee-test-mcp-git-tracked-XXXXXX");
+   assert(mkdtemp(tracked_repo) != NULL);
+   char cmd[1024];
+   snprintf(cmd, sizeof(cmd), "cd '%s' && git init -q", tracked_repo);
+   assert(system(cmd) == 0);
+
+   session_id_set_override("test-session-cwd");
+
+   char cwd_path[MAX_PATH_LEN];
+   snprintf(cwd_path, sizeof(cwd_path), "%s/git-cwd-%s", config_output_dir(), session_id());
+   FILE *fp = fopen(cwd_path, "w");
+   assert(fp != NULL);
+   fputs(tracked_repo, fp);
+   fclose(fp);
+
+   assert(chdir("/tmp") == 0);
+
+   cJSON *args = cJSON_CreateObject();
+   cJSON_AddStringToObject(args, "cwd", proxy_repo);
+   assert(mcp_chdir_git_root(NULL, 0, args, NULL) == 1);
+   const char *resolved = run_cmd_get_cwd();
+   assert(resolved != NULL);
+   assert(strcmp(resolved, tracked_repo) == 0);
+
+   run_cmd_set_cwd(NULL);
+   cJSON_Delete(args);
+   unlink(cwd_path);
+   session_id_clear_override();
+
+   snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tracked_repo);
+   system(cmd);
+   teardown_git_repo();
+}
+
+static void init_nested_git_repo(const char *path, const char *label)
+{
+   char cmd[2048];
+   snprintf(cmd, sizeof(cmd),
+            "mkdir -p '%s' && git -C '%s' init -q && "
+            "git -C '%s' config user.email test@test && "
+            "git -C '%s' config user.name test && "
+            "echo %s > '%s/file.txt' && "
+            "git -C '%s' add file.txt && git -C '%s' commit -q -m %s",
+            path, path, path, path, label, path, path, path, label);
+   assert(system(cmd) == 0);
+}
+
+static void test_mcp_chdir_repairs_stale_delegate_tracked_cwd(void)
+{
+   setup_git_repo();
+
+   char session_main[MAX_PATH_LEN];
+   char stale_delegate[MAX_PATH_LEN];
+   snprintf(session_main, sizeof(session_main), "%s/.aimee/worktrees/102ee97d-session/main",
+            g_tmpdir);
+   snprintf(stale_delegate, sizeof(stale_delegate), "%s/.aimee/worktrees/deleg-24/37368447",
+            g_tmpdir);
+
+   init_nested_git_repo(session_main, "main");
+   init_nested_git_repo(stale_delegate, "stale");
+
+   session_id_set_override("102ee97d-session");
+
+   char cwd_path[MAX_PATH_LEN];
+   snprintf(cwd_path, sizeof(cwd_path), "%s/git-cwd-%s", config_output_dir(), session_id());
+   FILE *fp = fopen(cwd_path, "w");
+   assert(fp != NULL);
+   fputs(stale_delegate, fp);
+   fclose(fp);
+
+   assert(chdir("/tmp") == 0);
+
+   cJSON *args = cJSON_CreateObject();
+   assert(mcp_chdir_git_root(NULL, 0, args, NULL) == 1);
+   const char *resolved = run_cmd_get_cwd();
+   assert(resolved != NULL);
+   assert(strcmp(resolved, session_main) == 0);
+
+   run_cmd_set_cwd(NULL);
+   cJSON_Delete(args);
+   unlink(cwd_path);
+   session_id_clear_override();
+   teardown_git_repo();
+}
+
+static void test_mcp_chdir_keeps_stale_delegate_cwd_when_repair_missing(void)
+{
+   setup_git_repo();
+
+   char stale_delegate[MAX_PATH_LEN];
+   snprintf(stale_delegate, sizeof(stale_delegate), "%s/.aimee/worktrees/deleg-24/37368447",
+            g_tmpdir);
+   init_nested_git_repo(stale_delegate, "stale");
+
+   session_id_set_override("102ee97d-session");
+
+   char cwd_path[MAX_PATH_LEN];
+   snprintf(cwd_path, sizeof(cwd_path), "%s/git-cwd-%s", config_output_dir(), session_id());
+   FILE *fp = fopen(cwd_path, "w");
+   assert(fp != NULL);
+   fputs(stale_delegate, fp);
+   fclose(fp);
+
+   assert(chdir("/tmp") == 0);
+
+   cJSON *args = cJSON_CreateObject();
+   assert(mcp_chdir_git_root(NULL, 0, args, NULL) == 1);
+   const char *resolved = run_cmd_get_cwd();
+   assert(resolved != NULL);
+   assert(strcmp(resolved, stale_delegate) == 0);
+
+   run_cmd_set_cwd(NULL);
+   cJSON_Delete(args);
+   unlink(cwd_path);
+   session_id_clear_override();
+   teardown_git_repo();
+}
+
+static void test_mcp_chdir_does_not_repair_delegate_session_cwd(void)
+{
+   setup_git_repo();
+
+   char session_main[MAX_PATH_LEN];
+   char stale_delegate[MAX_PATH_LEN];
+   snprintf(session_main, sizeof(session_main), "%s/.aimee/worktrees/deleg-abc/main", g_tmpdir);
+   snprintf(stale_delegate, sizeof(stale_delegate), "%s/.aimee/worktrees/deleg-24/37368447",
+            g_tmpdir);
+   init_nested_git_repo(session_main, "main");
+   init_nested_git_repo(stale_delegate, "stale");
+
+   session_id_set_override("deleg-abcdef");
+
+   char cwd_path[MAX_PATH_LEN];
+   snprintf(cwd_path, sizeof(cwd_path), "%s/git-cwd-%s", config_output_dir(), session_id());
+   FILE *fp = fopen(cwd_path, "w");
+   assert(fp != NULL);
+   fputs(stale_delegate, fp);
+   fclose(fp);
+
+   assert(chdir("/tmp") == 0);
+
+   cJSON *args = cJSON_CreateObject();
+   assert(mcp_chdir_git_root(NULL, 0, args, NULL) == 1);
+   const char *resolved = run_cmd_get_cwd();
+   assert(resolved != NULL);
+   assert(strcmp(resolved, stale_delegate) == 0);
+
+   run_cmd_set_cwd(NULL);
+   cJSON_Delete(args);
+   unlink(cwd_path);
+   session_id_clear_override();
+   teardown_git_repo();
+}
+
+static void test_mcp_chdir_keeps_explicit_managed_worktree_despite_stale_session_state(void)
+{
+   setup_git_repo();
+   setup_ownership_db();
+
+   char active_worktree[MAX_PATH_LEN];
+   char stale_worktree[MAX_PATH_LEN];
+   snprintf(active_worktree, sizeof(active_worktree), "%s/.aimee/worktrees/102ee97d-session/main",
+            g_tmpdir);
+   snprintf(stale_worktree, sizeof(stale_worktree), "%s/.aimee/worktrees/6ab82f0e-session/main",
+            g_tmpdir);
+   init_nested_git_repo(active_worktree, "active");
+   init_nested_git_repo(stale_worktree, "stale");
+
+   session_id_set_override("6ab82f0e-session");
+   session_state_t state;
+   memset(&state, 0, sizeof(state));
+   snprintf(state.session_mode, sizeof(state.session_mode), "implement");
+   snprintf(state.guardrail_mode, sizeof(state.guardrail_mode), "approve");
+   state.worktree_count = 1;
+   snprintf(state.worktrees[0].git_root, sizeof(state.worktrees[0].git_root), "%s", g_tmpdir);
+   snprintf(state.worktrees[0].worktree_path, sizeof(state.worktrees[0].worktree_path), "%s",
+            stale_worktree);
+   session_state_force_save(&state, session_id());
+
+   assert(chdir("/tmp") == 0);
+
+   cJSON *args = cJSON_CreateObject();
+   cJSON_AddStringToObject(args, "cwd", active_worktree);
+   char *mismatch_err = NULL;
+   assert(mcp_chdir_git_root(NULL, 0, args, &mismatch_err) == 1);
+   const char *resolved = run_cmd_get_cwd();
+   assert(resolved != NULL);
+   assert(strcmp(resolved, active_worktree) == 0);
+   assert(mismatch_err == NULL);
+
+   run_cmd_set_cwd(NULL);
+   cJSON_Delete(args);
+   session_id_clear_override();
+   teardown_ownership_db();
+   teardown_git_repo();
+}
 
 static void test_mcp_chdir_uses_pwd_fallback(void)
 {
@@ -1707,9 +1910,335 @@ static void test_worktree_branch_switch_blocked(void)
    teardown_git_repo();
 }
 
-#include "test_mcp_git_verify_threads.inc"
+/* test_mcp_git_verify_threads.inc: git_verify multithreading / timeout /
+ * cancellation tests split out of test_mcp_git.c to keep that .c under the
+ * 2000-line hard limit. Included mid-file (same TU) so the white-box statics
+ * and verify_test_setup/teardown helpers above stay in scope. */
+/* --- Test git_verify runs multiple configured steps successfully --- */
 
-#include "test_mcp_git_verify_session.inc"
+static void test_git_verify_multithreaded_steps(void)
+{
+   char tmpdir[256];
+   verify_test_setup_repo(tmpdir, sizeof(tmpdir), "aimee-test-verify-mt");
+
+   /* Write a project.yaml with multiple steps so sync verify exercises
+    * aggregate step handling without using elapsed time as a test gate. */
+   char fake_home[256];
+   verify_test_write_yaml(tmpdir, fake_home, sizeof(fake_home),
+                          "verify:\n"
+                          "  enforce: true\n"
+                          "  steps:\n"
+                          "    - name: step-a\n"
+                          "      run: echo step-a-done\n"
+                          "    - name: step-b\n"
+                          "      run: echo step-b-done\n");
+
+   char saved_cwd[4096];
+   assert(getcwd(saved_cwd, sizeof(saved_cwd)) != NULL);
+   assert(chdir(tmpdir) == 0);
+
+   cJSON *args = cJSON_CreateObject();
+   cJSON_AddBoolToObject(args, "async", 0); /* force sync for test assertions */
+   cJSON *resp = handle_git_verify(NULL, args, NULL);
+   char *text = get_mcp_text(resp);
+   assert(text != NULL);
+   assert(strstr(text, "step-a") != NULL);
+   assert(strstr(text, "step-b") != NULL);
+   assert(strstr(text, "PASS") != NULL);
+   cJSON_Delete(resp);
+   cJSON_Delete(args);
+
+   assert(chdir(saved_cwd) == 0);
+   verify_test_teardown(tmpdir, fake_home);
+}
+
+static void test_git_verify_step_timeout_finishes(void)
+{
+   char tmpdir[256];
+   verify_test_setup_repo(tmpdir, sizeof(tmpdir), "aimee-test-verify-timeout");
+
+   char fake_home[256];
+   verify_test_write_yaml(tmpdir, fake_home, sizeof(fake_home),
+                          "verify:\n"
+                          "  enforce: true\n"
+                          "  steps:\n"
+                          "    - name: hangs\n"
+                          "      run: sleep 2\n");
+
+   char saved_cwd[4096];
+   assert(getcwd(saved_cwd, sizeof(saved_cwd)) != NULL);
+   assert(chdir(tmpdir) == 0);
+   assert(setenv("AIMEE_VERIFY_STEP_TIMEOUT_MS", "200", 1) == 0);
+
+   cJSON *args = cJSON_CreateObject();
+   cJSON_AddBoolToObject(args, "async", 0);
+   cJSON *resp = handle_git_verify(NULL, args, NULL);
+   char *text = get_mcp_text(resp);
+   assert(text != NULL);
+   assert(strstr(text, "hangs") != NULL);
+   assert(strstr(text, "FAIL") != NULL);
+   assert(strstr(text, "timed out") != NULL);
+   cJSON_Delete(resp);
+   cJSON_Delete(args);
+
+   unsetenv("AIMEE_VERIFY_STEP_TIMEOUT_MS");
+   assert(chdir(saved_cwd) == 0);
+   verify_test_teardown(tmpdir, fake_home);
+}
+
+static void marker_job(void *arg)
+{
+   volatile int *done = (volatile int *)arg;
+   *done = 1;
+}
+
+static char *git_verify_status_text(int job_id, cJSON **resp_out)
+{
+   cJSON *args = cJSON_CreateObject();
+   cJSON_AddStringToObject(args, "action", "status");
+   cJSON_AddNumberToObject(args, "job_id", job_id);
+   cJSON *resp = handle_git_verify(NULL, args, NULL);
+   cJSON_Delete(args);
+   *resp_out = resp;
+   return get_mcp_text(resp);
+}
+
+static void test_git_verify_async_does_not_starve_server_pool(void)
+{
+   char tmpdir[256];
+   verify_test_setup_repo(tmpdir, sizeof(tmpdir), "aimee-test-verify-async-pool");
+
+   char fake_home[256];
+   verify_test_write_yaml(tmpdir, fake_home, sizeof(fake_home),
+                          "verify:\n"
+                          "  enforce: true\n"
+                          "  steps:\n"
+                          "    - name: hangs\n"
+                          "      run: sleep 10\n");
+
+   char saved_cwd[4096];
+   assert(getcwd(saved_cwd, sizeof(saved_cwd)) != NULL);
+   assert(chdir(tmpdir) == 0);
+
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   assert(ctx != NULL);
+   assert(compute_pool_init(&ctx->pool, 1) == 0);
+
+   cJSON *args = cJSON_CreateObject();
+   cJSON_AddBoolToObject(args, "async", 1);
+   cJSON *resp = handle_git_verify(ctx, args, "sid-async-pool");
+   char *text = get_mcp_text(resp);
+   assert(text != NULL);
+   int job_id = 0;
+   assert(sscanf(text, "Started background verification job #%d.", &job_id) == 1);
+   cJSON_Delete(resp);
+   cJSON_Delete(args);
+
+   volatile int done = 0;
+   assert(compute_pool_submit(&ctx->pool, marker_job, (void *)&done) == 0);
+   for (int i = 0; i < 50 && !done; i++)
+      usleep(10000);
+   assert(done == 1);
+
+   int cancelled = 0;
+   for (int i = 0; i < 50 && !cancelled; i++)
+   {
+      usleep(20000);
+      cancelled = verify_cancel_session("sid-async-pool");
+   }
+   assert(cancelled > 0);
+
+   for (int i = 0; i < 100; i++)
+   {
+      cJSON *status_resp = NULL;
+      char *status = git_verify_status_text(job_id, &status_resp);
+      assert(status != NULL);
+      int finished = strstr(status, "finished") != NULL;
+      cJSON_Delete(status_resp);
+      if (finished)
+         break;
+      usleep(20000);
+      assert(i < 99);
+   }
+
+   compute_pool_shutdown(&ctx->pool);
+   free(ctx);
+   assert(chdir(saved_cwd) == 0);
+   verify_test_teardown(tmpdir, fake_home);
+}
+
+typedef struct
+{
+   const char *session_id;
+   cJSON *resp;
+} sync_verify_thread_t;
+
+static void *run_sync_verify_thread(void *arg)
+{
+   sync_verify_thread_t *state = (sync_verify_thread_t *)arg;
+   cJSON *args = cJSON_CreateObject();
+   cJSON_AddBoolToObject(args, "async", 0);
+   state->resp = handle_git_verify(NULL, args, state->session_id);
+   cJSON_Delete(args);
+   return NULL;
+}
+
+static void test_git_verify_sync_cancelled_by_session_close(void)
+{
+   char tmpdir[256];
+   verify_test_setup_repo(tmpdir, sizeof(tmpdir), "aimee-test-verify-cancel");
+
+   char fake_home[256];
+   verify_test_write_yaml(tmpdir, fake_home, sizeof(fake_home),
+                          "verify:\n"
+                          "  enforce: true\n"
+                          "  steps:\n"
+                          "    - name: hangs\n"
+                          "      run: sleep 10\n");
+
+   char saved_cwd[4096];
+   assert(getcwd(saved_cwd, sizeof(saved_cwd)) != NULL);
+   assert(chdir(tmpdir) == 0);
+
+   sync_verify_thread_t state = {.session_id = "sid-sync-cancel", .resp = NULL};
+   pthread_t tid;
+   assert(pthread_create(&tid, NULL, run_sync_verify_thread, &state) == 0);
+
+   int cancelled = 0;
+   for (int i = 0; i < 500 && !cancelled; i++)
+   {
+      usleep(20000);
+      cancelled = verify_cancel_session(state.session_id);
+   }
+   assert(cancelled > 0);
+   assert(pthread_join(tid, NULL) == 0);
+
+   char *text = get_mcp_text(state.resp);
+   assert(text != NULL);
+   assert(strstr(text, "cancelled: owning session closed") != NULL);
+   assert(strstr(text, "verification cancelled; state not recorded") != NULL);
+   cJSON_Delete(state.resp);
+
+   assert(chdir(saved_cwd) == 0);
+   verify_test_teardown(tmpdir, fake_home);
+}
+
+static int start_async_verify(server_ctx_t *ctx, const char *session_id)
+{
+   cJSON *args = cJSON_CreateObject();
+   cJSON_AddBoolToObject(args, "async", 1);
+   cJSON *resp = handle_git_verify(ctx, args, session_id);
+   char *text = get_mcp_text(resp);
+   assert(text != NULL);
+   int job_id = 0;
+   assert(sscanf(text, "Started background verification job #%d.", &job_id) == 1);
+   cJSON_Delete(resp);
+   cJSON_Delete(args);
+   return job_id;
+}
+
+static void wait_async_verify_finished(int job_id)
+{
+   for (int i = 0; i < 200; i++)
+   {
+      cJSON *status_resp = NULL;
+      char *status = git_verify_status_text(job_id, &status_resp);
+      assert(status != NULL);
+      int finished = strstr(status, "finished") != NULL;
+      cJSON_Delete(status_resp);
+      if (finished)
+         return;
+      usleep(10000);
+   }
+   assert(0 && "async verify did not finish");
+}
+
+static void test_git_verify_async_rejects_same_session_overlap(void)
+{
+   char tmpdir[256];
+   verify_test_setup_repo(tmpdir, sizeof(tmpdir), "aimee-test-verify-one-per-session");
+   char fake_home[256];
+   verify_test_write_yaml(
+       tmpdir, fake_home, sizeof(fake_home),
+       "verify:\n  enforce: true\n  steps:\n    - name: hangs\n      run: sleep 10\n");
+   char saved_cwd[4096];
+   assert(getcwd(saved_cwd, sizeof(saved_cwd)) != NULL);
+   assert(chdir(tmpdir) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   assert(ctx != NULL);
+   int job_id = start_async_verify(ctx, "sid-one-verify");
+   cJSON *args = cJSON_CreateObject();
+   cJSON_AddBoolToObject(args, "async", 1);
+   cJSON *resp = handle_git_verify(ctx, args, "sid-one-verify");
+   char *text = get_mcp_text(resp);
+   assert(text != NULL);
+   assert(strstr(text, "session already has a running verification") != NULL);
+   cJSON_Delete(resp);
+   cJSON_Delete(args);
+   assert(verify_cancel_session("sid-one-verify") > 0);
+   wait_async_verify_finished(job_id);
+   free(ctx);
+   assert(chdir(saved_cwd) == 0);
+   verify_test_teardown(tmpdir, fake_home);
+}
+
+static void test_git_verify_async_reaps_finished_jobs(void)
+{
+   char tmpdir[256];
+   verify_test_setup_repo(tmpdir, sizeof(tmpdir), "aimee-test-verify-reap-jobs");
+   char fake_home[256];
+   verify_test_write_yaml(
+       tmpdir, fake_home, sizeof(fake_home),
+       "verify:\n  enforce: true\n  steps:\n    - name: quick\n      run: echo ok\n");
+   char saved_cwd[4096];
+   assert(getcwd(saved_cwd, sizeof(saved_cwd)) != NULL);
+   assert(chdir(tmpdir) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   assert(ctx != NULL);
+   for (int i = 0; i < 40; i++)
+      wait_async_verify_finished(start_async_verify(ctx, "sid-reap-verify"));
+   free(ctx);
+   assert(chdir(saved_cwd) == 0);
+   verify_test_teardown(tmpdir, fake_home);
+}
+
+static void test_git_verify_sync_rejects_same_session_overlap(void)
+{
+   char tmpdir[256];
+   verify_test_setup_repo(tmpdir, sizeof(tmpdir), "aimee-test-verify-sync-overlap");
+   char started_path[512];
+   snprintf(started_path, sizeof(started_path), "%s-started", tmpdir);
+   char yaml[1024];
+   snprintf(yaml, sizeof(yaml),
+            "verify:\n  enforce: true\n  steps:\n    - name: hangs\n      run: sh -c 'touch %s; "
+            "sleep 10'\n",
+            started_path);
+   char fake_home[256];
+   verify_test_write_yaml(tmpdir, fake_home, sizeof(fake_home), yaml);
+   char saved_cwd[4096];
+   assert(getcwd(saved_cwd, sizeof(saved_cwd)) != NULL);
+   assert(chdir(tmpdir) == 0);
+   sync_verify_thread_t state = {.session_id = "sid-sync-overlap", .resp = NULL};
+   pthread_t tid;
+   assert(pthread_create(&tid, NULL, run_sync_verify_thread, &state) == 0);
+   struct stat st;
+   for (int i = 0; i < 3000 && stat(started_path, &st) != 0; i++)
+      usleep(10000);
+   assert(stat(started_path, &st) == 0);
+   cJSON *args = cJSON_CreateObject();
+   cJSON_AddBoolToObject(args, "async", 0);
+   cJSON *resp = handle_git_verify(NULL, args, state.session_id);
+   char *text = get_mcp_text(resp);
+   assert(text != NULL);
+   assert(strstr(text, "session already has a running verification") != NULL);
+   cJSON_Delete(resp);
+   cJSON_Delete(args);
+   assert(verify_cancel_session(state.session_id) > 0);
+   assert(pthread_join(tid, NULL) == 0);
+   cJSON_Delete(state.resp);
+   assert(chdir(saved_cwd) == 0);
+   verify_test_teardown(tmpdir, fake_home);
+}
 
 int main(void)
 {

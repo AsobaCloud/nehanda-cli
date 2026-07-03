@@ -15,7 +15,6 @@
 #include "platform_path.h"
 #include "platform_process.h"
 #include "cJSON.h"
-#define V1_PROTOCOL_VERSION 1
 #include <direct.h>
 #include <errno.h>
 #include <stdio.h>
@@ -793,4 +792,4 @@ cJSON *cli_http_request_stream_ndjson(const char *endpoint, const char *method, 
  * (cli_workspace_serve.c, native-threaded via _beginthreadex), so the Windows
  * thin client serves its working tree to a remote aimee-server just like POSIX. */
 
-#include "../cli_v1_routes.inc"
+#include "cli_v1_routes.h"

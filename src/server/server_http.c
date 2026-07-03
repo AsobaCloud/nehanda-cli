@@ -7,6 +7,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include "server_http_internal.h"
 #include "server_http.h"
 #include "server.h"         /* CAP_* / CAPS_* capability bits, server_capability_for_method */
 #include "server_conn_io.h" /* transport-aware fd I/O (native-TLS phase 1) */
@@ -49,7 +50,6 @@
 #include <stdatomic.h>
 
 #define SHTTP_READ_MAX 8192
-#define SHTTP_RESP_MAX (256 * 1024)
 /* Max request body. The OpenAI/Codex Responses surface sends large bodies — a
  * Codex turn carries ~20KB instructions + ~18 tool schemas + the full
  * conversation/tool-call history (175KB+ and growing), so the cap must be well
@@ -216,7 +216,7 @@ const char *server_http_delegate_block(const char *session_id, const char *role,
 
 /* ── JSON helpers ───────────────────────────────────────────────────────── */
 
-static int emit(char *resp, int cap, cJSON *obj)
+int emit(char *resp, int cap, cJSON *obj)
 {
    char *s = cJSON_PrintUnformatted(obj);
    if (s)
@@ -230,7 +230,7 @@ static int emit(char *resp, int cap, cJSON *obj)
    return 200;
 }
 
-static int err_json(char *resp, int cap, int status, const char *msg)
+int err_json(char *resp, int cap, int status, const char *msg)
 {
    http_error_json(resp, (size_t)cap, msg ? msg : "error"); /* escapes msg → valid JSON */
    return status;
@@ -298,13 +298,9 @@ void server_http_request_id(const char *provided, int pid, unsigned long seq, ch
  * is the single source of truth for dispatch, per-route capabilities, and the
  * OpenAPI path inventory. server_http_route_caps and server_http_route are thin
  * public entry points over it; route matching lives in route_match(). */
-static uint32_t v1_route_caps_lookup(const char *method, const char *path);
-static int v1_route_dispatch(const char *method, const char *path, const char *body, int body_len,
-                             char *resp, int resp_cap);
 /* 1 if the route is a data-plane write. At the default remote_writes=off these
  * routes are local-UDS-only; remote_writes=data/full can expose them over TCP
  * after the per-route capability check. */
-static int v1_route_is_local_only(const char *method, const char *path);
 
 /* Capability bitmask a /v1 route requires (route_caps subset of conn_caps gates
  * the request in handle_conn). 0 = public, or an unrecognized route (which then
@@ -440,12 +436,11 @@ void server_http_api_status_report(int http_port, int bearer_configured, int rat
 }
 
 /* Persona + role-template /v1 route handlers (kept in a sibling .inc for size). */
-#include "server_http_config_routes.inc"
 
 /* The session's active persona (set via POST below), falling back to the durable
  * default when the session has none — so a reconnecting client (e.g. webchat)
  * can render the current selection. */
-static int route_session_persona_get(const char *session_id, char *resp, int cap)
+int route_session_persona_get(const char *session_id, char *resp, int cap)
 {
    if (!session_id || !session_id[0])
       return err_json(resp, cap, 400, "missing session id");
@@ -459,7 +454,7 @@ static int route_session_persona_get(const char *session_id, char *resp, int cap
    return rc;
 }
 
-static int route_session_persona_set(const char *session_id, const char *body, char *resp, int cap)
+int route_session_persona_set(const char *session_id, const char *body, char *resp, int cap)
 {
    if (!session_id || !session_id[0])
       return err_json(resp, cap, 400, "missing session id");
@@ -489,7 +484,7 @@ static int route_session_persona_set(const char *session_id, const char *body, c
    return rc;
 }
 
-static int route_session_primary_get(const char *session_id, char *resp, int cap)
+int route_session_primary_get(const char *session_id, char *resp, int cap)
 {
    if (!session_id || !session_id[0])
       return err_json(resp, cap, 400, "missing session id");
@@ -500,7 +495,7 @@ static int route_session_primary_get(const char *session_id, char *resp, int cap
    return emit(resp, cap, o);
 }
 
-static int route_session_primary_set(const char *session_id, const char *body, char *resp, int cap)
+int route_session_primary_set(const char *session_id, const char *body, char *resp, int cap)
 {
    if (!session_id || !session_id[0])
       return err_json(resp, cap, 400, "missing session id");
@@ -526,7 +521,7 @@ static int route_session_primary_set(const char *session_id, const char *body, c
    return emit(resp, cap, o);
 }
 
-static int route_session_primary_clear(const char *session_id, char *resp, int cap)
+int route_session_primary_clear(const char *session_id, char *resp, int cap)
 {
    if (!session_id || !session_id[0])
       return err_json(resp, cap, 400, "missing session id");
@@ -546,14 +541,14 @@ static int route_session_primary_clear(const char *session_id, char *resp, int c
  * local-first default the owner is the single local principal, so listing is
  * unscoped; multi-owner scoping is a distributed-mode-auth concern. */
 
-static int route_sessions_list(char *resp, int cap)
+int route_sessions_list(char *resp, int cap)
 {
    /* presence_list_json always writes valid JSON (at least "[]"). */
    presence_list_json(NULL, resp, (size_t)cap);
    return 200;
 }
 
-static int route_session_attach(const char *session_id, const char *body, char *resp, int cap)
+int route_session_attach(const char *session_id, const char *body, char *resp, int cap)
 {
    if (!session_id || !session_id[0])
       return err_json(resp, cap, 400, "missing session id");
@@ -596,7 +591,7 @@ static int route_session_attach(const char *session_id, const char *body, char *
    return emit(resp, cap, o);
 }
 
-static int route_session_detach(const char *session_id, const char *body, char *resp, int cap)
+int route_session_detach(const char *session_id, const char *body, char *resp, int cap)
 {
    if (!session_id || !session_id[0])
       return err_json(resp, cap, 400, "missing session id");
@@ -621,19 +616,19 @@ static int route_session_detach(const char *session_id, const char *body, char *
  * mirroring the aimee-kb HTTP server (src/kb/http/kb_http.c) so a client can
  * probe either service the same way. */
 
-static int route_health(char *resp, int cap)
+int route_health(char *resp, int cap)
 {
    snprintf(resp, (size_t)cap, "{\"status\":\"ok\",\"service\":\"aimee-server\"}");
    return 200;
 }
 
-static int route_version(char *resp, int cap)
+int route_version(char *resp, int cap)
 {
    snprintf(resp, (size_t)cap, "{\"version\":\"%s\",\"service\":\"aimee-server\"}", AIMEE_VERSION);
    return 200;
 }
 
-static int route_capabilities(char *resp, int cap)
+int route_capabilities(char *resp, int cap)
 {
    /* The resources this HTTP surface currently serves; grows with the API. */
    snprintf(resp, (size_t)cap,
@@ -665,7 +660,7 @@ void server_http_set_models_raw_provider(server_http_models_raw_fn fn)
 
 #define SHTTP_MODELS_MAX 64
 
-static int route_models(char *resp, int cap)
+int route_models(char *resp, int cap)
 {
    /* A raw provider (e.g. the Codex `{models:[…]}` schema) takes precedence; it
     * writes the whole body. <0 means "not handled" → fall through to the list. */
@@ -695,16 +690,16 @@ static int route_models(char *resp, int cap)
 
 /* ── OpenAI completion seam (handlers registered by the server at startup) ── */
 
-static server_http_completion_fn g_chat_handler = NULL;
-static server_http_completion_fn g_completion_handler = NULL;
-static server_http_completion_fn g_embeddings_handler = NULL;
-static server_http_completion_fn g_responses_handler = NULL;
+server_http_completion_fn g_chat_handler = NULL;
+server_http_completion_fn g_completion_handler = NULL;
+server_http_completion_fn g_embeddings_handler = NULL;
+server_http_completion_fn g_responses_handler = NULL;
 static server_http_stream_fn g_chat_stream_handler = NULL;
 static server_http_stream_fn g_completion_stream_handler = NULL;
 static server_http_responses_stream_fn g_responses_stream_handler = NULL;
-static server_http_completion_fn g_messages_handler = NULL;
+server_http_completion_fn g_messages_handler = NULL;
 static server_http_responses_stream_fn g_messages_stream_handler = NULL;
-static server_http_completion_fn g_count_tokens_handler = NULL;
+server_http_completion_fn g_count_tokens_handler = NULL;
 
 void server_http_set_chat_handler(server_http_completion_fn fn)
 {
@@ -757,18 +752,18 @@ void server_http_set_count_tokens_handler(server_http_completion_fn fn)
 }
 
 /* Native-resource providers/handlers (registered by server_native_register). */
-static server_http_json_provider g_rules_provider = NULL;
-static server_http_json_provider g_dashboard_memory_provider = NULL;
-static server_http_json_provider g_kb_status_provider = NULL;
-static server_http_json_provider g_agents_provider = NULL;
-static server_http_json_provider g_roadmap_provider = NULL;
-static server_http_json_provider g_curiosity_provider = NULL;
-static server_http_json_provider g_notes_list_provider = NULL;
-static server_http_json_provider g_dashboard_reminders_provider = NULL;
-static server_http_completion_fn g_kb_search_handler = NULL;
-static server_http_completion_fn g_memory_recall_handler = NULL;
-static server_http_completion_fn g_notes_search_handler = NULL;
-static server_http_completion_fn g_runs_handler = NULL;
+server_http_json_provider g_rules_provider = NULL;
+server_http_json_provider g_dashboard_memory_provider = NULL;
+server_http_json_provider g_kb_status_provider = NULL;
+server_http_json_provider g_agents_provider = NULL;
+server_http_json_provider g_roadmap_provider = NULL;
+server_http_json_provider g_curiosity_provider = NULL;
+server_http_json_provider g_notes_list_provider = NULL;
+server_http_json_provider g_dashboard_reminders_provider = NULL;
+server_http_completion_fn g_kb_search_handler = NULL;
+server_http_completion_fn g_memory_recall_handler = NULL;
+server_http_completion_fn g_notes_search_handler = NULL;
+server_http_completion_fn g_runs_handler = NULL;
 
 void server_http_set_rules_provider(server_http_json_provider fn)
 {
@@ -833,7 +828,7 @@ void server_http_set_runs_handler(server_http_completion_fn fn)
 /* GET /v1/runs/{id}: return the run record (404 when unknown). The snapshot
  * reflects live status transitions (queued -> in_progress -> terminal) as the
  * background worker publishes them. */
-static int route_runs_get(const char *id, char *resp, int cap)
+int route_runs_get(const char *id, char *resp, int cap)
 {
    if (!id || !id[0])
       return err_json(resp, cap, 400, "missing run id");
@@ -846,7 +841,7 @@ static int route_runs_get(const char *id, char *resp, int cap)
  * cancel flag (a no-op once the run is already terminal); the background worker
  * observes it at its next step boundary and finalizes the run as "cancelled".
  * Returns the current run snapshot, or 404 when unknown. */
-static int route_runs_stop(const char *id, char *resp, int cap)
+int route_runs_stop(const char *id, char *resp, int cap)
 {
    if (!id || !id[0])
       return err_json(resp, cap, 400, "missing run id");
@@ -861,7 +856,7 @@ static int route_runs_stop(const char *id, char *resp, int cap)
 
 /* Dispatch a native POST body to its handler; 503 (generic JSON error) when no
  * handler is wired in (e.g. unit tests, or kb_client not linked). */
-static int route_native_post(server_http_completion_fn fn, const char *body, char *resp, int cap,
+int route_native_post(server_http_completion_fn fn, const char *body, char *resp, int cap,
                              const char *unavailable_msg)
 {
    if (!fn)
@@ -872,7 +867,7 @@ static int route_native_post(server_http_completion_fn fn, const char *body, cha
 /* GET a native resource whose provider returns a heap JSON body (emitted +
  * freed here). 503 when unwired, 502 when the backend (aimee-kb) is
  * unreachable. `what` names the resource for the error messages. */
-static int route_json_provider(server_http_json_provider fn, char *resp, int cap, const char *what)
+int route_json_provider(server_http_json_provider fn, char *resp, int cap, const char *what)
 {
    if (!fn)
    {
@@ -894,7 +889,7 @@ static int route_json_provider(server_http_json_provider fn, char *resp, int cap
 
 /* Dispatch a POST /v1/{chat/completions,completions} body to the registered
  * handler. Returns 503 (OpenAI-shaped) when no handler is wired in. */
-static int route_completion(server_http_completion_fn fn, const char *body, char *resp, int cap)
+int route_completion(server_http_completion_fn fn, const char *body, char *resp, int cap)
 {
    if (!fn)
    {
@@ -918,14 +913,14 @@ static int route_completion(server_http_completion_fn fn, const char *body, char
  * this synchronously on that thread (the async dispatch-op path copies it into
  * its job before the worker runs). Defaults to CAPS_READ_ONLY so any direct
  * caller (e.g. unit tests) gets the conservative, read-only surface. */
-static _Thread_local uint32_t g_rpc_conn_caps = CAPS_READ_ONLY;
+_Thread_local uint32_t g_rpc_conn_caps = CAPS_READ_ONLY;
 
 /* Dispatch an NDJSON {method,params} body through server_dispatch() over a
  * socketpair loopback and capture the response into resp. The write end is
  * non-blocking so an oversize response can never hang the server thread; if the
  * response is truncated it fails to parse and we return an error rather than a
  * partial body. Returns an HTTP status; resp holds the JSON response body. */
-static int loopback_rpc(const char *body, int body_len, char *resp, int resp_cap,
+int loopback_rpc(const char *body, int body_len, char *resp, int resp_cap,
                         uint32_t conn_caps)
 {
    int sp[2];
@@ -978,7 +973,6 @@ static int loopback_rpc(const char *body, int body_len, char *resp, int resp_cap
    return 200;
 }
 
-#include "server_http_routes.inc"
 
 int server_http_route(const char *method, const char *path, const char *body, int body_len,
                       char *resp, int resp_cap)
@@ -1010,7 +1004,7 @@ const char *server_http_default_path(void)
 /* Write the whole buffer. Returns the bytes written, or -1 on a write error
  * (used by the live SSE path to detect a client disconnect). Existing callers
  * ignore the return value. */
-static int write_all_fd(int fd, const char *buf, int len)
+int write_all_fd(int fd, const char *buf, int len)
 {
    /* Routes through the conn-io shim: over the fd's SSL if one is registered
     * (native TLS), else raw write. With nothing registered this is byte-identical
@@ -1021,7 +1015,6 @@ static int write_all_fd(int fd, const char *buf, int len)
 /* Buffered HTTP response writers (request_id_header, retrieval_event_header,
  * send_response, send_rate_limited) live in this textual include to keep this
  * file under the per-file line cap. Included here, before their first use. */
-#include "server_http_response.inc"
 
 /* ── SSE streaming for /v1/chat/completions ─────────────────────────────── */
 
@@ -1037,7 +1030,7 @@ static void sse_emit(void *ctx, const char *frame_json)
 }
 
 /* Write the SSE response headers (echoing X-Request-ID when present). */
-static void write_sse_headers(int fd, const char *request_id)
+void write_sse_headers(int fd, const char *request_id)
 {
    char rid[96];
    request_id_header(rid, sizeof(rid), request_id);
@@ -1262,7 +1255,6 @@ static void handle_run_events(int fd, const char *id, const char *request_id)
  * the session has no live presence. */
 /* handle_session_events lives in server_http_sse.inc (textual include) to keep
  * this file under the 2000-line cap; it shares this TU's static SSE helpers. */
-#include "server_http_sse.inc"
 
 /* SSE event streams (handle_session_events / handle_run_events) are long-lived:
  * running them inline in handle_conn would block the single listener thread for
@@ -1379,7 +1371,7 @@ int http_header(const char *buf, const char *name, char *out, size_t n)
    return 0;
 }
 
-static void handle_conn(int fd, int is_tcp)
+void handle_conn(int fd, int is_tcp)
 {
    char buf[SHTTP_READ_MAX];
    int total = 0;
@@ -1759,17 +1751,9 @@ static void handle_conn(int fd, int is_tcp)
  * chains (same reason the listener stack is 32 MB). A live-connection cap bounds
  * thread/fd use; over the cap the connection is handled inline by the accept
  * thread (degrades to serial under overload, never dropped). */
-static atomic_int g_conn_live = 0;
-#define CONN_LIVE_MAX 64
+atomic_int g_conn_live = 0;
 
-typedef struct
-{
-   int fd;
-   int is_tcp;
-   int is_tls;
-} conn_job_t;
 
-#include "server_http_conn_worker.inc"
 
 /* Single accept loop over both listeners: poll the UDS (and the TCP fd when
  * bound), accept whichever is ready, and hand each connection to a per-

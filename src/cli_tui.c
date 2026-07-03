@@ -1,4 +1,5 @@
 /* cli_tui.c: built-in terminal UI for aimee's default chat command */
+#include "cli_tui_opencode_internal.h"
 #include "aimee_home.h"
 #include "cli_client.h"
 #include "cli_agent_keys.h"
@@ -34,14 +35,12 @@
 #include <termios.h>
 #endif
 
-#define CLI_TUI_PATH_MAX                    4096
 #define CLI_TUI_MOUSE_SCROLL_LINES          3
 #define CLI_TUI_COMPOSER_PAD_TOP            1
 #define CLI_TUI_COMPOSER_PAD_BOTTOM         1
 #define BUILTIN_CHAT_STREAM_IDLE_TIMEOUT_MS -1
 #define BUILTIN_CHAT_SEND_OK                0
 #define BUILTIN_CHAT_SEND_ERROR             1
-#define BUILTIN_CHAT_SEND_TRANSPORT_ERROR   2
 /* Read all of stdin into a buffer. Returns malloc'd string, caller frees. */
 static char *read_stdin(void)
 {
@@ -60,13 +59,6 @@ static char *read_stdin(void)
    buf[len] = '\0';
    return buf;
 }
-typedef struct
-{
-   int (*should_abort)(void *userdata);
-   void (*set_stream_fd)(int fd, void *userdata);
-   void *userdata;
-   int aborted;
-} builtin_chat_stream_control_t;
 
 typedef struct
 {
@@ -87,7 +79,7 @@ typedef struct
    int saw_error;
 } builtin_chat_stream_t;
 
-static int append_text(char **buf, size_t *len, size_t *cap, const char *text)
+int append_text(char **buf, size_t *len, size_t *cap, const char *text)
 {
    if (!buf || !len || !cap || !text)
       return -1;
@@ -287,11 +279,10 @@ static void chat_stream_finish(builtin_chat_stream_t *st)
    }
 }
 
-#include "cli_tui_misc.inc"
 static void chat_detect_model(const char *provider, const char *model, char *out, size_t out_len);
 static void chat_detect_effort(const char *provider, char *out, size_t out_len);
 #ifdef AIMEE_POSIX /* defined and used only by the POSIX-only OpenCode TUI */
-static void chat_format_aimee_model_label(const char *provider, const char *model,
+void chat_format_aimee_model_label(const char *provider, const char *model,
                                           const char *effort, char *out, size_t out_len);
 #endif
 static int chat_config_read_scalar(const char *key, char *out, size_t out_len);
@@ -316,7 +307,7 @@ static void chat_copy_canonical_model(char *out, size_t out_len, const char *mod
 }
 
 #ifdef AIMEE_POSIX /* only the OpenCode TUI (POSIX-only) uses this label helper */
-static void chat_format_aimee_model_label(const char *provider, const char *model,
+void chat_format_aimee_model_label(const char *provider, const char *model,
                                           const char *effort, char *out, size_t out_len)
 {
    const char *p = provider && provider[0] ? provider : "primary";
@@ -328,14 +319,15 @@ static void chat_format_aimee_model_label(const char *provider, const char *mode
 }
 #endif
 
-static int
-builtin_chat_send_ex(const char *sock, const char *provider_session_id,
-                     const char *aimee_session_id, const char *message, char **reply_out,
-                     char *provider_session_out, size_t provider_session_out_len, FILE *out,
-                     int render_markdown, void (*text_cb)(const char *text, void *userdata),
-                     void (*event_cb)(const char *event, void *userdata),
-                     void (*tool_cb)(const char *phase, const char *tool_name, void *userdata),
-                     void *text_cb_data, builtin_chat_stream_control_t *control)
+static int builtin_chat_send_ex(const char *sock, const char *provider_session_id,
+                                const char *aimee_session_id, const char *message, char **reply_out,
+                                char *provider_session_out, size_t provider_session_out_len,
+                                FILE *out, int render_markdown,
+                                void (*text_cb)(const char *text, void *userdata),
+                                void (*event_cb)(const char *event, void *userdata),
+                                void (*tool_cb)(const char *phase, const char *tool_name,
+                                                void *userdata),
+                                void *text_cb_data, builtin_chat_stream_control_t *control)
 {
    if (reply_out)
       *reply_out = NULL;
@@ -471,7 +463,7 @@ static int builtin_chat_send(const char *sock, const char *provider_session_id,
  * unified-presence turn arbitration. Best-effort: returns 1 and writes the
  * minted attach id on success, 0 on any failure (the chat then proceeds
  * unarbitrated). */
-static int cli_chat_presence_attach(const char *sock, const char *session_id, const char *surface,
+int cli_chat_presence_attach(const char *sock, const char *session_id, const char *surface,
                                     char *out_attach, size_t out_n)
 {
    (void)sock; /* presence attach is a co-located /v1 call */
@@ -502,7 +494,7 @@ static int cli_chat_presence_attach(const char *sock, const char *session_id, co
 
 /* Detach a "cli" surface previously registered by cli_chat_presence_attach.
  * Best-effort; ignores failures. */
-static void cli_chat_presence_detach(const char *sock, const char *session_id,
+void cli_chat_presence_detach(const char *sock, const char *session_id,
                                      const char *attach_id)
 {
    (void)sock; /* presence detach is a co-located /v1 call */
@@ -569,7 +561,7 @@ char *cli_chat_stream(const char *sock, const char *session_id, const char *mess
 }
 
 #ifdef AIMEE_POSIX /* only the OpenCode TUI (POSIX-only) drives streaming control */
-static int builtin_chat_send_streaming_control(const char *sock, const char *provider_session_id,
+int builtin_chat_send_streaming_control(const char *sock, const char *provider_session_id,
                                                const char *aimee_session_id, const char *message,
                                                char **reply_out, char *provider_session_out,
                                                size_t provider_session_out_len,
@@ -584,7 +576,6 @@ static int builtin_chat_send_streaming_control(const char *sock, const char *pro
 }
 #endif
 
-#include "cli_tui_opencode_v2.inc"
 
 static int chat_is_codex_provider(const char *provider)
 {
