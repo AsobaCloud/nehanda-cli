@@ -45,7 +45,7 @@ undocumented, or a documented file no longer calls the sanitizer.
 
 | File | Render surface | Kind(s) | Slice |
 |------|----------------|---------|-------|
-| `src/kb/http/kb_http_code.c` | `GET /v1/code/graph/audit` findings — cycle file paths, orphan/bridge/unverified symbol labels, community names rendered into the agent-visible audit JSON. | `SANITIZE_FILE_PATH`, `SANITIZE_SYMBOL_LABEL`, `SANITIZE_COMMUNITY_NAME` | S1 |
+| `src/kb/http/kb_http_code_graphfb.c` | `GET /v1/code/graph/audit` findings (cycle file paths, orphan/bridge/unverified symbol labels, community names) **and** `GET /v1/code/graph/diff` entries (added/removed node keys, edge endpoints, cycle-member file paths) rendered into the agent-visible JSON. | `SANITIZE_FILE_PATH`, `SANITIZE_SYMBOL_LABEL`, `SANITIZE_COMMUNITY_NAME` | S1, S2 |
 
 > The audit route renders corpus-derived node/file/community strings; each goes
 > through `audit_safe()` → `sanitize_for_prompt` (fail-closed to `[unsafe-label]`

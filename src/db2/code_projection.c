@@ -43,15 +43,19 @@ int64_t db2_code_projection_generation_create(const char *project)
    void *conn = db2_conn();
    if (!conn)
       return -1;
+   /* Stamp the aimee build that produced this generation (graph-feedback S2), so
+    * the snapshot-diff route can refuse to compare across extractor versions. */
    static const char *sql =
-       "INSERT INTO code_projection_generations (project, state, started_at)"
-       " VALUES (?1, 'pending', to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'))"
+       "INSERT INTO code_projection_generations (project, state, started_at,"
+       " extractor_version, pipeline_version)"
+       " VALUES (?1, 'pending', to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'), ?2, ?2)"
        " RETURNING id";
    char err[CP_ERRBUF] = "";
    aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
    if (!st)
       return -1;
    aimee_pg_bind_text(st, "?1", project);
+   aimee_pg_bind_text(st, "?2", AIMEE_VERSION);
    int64_t id = -1;
    if (aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
       id = aimee_pg_column_int64(st, 0);
@@ -324,6 +328,73 @@ int db2_code_projection_communities_list(int64_t gen_id, code_projection_communi
       const char *comm = aimee_pg_column_text(st, 1);
       snprintf(out[n].node_id, sizeof(out[n].node_id), "%s", node ? node : "");
       snprintf(out[n].community_id, sizeof(out[n].community_id), "%s", comm ? comm : "");
+      n++;
+   }
+   aimee_pg_finalize(st);
+   return n;
+}
+
+int db2_code_projection_generation_meta(int64_t gen_id, code_projection_generation_meta_t *out)
+{
+   if (gen_id <= 0 || !out)
+      return -1;
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+   static const char *sql =
+       "SELECT id, project, state, source_hash, extractor_version, pipeline_version"
+       " FROM code_projection_generations WHERE id = ?1";
+   char err[CP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_int64(st, "?1", gen_id);
+   int rc = aimee_pg_step(st, err, sizeof(err));
+   if (rc != AIMEE_PG_ROW)
+   {
+      aimee_pg_finalize(st);
+      return rc == AIMEE_PG_DONE ? 1 : -1; /* 1 = no such generation */
+   }
+   memset(out, 0, sizeof(*out));
+   out->id = aimee_pg_column_int64(st, 0);
+   const char *p = aimee_pg_column_text(st, 1);
+   const char *s = aimee_pg_column_text(st, 2);
+   const char *sh = aimee_pg_column_text(st, 3);
+   const char *ev = aimee_pg_column_text(st, 4);
+   const char *pv = aimee_pg_column_text(st, 5);
+   snprintf(out->project, sizeof(out->project), "%s", p ? p : "");
+   snprintf(out->state, sizeof(out->state), "%s", s ? s : "");
+   snprintf(out->source_hash, sizeof(out->source_hash), "%s", sh ? sh : "");
+   snprintf(out->extractor_version, sizeof(out->extractor_version), "%s", ev ? ev : "");
+   snprintf(out->pipeline_version, sizeof(out->pipeline_version), "%s", pv ? pv : "");
+   aimee_pg_finalize(st);
+   return 0;
+}
+
+int db2_code_projection_generations_list(const char *project, code_projection_generation_row_t *out,
+                                         int max)
+{
+   if (!project || !*project || !out || max <= 0)
+      return -1;
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+   static const char *sql = "SELECT id, state, started_at FROM code_projection_generations"
+                            " WHERE project = ?1 ORDER BY id DESC LIMIT ?2";
+   char err[CP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_text(st, "?1", project);
+   aimee_pg_bind_int64(st, "?2", max);
+   int n = 0;
+   while (n < max && aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+   {
+      out[n].id = aimee_pg_column_int64(st, 0);
+      const char *s = aimee_pg_column_text(st, 1);
+      const char *t = aimee_pg_column_text(st, 2);
+      snprintf(out[n].state, sizeof(out[n].state), "%s", s ? s : "");
+      snprintf(out[n].started_at, sizeof(out[n].started_at), "%s", t ? t : "");
       n++;
    }
    aimee_pg_finalize(st);
