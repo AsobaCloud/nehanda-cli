@@ -151,7 +151,7 @@ int handle_post_docs(const char *body, int body_len, char *out_buf, int out_cap)
    }
 
    char content_hash[KB_DOC_HASH_HEX_LEN + 1];
-   kb_doc_content_hash(file_content, file_len, content_hash);
+   kb_doc_content_hash_for_path(filename, file_content, file_len, content_hash);
 
    /* structured-PDF routing (Phase 1b): when enabled, a `.pdf` upload is owned by the
     * structured extractor (kb_documents + kb_doc_regions), NOT the legacy flat pdftotext
