@@ -455,7 +455,8 @@ TS_VENDOR_OBJS = $(OBJDIR)/vendor/ts_runtime.o \
                  $(OBJDIR)/vendor/ts_kotlin.o $(OBJDIR)/vendor/ts_kotlin_scan.o \
                  $(OBJDIR)/vendor/ts_dart.o $(OBJDIR)/vendor/ts_dart_scan.o \
                  $(OBJDIR)/vendor/ts_css.o $(OBJDIR)/vendor/ts_css_scan.o \
-                 $(OBJDIR)/vendor/ts_scala.o $(OBJDIR)/vendor/ts_scala_scan.o
+                 $(OBJDIR)/vendor/ts_scala.o $(OBJDIR)/vendor/ts_scala_scan.o \
+                 $(OBJDIR)/vendor/ts_groovy.o
 $(OBJDIR)/kb/code_treesitter.o: C_FLAGS += -DAIMEE_TREESITTER -Ivendor/tree-sitter/lib/include
 # code_treesitter.c includes tree_sitter/api.h, which the fetch produces — so on a cold
 # checkout the fetch must run before this object compiles. Order-only: trigger the fetch
@@ -481,7 +482,8 @@ vendor/tree-sitter-swift/src/parser.c vendor/tree-sitter-swift/src/scanner.c \
 vendor/tree-sitter-kotlin/src/parser.c vendor/tree-sitter-kotlin/src/scanner.c \
 vendor/tree-sitter-dart/src/parser.c vendor/tree-sitter-dart/src/scanner.c \
 vendor/tree-sitter-css/src/parser.c vendor/tree-sitter-css/src/scanner.c \
-vendor/tree-sitter-scala/src/parser.c vendor/tree-sitter-scala/src/scanner.c:
+vendor/tree-sitter-scala/src/parser.c vendor/tree-sitter-scala/src/scanner.c \
+vendor/tree-sitter-groovy/src/parser.c:
 	../scripts/fetch-treesitter.sh
 $(OBJDIR)/vendor/ts_runtime.o: vendor/tree-sitter/lib/src/lib.c
 	@mkdir -p $(OBJDIR)/vendor
@@ -527,6 +529,7 @@ $(eval $(call ts_obj,css,tree-sitter-css/src,parser.c))
 $(eval $(call ts_obj,css_scan,tree-sitter-css/src,scanner.c))
 $(eval $(call ts_obj,scala,tree-sitter-scala/src,parser.c))
 $(eval $(call ts_obj,scala_scan,tree-sitter-scala/src,scanner.c))
+$(eval $(call ts_obj,groovy,tree-sitter-groovy/src,parser.c))
 endif
 
 # --- Gateway ---

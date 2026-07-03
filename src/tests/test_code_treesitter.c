@@ -54,10 +54,10 @@ int main(void)
    printf("test_code_treesitter:\n");
 
    /* availability gates the dispatch (a representative extension per language). */
-   const char *avail[] = {".c",    ".h",    ".cpp", ".cc",    ".hpp", ".cs",   ".py",
-                          ".go",   ".js",   ".mjs", ".jsx",   ".ts",  ".tsx",  ".rs",
-                          ".java", ".rb",   ".php", ".lua",   ".sh",  ".bash", ".swift",
-                          ".kt",   ".dart", ".css", ".scala", ".sc"};
+   const char *avail[] = {".c",    ".h",    ".cpp", ".cc",    ".hpp", ".cs",     ".py",
+                          ".go",   ".js",   ".mjs", ".jsx",   ".ts",  ".tsx",    ".rs",
+                          ".java", ".rb",   ".php", ".lua",   ".sh",  ".bash",   ".swift",
+                          ".kt",   ".dart", ".css", ".scala", ".sc",  ".groovy", ".gradle"};
    for (size_t i = 0; i < sizeof(avail) / sizeof(avail[0]); i++)
       assert(code_treesitter_available(avail[i]));
    assert(!code_treesitter_available(".txt"));
@@ -239,6 +239,15 @@ int main(void)
    want(".scala", "type Id = Int\n", "Id", "type");                     /* type_definition */
    want(".sc", "def top(): Int = 1\n", "top", "function");              /* .sc script member */
 
+   /* --- Groovy (name in the `function` field; class methods live in a closure
+    * body; .gradle build files share the grammar) --- */
+   const char *groovy = "class Build {\n  def compile() { javac() }\n}\n"
+                        "def task() { println 'hi' }\n";
+   want(".groovy", groovy, "Build", "type");
+   want(".groovy", groovy, "compile", "function"); /* method inside a class closure */
+   want(".groovy", groovy, "task", "function");    /* top-level def */
+   want(".gradle", "def clean() {}\n", "clean", "function");
+
    /* --- nested members: methods inside a type body are surfaced (the walk descends type
     * bodies but never function bodies), across the OO languages. --- */
    want(".cpp", "class C { void m(){} };\n", "m", "function");
@@ -274,6 +283,7 @@ int main(void)
    wantcall(".c", "void f(){ obj->m(); }\n", "f", "m"); /* method call -> last id */
    wantcall(".py", "def f():\n    g()\n    obj.m()\n", "f", "g");
    wantcall(".scala", "object M { def f(): Unit = { g() } }\n", "f", "g");
+   wantcall(".groovy", "def f() { g() }\n", "f", "g");
    wantcall(".py", "def f():\n    obj.m()\n", "f", "m");
    wantcall(".js", "function f(){ g(); a.b.c(); }\n", "f", "g");
    wantcall(".js", "function f(){ a.b.c(); }\n", "f", "c"); /* chained -> last id */

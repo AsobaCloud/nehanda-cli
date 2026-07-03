@@ -39,6 +39,7 @@ const TSLanguage *tree_sitter_kotlin(void);
 const TSLanguage *tree_sitter_dart(void);
 const TSLanguage *tree_sitter_css(void);
 const TSLanguage *tree_sitter_scala(void);
+const TSLanguage *tree_sitter_groovy(void);
 
 typedef enum
 {
@@ -59,7 +60,8 @@ typedef enum
    TSL_KOTLIN,
    TSL_DART,
    TSL_CSS,
-   TSL_SCALA
+   TSL_SCALA,
+   TSL_GROOVY
 } ts_lang_t;
 
 static const TSLanguage *ts_language_for_ext(const char *ext, ts_lang_t *which)
@@ -105,6 +107,8 @@ static const TSLanguage *ts_language_for_ext(const char *ext, ts_lang_t *which)
        {".css", TSL_CSS, tree_sitter_css},
        {".scala", TSL_SCALA, tree_sitter_scala},
        {".sc", TSL_SCALA, tree_sitter_scala},
+       {".groovy", TSL_GROOVY, tree_sitter_groovy},
+       {".gradle", TSL_GROOVY, tree_sitter_groovy},
    };
    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++)
       if (strcmp(ext, map[i].ext) == 0)
@@ -532,6 +536,31 @@ static int classify_scala(TSNode node, const char **kind, TSNode *name_root)
    return 0;
 }
 
+/* Groovy: function_definition/declaration → function, but the name is in the
+ * `function` field (a preceding `type` field would fool name_node). class_definition
+ * → type (its name is a plain `name` field). Class members live in a `closure` body
+ * (descended below). */
+static int classify_groovy(TSNode node, const char **kind, TSNode *name_root)
+{
+   const char *t = ts_node_type(node);
+   if (strcmp(t, "function_definition") == 0 || strcmp(t, "function_declaration") == 0)
+   {
+      TSNode fn = ts_node_child_by_field_name(node, "function", 8);
+      if (ts_node_is_null(fn))
+         return 0;
+      *name_root = fn;
+      *kind = "function";
+      return 1;
+   }
+   if (strcmp(t, "class_definition") == 0)
+   {
+      *kind = "type";
+      *name_root = name_node(node);
+      return 1;
+   }
+   return 0;
+}
+
 static int classify(ts_lang_t lang, TSNode node, const char **kind, TSNode *name_root)
 {
    switch (lang)
@@ -571,6 +600,8 @@ static int classify(ts_lang_t lang, TSNode node, const char **kind, TSNode *name
       return classify_css(node, kind, name_root);
    case TSL_SCALA:
       return classify_scala(node, kind, name_root);
+   case TSL_GROOVY:
+      return classify_groovy(node, kind, name_root);
    }
    return 0;
 }
@@ -603,7 +634,9 @@ static int is_descendable(const char *t)
        "record_declaration", "mixin_declaration", "extension_declaration", "enum_declaration",
        "enum_specifier", "enum_item",
        /* Scala: object/trait bodies + the shared template_body that holds members */
-       "object_definition", "trait_definition", "template_body", "enum_definition", NULL};
+       "object_definition", "trait_definition", "template_body", "enum_definition",
+       /* Groovy: class body is a closure */
+       "closure", NULL};
    for (int i = 0; set[i]; i++)
       if (strcmp(t, set[i]) == 0)
          return 1;
@@ -711,8 +744,9 @@ static int is_call_node(const char *t)
 {
    return strcmp(t, "call_expression") == 0 || strcmp(t, "call") == 0 ||
           strcmp(t, "method_invocation") == 0 || strcmp(t, "invocation_expression") == 0 ||
-          strcmp(t, "function_call") == 0 || strcmp(t, "function_call_expression") == 0 ||
-          strcmp(t, "member_call_expression") == 0 || strcmp(t, "scoped_call_expression") == 0 ||
+          strcmp(t, "function_call") == 0 || strcmp(t, "juxt_function_call") == 0 ||
+          strcmp(t, "function_call_expression") == 0 || strcmp(t, "member_call_expression") == 0 ||
+          strcmp(t, "scoped_call_expression") == 0 ||
           strcmp(t, "nullsafe_member_call_expression") == 0 || strcmp(t, "macro_invocation") == 0 ||
           strcmp(t, "object_creation_expression") == 0;
 }
