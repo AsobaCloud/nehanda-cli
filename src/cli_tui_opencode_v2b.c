@@ -1,6 +1,7 @@
 /* cli_tui_opencode_v2b.c (split half 2): split from cli_tui.c into a real translation unit
  * (was cli_tui_opencode_v2.inc, textually included only to stay under the
  * line-check ceiling). Cross-TU declarations live in the module header. */
+#ifdef AIMEE_POSIX /* whole opencode module is POSIX-only */
 #include "cli_tui_opencode_internal.h"
 #include "aimee_home.h"
 #include "cli_client.h"
@@ -34,8 +35,6 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <termios.h>
-
-#ifdef AIMEE_POSIX
 
 static int opencode_v2_should_abort(void *userdata)
 {
