@@ -13,6 +13,7 @@ typedef struct
    double score;
    int structural_weight;
    int signal_hits;
+   double trust; /* §3 earned trust; a TIE-BREAK only (0 when no lessons/lookup) */
 } rrf_acc_t;
 
 /* Sort key: score desc; then structural_weight desc; then id asc. Scores are
@@ -34,10 +35,16 @@ static int rrf_cmp(const void *a, const void *b)
    if (x->structural_weight != y->structural_weight)
       return (x->structural_weight < y->structural_weight) -
              (x->structural_weight > y->structural_weight);
+   /* §3 earned-trust tie-break: only reached when score AND structural_weight are
+    * exactly equal, so it can never move a candidate across a real score gap.
+    * Higher trust first. Exact double compare keeps qsort's strict-weak ordering. */
+   if (x->trust != y->trust)
+      return x->trust < y->trust ? 1 : -1;
    return strcmp(x->id, y->id);
 }
 
-int kb_rrf_fuse(const kb_rrf_signal_t *signals, int n, double k, kb_rrf_result_t *out, int max)
+int kb_rrf_fuse_trust(const kb_rrf_signal_t *signals, int n, double k, const kb_rrf_trust_t *trust,
+                      int n_trust, kb_rrf_result_t *out, int max)
 {
    /* isfinite guards: NaN slips through `k <= 0.0` (every NaN comparison is false),
     * which would propagate NaN into out[].score and corrupt the ordering. */
@@ -89,6 +96,7 @@ int kb_rrf_fuse(const kb_rrf_signal_t *signals, int n, double k, kb_rrf_result_t
             acc[found].score = 0.0;
             acc[found].structural_weight = sig->items[i].structural_weight;
             acc[found].signal_hits = 0;
+            acc[found].trust = 0.0;
          }
          acc[found].score += contribution;
          acc[found].signal_hits++;
@@ -96,6 +104,17 @@ int kb_rrf_fuse(const kb_rrf_signal_t *signals, int n, double k, kb_rrf_result_t
             acc[found].structural_weight = sig->items[i].structural_weight;
       }
    }
+
+   /* Attach earned trust (tie-break only). Unordered lookup by id; a candidate
+    * absent from the lessons artifact keeps trust 0. */
+   if (trust && n_trust > 0)
+      for (int j = 0; j < nacc; j++)
+         for (int t = 0; t < n_trust; t++)
+            if (strcmp(acc[j].id, trust[t].id) == 0)
+            {
+               acc[j].trust = trust[t].trust;
+               break;
+            }
 
    qsort(acc, (size_t)nacc, sizeof(*acc), rrf_cmp);
 
@@ -109,4 +128,10 @@ int kb_rrf_fuse(const kb_rrf_signal_t *signals, int n, double k, kb_rrf_result_t
    }
    free(acc);
    return w;
+}
+
+int kb_rrf_fuse(const kb_rrf_signal_t *signals, int n, double k, kb_rrf_result_t *out, int max)
+{
+   /* No trust lookup → the tie-break is inert → byte-identical to pre-§3 behavior. */
+   return kb_rrf_fuse_trust(signals, n, k, NULL, 0, out, max);
 }

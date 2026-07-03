@@ -174,9 +174,56 @@ static void test_bad_args(void)
    printf("  test_bad_args: ok\n");
 }
 
+/* §3 actuation: earned trust breaks a genuine tie (equal fused score + equal
+ * structural_weight) but never overrides a real score gap, and NULL trust is a
+ * no-op (byte-identical to kb_rrf_fuse). */
+static void test_trust_tiebreak(void)
+{
+   /* Cross-ranked signals give x and y an EXACTLY equal fused score:
+    * x = w/(k+1)+w/(k+2), y = w/(k+2)+w/(k+1). structural_weight equal (0). */
+   kb_rrf_item_t a[] = {{"x", 0}, {"y", 0}};
+   kb_rrf_item_t b[] = {{"y", 0}, {"x", 0}};
+   kb_rrf_signal_t sigs[] = {{a, 2, 1.0, "s1"}, {b, 2, 1.0, "s2"}};
+   kb_rrf_result_t out[4];
+
+   /* Without trust, the tie falls through to id asc: x before y. */
+   int n = kb_rrf_fuse(sigs, 2, 60.0, out, 4);
+   assert(n == 2);
+   assert(strcmp(out[0].id, "x") == 0 && strcmp(out[1].id, "y") == 0);
+   assert(out[0].score == out[1].score); /* genuine tie */
+
+   /* Trust y higher than x → y now wins the tie (score gap unchanged). */
+   kb_rrf_trust_t trust[] = {{"x", 0.1}, {"y", 0.9}};
+   int m = kb_rrf_fuse_trust(sigs, 2, 60.0, trust, 2, out, 4);
+   assert(m == 2);
+   assert(strcmp(out[0].id, "y") == 0 && strcmp(out[1].id, "x") == 0);
+
+   /* NULL trust == kb_rrf_fuse (no-op). */
+   kb_rrf_result_t out2[4];
+   int p = kb_rrf_fuse_trust(sigs, 2, 60.0, NULL, 0, out2, 4);
+   assert(p == n);
+   assert(strcmp(out2[0].id, "x") == 0 && strcmp(out2[1].id, "y") == 0);
+   printf("  test_trust_tiebreak: ok\n");
+}
+
+/* Trust must NOT reorder candidates with different scores. */
+static void test_trust_never_overrides_score(void)
+{
+   kb_rrf_item_t s1[] = {{"hi", 0}, {"lo", 0}}; /* hi outranks lo */
+   kb_rrf_signal_t sigs[] = {{s1, 2, 1.0, "s"}};
+   kb_rrf_trust_t trust[] = {{"lo", 9.0}, {"hi", 0.0}}; /* lo very trusted */
+   kb_rrf_result_t out[4];
+   int n = kb_rrf_fuse_trust(sigs, 1, 60.0, trust, 2, out, 4);
+   assert(n == 2);
+   assert(strcmp(out[0].id, "hi") == 0); /* score wins; trust can't lift lo */
+   printf("  test_trust_never_overrides_score: ok\n");
+}
+
 int main(void)
 {
    printf("test_kb_rrf:\n");
+   test_trust_tiebreak();
+   test_trust_never_overrides_score();
    test_single_signal_math();
    test_consensus_beats_single();
    test_weighting();
