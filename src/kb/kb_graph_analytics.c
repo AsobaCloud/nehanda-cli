@@ -1365,3 +1365,478 @@ int kb_graph_cohesion(const kb_graph_edge_t *edges, int n_edges, const kb_graph_
    free(csize);
    return w;
 }
+
+/* ── S2: cross-generation community remap ─────────────────────────────────── */
+
+static int commrow_by_node_cmp(const void *a, const void *b)
+{
+   return strcmp(((const kb_graph_community_t *)a)->node, ((const kb_graph_community_t *)b)->node);
+}
+
+/* Binary-search a node-sorted assignment; returns its community id or NULL. */
+static const char *comm_lookup(const kb_graph_community_t *sorted, int n, const char *node)
+{
+   int lo = 0, hi = n - 1;
+   while (lo <= hi)
+   {
+      int mid = lo + (hi - lo) / 2;
+      int c = strcmp(sorted[mid].node, node);
+      if (c == 0)
+         return sorted[mid].community;
+      if (c < 0)
+         lo = mid + 1;
+      else
+         hi = mid - 1;
+   }
+   return NULL;
+}
+
+/* One (new-community, old-community) co-occurrence for a shared node. */
+typedef struct
+{
+   int new_ci;
+   int old_ci;
+   char node[KB_GRAPH_NODE_MAX];
+} remap_pair_t;
+
+static int remap_pair_cmp(const void *a, const void *b)
+{
+   const remap_pair_t *x = a, *y = b;
+   if (x->new_ci != y->new_ci)
+      return (x->new_ci > y->new_ci) - (x->new_ci < y->new_ci);
+   if (x->old_ci != y->old_ci)
+      return (x->old_ci > y->old_ci) - (x->old_ci < y->old_ci);
+   return strcmp(x->node, y->node);
+}
+
+int kb_graph_community_remap(const kb_graph_community_t *old_comm, int n_old,
+                             const kb_graph_community_t *new_comm, int n_new,
+                             kb_graph_community_t *out, int max)
+{
+   if (!new_comm || n_new < 0 || !out || max <= 0 || n_old < 0 || (!old_comm && n_old > 0))
+      return -1;
+   if (n_new == 0)
+      return 0;
+
+   /* Sorted copy of the old assignment for node -> old-community lookup. */
+   kb_graph_community_t *olds = NULL;
+   if (n_old > 0)
+   {
+      olds = malloc((size_t)n_old * sizeof(*olds));
+      if (!olds)
+         return -1;
+      memcpy(olds, old_comm, (size_t)n_old * sizeof(*olds));
+      qsort(olds, (size_t)n_old, sizeof(*olds), commrow_by_node_cmp);
+   }
+
+   /* Distinct NEW + OLD community ids, lex-sorted → index. */
+   char(*newc)[KB_GRAPH_NODE_MAX] = malloc((size_t)n_new * KB_GRAPH_NODE_MAX);
+   char(*tmp)[KB_GRAPH_NODE_MAX] = malloc((size_t)n_new * KB_GRAPH_NODE_MAX);
+   if (!newc || !tmp)
+   {
+      free(olds);
+      free(newc);
+      free(tmp);
+      return -1;
+   }
+   for (int i = 0; i < n_new; i++)
+      memcpy(tmp[i], new_comm[i].community, KB_GRAPH_NODE_MAX);
+   qsort(tmp, (size_t)n_new, KB_GRAPH_NODE_MAX, comm_str_cmp);
+   int N_new = 0;
+   for (int i = 0; i < n_new; i++)
+      if (N_new == 0 || strcmp(newc[N_new - 1], tmp[i]) != 0)
+         memcpy(newc[N_new++], tmp[i], KB_GRAPH_NODE_MAX);
+
+   int N_old = 0;
+   char(*oldc)[KB_GRAPH_NODE_MAX] = NULL;
+   if (n_old > 0)
+   {
+      oldc = malloc((size_t)n_old * KB_GRAPH_NODE_MAX);
+      char(*otmp)[KB_GRAPH_NODE_MAX] = malloc((size_t)n_old * KB_GRAPH_NODE_MAX);
+      if (!oldc || !otmp)
+      {
+         free(olds);
+         free(newc);
+         free(tmp);
+         free(oldc);
+         free(otmp);
+         return -1;
+      }
+      for (int i = 0; i < n_old; i++)
+         memcpy(otmp[i], old_comm[i].community, KB_GRAPH_NODE_MAX);
+      qsort(otmp, (size_t)n_old, KB_GRAPH_NODE_MAX, comm_str_cmp);
+      for (int i = 0; i < n_old; i++)
+         if (N_old == 0 || strcmp(oldc[N_old - 1], otmp[i]) != 0)
+            memcpy(oldc[N_old++], otmp[i], KB_GRAPH_NODE_MAX);
+      free(otmp);
+   }
+   free(tmp);
+
+   /* Co-occurrence pairs: for each new node that also exists in old, record its
+    * (new community index, old community index). */
+   remap_pair_t *pairs = malloc((size_t)n_new * sizeof(*pairs));
+   if (!pairs)
+   {
+      free(olds);
+      free(newc);
+      free(oldc);
+      return -1;
+   }
+   int np = 0;
+   for (int i = 0; i < n_new; i++)
+   {
+      const char *oc = olds ? comm_lookup(olds, n_old, new_comm[i].node) : NULL;
+      if (!oc)
+         continue;
+      int nci = comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])newc, N_new, new_comm[i].community);
+      int oci = comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])oldc, N_old, oc);
+      if (nci < 0 || oci < 0)
+         continue;
+      pairs[np].new_ci = nci;
+      pairs[np].old_ci = oci;
+      memcpy(pairs[np].node, new_comm[i].node, KB_GRAPH_NODE_MAX);
+      np++;
+   }
+   qsort(pairs, (size_t)np, sizeof(*pairs), remap_pair_cmp);
+
+   /* Per new community: best old (max overlap; tie → lex-min intersection node). */
+   int *best_old = malloc((size_t)N_new * sizeof(int));
+   int *best_cnt = malloc((size_t)N_new * sizeof(int));
+   char(*best_min)[KB_GRAPH_NODE_MAX] = malloc((size_t)N_new * KB_GRAPH_NODE_MAX);
+   if (!best_old || !best_cnt || !best_min)
+   {
+      free(olds);
+      free(newc);
+      free(oldc);
+      free(pairs);
+      free(best_old);
+      free(best_cnt);
+      free(best_min);
+      return -1;
+   }
+   for (int i = 0; i < N_new; i++)
+   {
+      best_old[i] = -1;
+      best_cnt[i] = 0;
+      best_min[i][0] = '\0';
+   }
+   for (int i = 0; i < np;)
+   {
+      int j = i;
+      while (j < np && pairs[j].new_ci == pairs[i].new_ci && pairs[j].old_ci == pairs[i].old_ci)
+         j++;
+      int cnt = j - i;                     /* overlap size for this (new,old) pair */
+      const char *minnode = pairs[i].node; /* pairs sorted by node within the run */
+      int nci = pairs[i].new_ci;
+      if (cnt > best_cnt[nci] || (cnt == best_cnt[nci] && strcmp(minnode, best_min[nci]) < 0))
+      {
+         best_cnt[nci] = cnt;
+         best_old[nci] = pairs[i].old_ci;
+         snprintf(best_min[nci], KB_GRAPH_NODE_MAX, "%s", minnode);
+      }
+      i = j;
+   }
+
+   /* Per old community: the winning new community (max overlap; tie → lex-smaller
+    * new community id, i.e. its own min-member). Only the winner inherits the id. */
+   int *old_winner = malloc((size_t)(N_old > 0 ? N_old : 1) * sizeof(int));
+   int *old_win_cnt = malloc((size_t)(N_old > 0 ? N_old : 1) * sizeof(int));
+   if (!old_winner || !old_win_cnt)
+   {
+      free(olds);
+      free(newc);
+      free(oldc);
+      free(pairs);
+      free(best_old);
+      free(best_cnt);
+      free(best_min);
+      free(old_winner);
+      free(old_win_cnt);
+      return -1;
+   }
+   for (int i = 0; i < N_old; i++)
+   {
+      old_winner[i] = -1;
+      old_win_cnt[i] = 0;
+   }
+   for (int nci = 0; nci < N_new; nci++)
+   {
+      int oci = best_old[nci];
+      if (oci < 0)
+         continue;
+      int cur = old_winner[oci];
+      if (cur < 0 || best_cnt[nci] > old_win_cnt[oci] ||
+          (best_cnt[nci] == old_win_cnt[oci] && strcmp(newc[nci], newc[cur]) < 0))
+      {
+         old_winner[oci] = nci;
+         old_win_cnt[oci] = best_cnt[nci];
+      }
+   }
+
+   /* Map each new community id -> stable id, then write the remapped assignment. */
+   int written = 0;
+   for (int i = 0; i < n_new && written < max; i++)
+   {
+      int nci = comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])newc, N_new, new_comm[i].community);
+      const char *mapped = new_comm[i].community; /* default: keep fresh (own min-member) */
+      if (nci >= 0 && best_old[nci] >= 0 && old_winner[best_old[nci]] == nci)
+         mapped = oldc[best_old[nci]]; /* inherit the old community's id */
+      snprintf(out[written].node, sizeof(out[written].node), "%s", new_comm[i].node);
+      snprintf(out[written].community, sizeof(out[written].community), "%s", mapped);
+      written++;
+   }
+
+   free(olds);
+   free(newc);
+   free(oldc);
+   free(pairs);
+   free(best_old);
+   free(best_cnt);
+   free(best_min);
+   free(old_winner);
+   free(old_win_cnt);
+   return written;
+}
+
+/* ── S2: snapshot diff ─────────────────────────────────────────────────────── */
+
+static int reledge_cmp(const void *a, const void *b)
+{
+   const kb_graph_reledge_t *x = a, *y = b;
+   int c = strcmp(x->source, y->source);
+   if (c)
+      return c;
+   c = strcmp(x->relation, y->relation);
+   if (c)
+      return c;
+   return strcmp(x->target, y->target);
+}
+
+static int diff_entry_cmp(const void *a, const void *b)
+{
+   const kb_graph_diff_entry_t *x = a, *y = b;
+   if (x->kind != y->kind)
+      return (x->kind > y->kind) - (x->kind < y->kind);
+   int c = strcmp(x->a, y->a);
+   if (c)
+      return c;
+   c = strcmp(x->b, y->b);
+   if (c)
+      return c;
+   return strcmp(x->relation, y->relation);
+}
+
+/* Build a lex-sorted distinct node-key array from reledge endpoints; returns the
+ * malloc'd array (caller frees) with *count set, or NULL on OOM/empty. */
+static char (*diff_node_set(const kb_graph_reledge_t *e, int n, int *count))[KB_GRAPH_NODE_MAX]
+{
+   *count = 0;
+   if (n <= 0)
+      return NULL;
+   char(*raw)[KB_GRAPH_NODE_MAX] = malloc((size_t)n * 2 * KB_GRAPH_NODE_MAX);
+   if (!raw)
+      return NULL;
+   int nr = 0;
+   for (int i = 0; i < n; i++)
+   {
+      if (e[i].source[0])
+         memcpy(raw[nr++], e[i].source, KB_GRAPH_NODE_MAX);
+      if (e[i].target[0])
+         memcpy(raw[nr++], e[i].target, KB_GRAPH_NODE_MAX);
+   }
+   qsort(raw, (size_t)nr, KB_GRAPH_NODE_MAX, comm_str_cmp);
+   int nu = 0;
+   for (int i = 0; i < nr; i++)
+      if (nu == 0 || strcmp(raw[nu - 1], raw[i]) != 0)
+         memcpy(raw[nu++], raw[i], KB_GRAPH_NODE_MAX);
+   *count = nu;
+   return raw;
+}
+
+/* Undirected degree of `node` over reledges (incident edge count). */
+static int diff_degree(const kb_graph_reledge_t *e, int n, const char *node)
+{
+   int d = 0;
+   for (int i = 0; i < n; i++)
+      if ((e[i].source[0] && strcmp(e[i].source, node) == 0) ||
+          (e[i].target[0] && strcmp(e[i].target, node) == 0))
+         d++;
+   return d;
+}
+
+int kb_graph_diff(const kb_graph_reledge_t *old_edges, int n_old_edges,
+                  const kb_graph_community_t *old_comm, int n_old_comm,
+                  const kb_graph_reledge_t *new_edges, int n_new_edges,
+                  const kb_graph_community_t *new_comm, int n_new_comm, kb_graph_diff_entry_t *out,
+                  int max, int *truncated)
+{
+   if (truncated)
+      *truncated = 0;
+   if (n_old_edges < 0 || n_new_edges < 0 || !out || max <= 0)
+      return -1;
+   if ((n_old_edges > 0 && !old_edges) || (n_new_edges > 0 && !new_edges))
+      return -1;
+
+   int nout = 0;
+#define DIFF_EMIT(k, aa, bb, rel)                                                                  \
+   do                                                                                              \
+   {                                                                                               \
+      if (nout < max)                                                                              \
+      {                                                                                            \
+         out[nout].kind = (k);                                                                     \
+         snprintf(out[nout].a, KB_GRAPH_NODE_MAX, "%s", (aa));                                     \
+         snprintf(out[nout].b, KB_GRAPH_NODE_MAX, "%s", (bb));                                     \
+         snprintf(out[nout].relation, sizeof(out[nout].relation), "%s", (rel));                    \
+         nout++;                                                                                   \
+      }                                                                                            \
+      else if (truncated)                                                                          \
+         *truncated = 1;                                                                           \
+   } while (0)
+
+   /* 1. Node add/remove (keys are generation-independent, so set difference). */
+   int no = 0, nn = 0;
+   char(*oldn)[KB_GRAPH_NODE_MAX] = diff_node_set(old_edges, n_old_edges, &no);
+   char(*newn)[KB_GRAPH_NODE_MAX] = diff_node_set(new_edges, n_new_edges, &nn);
+   for (int i = 0; i < nn; i++)
+      if (no == 0 || comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])oldn, no, newn[i]) < 0)
+         DIFF_EMIT(KB_DIFF_NODE_ADDED, newn[i], "", "");
+   for (int i = 0; i < no; i++)
+      if (nn == 0 || comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])newn, nn, oldn[i]) < 0)
+         DIFF_EMIT(KB_DIFF_NODE_REMOVED, oldn[i], "", "");
+
+   /* 2. Edge add/remove (relation-typed, direction-aware). */
+   kb_graph_reledge_t *oe = NULL, *nedg = NULL;
+   if (n_old_edges > 0)
+   {
+      oe = malloc((size_t)n_old_edges * sizeof(*oe));
+      if (oe)
+      {
+         memcpy(oe, old_edges, (size_t)n_old_edges * sizeof(*oe));
+         qsort(oe, (size_t)n_old_edges, sizeof(*oe), reledge_cmp);
+      }
+   }
+   if (n_new_edges > 0)
+   {
+      nedg = malloc((size_t)n_new_edges * sizeof(*nedg));
+      if (nedg)
+      {
+         memcpy(nedg, new_edges, (size_t)n_new_edges * sizeof(*nedg));
+         qsort(nedg, (size_t)n_new_edges, sizeof(*nedg), reledge_cmp);
+      }
+   }
+   /* sorted copies of assignments for community lookup */
+   kb_graph_community_t *olds = NULL, *news = NULL;
+   if (n_old_comm > 0 && old_comm)
+   {
+      olds = malloc((size_t)n_old_comm * sizeof(*olds));
+      if (olds)
+      {
+         memcpy(olds, old_comm, (size_t)n_old_comm * sizeof(*olds));
+         qsort(olds, (size_t)n_old_comm, sizeof(*olds), commrow_by_node_cmp);
+      }
+   }
+   if (n_new_comm > 0 && new_comm)
+   {
+      news = malloc((size_t)n_new_comm * sizeof(*news));
+      if (news)
+      {
+         memcpy(news, new_comm, (size_t)n_new_comm * sizeof(*news));
+         qsort(news, (size_t)n_new_comm, sizeof(*news), commrow_by_node_cmp);
+      }
+   }
+
+   for (int i = 0; i < n_new_edges; i++)
+   {
+      int found =
+          oe && bsearch(&nedg[i], oe, (size_t)n_old_edges, sizeof(*oe), reledge_cmp) != NULL;
+      if (!found)
+      {
+         DIFF_EMIT(KB_DIFF_EDGE_ADDED, nedg[i].source, nedg[i].target, nedg[i].relation);
+         /* newly cross-community? (endpoints in different NEW communities and NOT
+          * already crossing in old — i.e. a genuinely new coupling) */
+         if (news)
+         {
+            const char *cs = comm_lookup(news, n_new_comm, nedg[i].source);
+            const char *ct = comm_lookup(news, n_new_comm, nedg[i].target);
+            if (cs && ct && strcmp(cs, ct) != 0)
+            {
+               int old_crossed = 0;
+               if (olds)
+               {
+                  const char *os = comm_lookup(olds, n_old_comm, nedg[i].source);
+                  const char *ot = comm_lookup(olds, n_old_comm, nedg[i].target);
+                  old_crossed = (os && ot && strcmp(os, ot) != 0);
+               }
+               if (!old_crossed)
+                  DIFF_EMIT(KB_DIFF_NEW_CROSS_COMMUNITY, nedg[i].source, nedg[i].target,
+                            nedg[i].relation);
+            }
+         }
+      }
+   }
+   for (int i = 0; i < n_old_edges; i++)
+   {
+      int found =
+          nedg && bsearch(&oe[i], nedg, (size_t)n_new_edges, sizeof(*nedg), reledge_cmp) != NULL;
+      if (!found)
+         DIFF_EMIT(KB_DIFF_EDGE_REMOVED, oe[i].source, oe[i].target, oe[i].relation);
+   }
+
+   /* 3. Newly-orphaned: a node present in both whose degree fell to <= 1. */
+   for (int i = 0; i < nn; i++)
+   {
+      if (no == 0 || comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])oldn, no, newn[i]) < 0)
+         continue; /* newly added, not "newly orphaned" */
+      int dn = diff_degree(new_edges, n_new_edges, newn[i]);
+      int dolddeg = diff_degree(old_edges, n_old_edges, newn[i]);
+      if (dn <= 1 && dolddeg > 1)
+         DIFF_EMIT(KB_DIFF_NEW_ORPHAN, newn[i], "", "");
+   }
+
+   /* 4. New cycle members: files in a NEW dependency cycle but no OLD one. */
+   kb_graph_cycle_t *ocyc = calloc((size_t)max, sizeof(*ocyc));
+   kb_graph_cycle_t *ncyc = calloc((size_t)max, sizeof(*ncyc));
+   if (ocyc && ncyc)
+   {
+      int oc_n = kb_graph_cycles(old_edges, n_old_edges, ocyc, max, NULL);
+      int nc_n = kb_graph_cycles(new_edges, n_new_edges, ncyc, max, NULL);
+      if (oc_n < 0)
+         oc_n = 0;
+      if (nc_n < 0)
+         nc_n = 0;
+      for (int i = 0; i < nc_n; i++)
+         for (int p = 0; p < ncyc[i].len; p++)
+         {
+            const char *f = ncyc[i].files[p];
+            int in_old = 0;
+            for (int j = 0; j < oc_n && !in_old; j++)
+               for (int q = 0; q < ocyc[j].len; q++)
+                  if (strcmp(ocyc[j].files[q], f) == 0)
+                  {
+                     in_old = 1;
+                     break;
+                  }
+            if (!in_old)
+               DIFF_EMIT(KB_DIFF_NEW_CYCLE_MEMBER, f, "", "");
+         }
+   }
+   free(ocyc);
+   free(ncyc);
+
+   qsort(out, (size_t)nout, sizeof(*out), diff_entry_cmp);
+   /* dedup identical entries (a file can appear in several new cycles) */
+   int dedup = 0;
+   for (int i = 0; i < nout; i++)
+      if (dedup == 0 || diff_entry_cmp(&out[dedup - 1], &out[i]) != 0)
+         out[dedup++] = out[i];
+   nout = dedup;
+
+   free(oldn);
+   free(newn);
+   free(oe);
+   free(nedg);
+   free(olds);
+   free(news);
+#undef DIFF_EMIT
+   return nout;
+}

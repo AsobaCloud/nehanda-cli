@@ -122,6 +122,36 @@ extern "C"
    int db2_code_projection_communities_list(int64_t gen_id, code_projection_community_t *out,
                                             int max);
 
+   /* --- Generation metadata (graph-feedback S2 snapshot diff) --- */
+
+   typedef struct
+   {
+      int64_t id;
+      char project[256];
+      char state[16];
+      char source_hash[128];
+      char extractor_version[64];
+      char pipeline_version[64];
+   } code_projection_generation_meta_t;
+
+   /* Load a generation's metadata into *out. Returns 0 if found, 1 if no such
+    * generation, -1 on error. */
+   int db2_code_projection_generation_meta(int64_t gen_id, code_projection_generation_meta_t *out);
+
+   /* One row of the generation list (for a diff route's 409 "available
+    * generations" response). */
+   typedef struct
+   {
+      int64_t id;
+      char state[16];
+      char started_at[32];
+   } code_projection_generation_row_t;
+
+   /* List a project's generations, newest first, into out[] (up to max). Returns
+    * the count written, or -1 on error. */
+   int db2_code_projection_generations_list(const char *project,
+                                            code_projection_generation_row_t *out, int max);
+
    /* --- Full project sync --- */
 
    /* Sync all code-index facts for project into entity_edges under gen_id.
