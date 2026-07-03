@@ -225,7 +225,7 @@ static void capture_review_items_from_text(const char *text, const char *source,
 }
 
 void capture_round_review_items(const agent_result_t *results, int ref_count,
-                                       roundtable_result_t *out, int round)
+                                roundtable_result_t *out, int round)
 {
    if (!results || !out)
       return;

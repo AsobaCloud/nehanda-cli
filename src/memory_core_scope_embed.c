@@ -39,7 +39,6 @@
 #include <unistd.h>
 #include <pthread.h>
 
-
 const char *memory_scope_level_name(memory_scope_level_t level)
 {
    switch (level)

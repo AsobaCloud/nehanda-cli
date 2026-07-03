@@ -57,7 +57,6 @@
 #include <time.h>
 #include <unistd.h>
 
-
 delegation_mailbox_t *mailbox_acquire(const char *delegation_id)
 {
    pthread_mutex_lock(&g_mailbox_lock);

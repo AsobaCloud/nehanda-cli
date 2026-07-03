@@ -339,7 +339,6 @@ static int handle_server_health(server_ctx_t *ctx, server_conn_t *conn, cJSON *r
    return server_send_ok(conn, resp);
 }
 
-
 /* worktree.gc: remove abandoned session worktrees under the operator's git_root.
  * Server-side because the GC primitive lives in workspace.c (already linked into
  * the daemon); the CLI just sends client_cwd and renders the report. */
@@ -646,7 +645,6 @@ static int handle_launch_run(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 
    return server_send_ok(conn, launch_resp);
 }
-
 
 static int handle_init_run(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {

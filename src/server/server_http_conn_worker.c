@@ -43,7 +43,6 @@
 #include <unistd.h>
 #include <stdatomic.h>
 
-
 static void *conn_worker(void *arg)
 {
    conn_job_t *j = (conn_job_t *)arg;

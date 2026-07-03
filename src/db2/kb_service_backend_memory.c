@@ -168,9 +168,10 @@ cJSON *db2_kb_service_memory_prospective_list_json(const char *state, int max)
    return resp;
 }
 
-cJSON *db2_kb_service_memory_prospective_create_json(
-    const char *trigger_text, const char *action_text, const char *anchor_entity,
-    const char *anchor_file, const char *recurrence, const char *valid_until)
+cJSON *
+db2_kb_service_memory_prospective_create_json(const char *trigger_text, const char *action_text,
+                                              const char *anchor_entity, const char *anchor_file,
+                                              const char *recurrence, const char *valid_until)
 {
    cJSON *resp = cJSON_CreateObject();
    if (!resp)

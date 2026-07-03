@@ -39,7 +39,6 @@
 #include <unistd.h>
 #include <pthread.h>
 
-
 /* Time decay: exponential decay based on days since last use */
 static double time_decay(const char *last_used)
 {
@@ -362,32 +361,28 @@ static int memory_collect_via(memory_db2_collect_fn collect, const char *term, i
    return count;
 }
 
-int memory_collect_alias_matches(const char *alias, int limit, memory_t *out, int count,
-                                        int max)
+int memory_collect_alias_matches(const char *alias, int limit, memory_t *out, int count, int max)
 {
    return memory_collect_via(db2_memory_collect_alias_matches, alias, limit, out, count, max);
 }
 
-int memory_collect_entity_matches(const char *term, int limit, memory_t *out, int count,
-                                         int max)
+int memory_collect_entity_matches(const char *term, int limit, memory_t *out, int count, int max)
 {
    return memory_collect_via(db2_memory_collect_entity_matches, term, limit, out, count, max);
 }
 
-int memory_collect_temporal_matches(const char *term, int limit, memory_t *out, int count,
-                                           int max)
+int memory_collect_temporal_matches(const char *term, int limit, memory_t *out, int count, int max)
 {
    return memory_collect_via(db2_memory_collect_temporal_matches, term, limit, out, count, max);
 }
 
-int memory_collect_summary_matches(const char *term, int limit, memory_t *out, int count,
-                                          int max)
+int memory_collect_summary_matches(const char *term, int limit, memory_t *out, int count, int max)
 {
    return memory_collect_via(db2_memory_collect_summary_matches, term, limit, out, count, max);
 }
 
 int memory_collect_event_frame_matches(const char *term, int limit, memory_t *out, int count,
-                                              int max)
+                                       int max)
 {
    return memory_collect_via(db2_memory_collect_event_frame_matches, term, limit, out, count, max);
 }
@@ -400,8 +395,7 @@ int memory_collect_event_frame_matches(const char *term, int limit, memory_t *ou
  * the caller still tags the hits with MEM_SOURCE_CHUNK. Future work: upsert
  * chunk embeddings to pgvector under a record_type='chunk' key for true
  * chunk-level retrieval. */
-int memory_collect_chunk_matches(const char *query, int limit, memory_t *out, int count,
-                                        int max)
+int memory_collect_chunk_matches(const char *query, int limit, memory_t *out, int count, int max)
 {
    if (!query || !query[0] || !out || count >= max)
       return count;
@@ -416,8 +410,7 @@ int memory_collect_chunk_matches(const char *query, int limit, memory_t *out, in
    return count;
 }
 
-int memory_collect_unit_matches(const char *query, int limit, memory_t *out, int count,
-                                       int max)
+int memory_collect_unit_matches(const char *query, int limit, memory_t *out, int count, int max)
 {
    if (!query || !query[0] || !out || count >= max)
       return count;
@@ -445,7 +438,7 @@ int memory_collect_unit_matches(const char *query, int limit, memory_t *out, int
 }
 
 void memory_build_semantic_query_text(const char *raw_query, memory_query_intent_t intent,
-                                             char *out, size_t out_len)
+                                      char *out, size_t out_len)
 {
    if (!out || out_len == 0)
       return;
@@ -573,9 +566,9 @@ double memory_semantic_floor_scale_test(void)
  * memory_id and resolving the memory row inline. The fixed cap matches the
  * original local array size; once we run out of slots we drop further matches. */
 int memory_collect_semantic_matches(const char *query, const char *command, int limit,
-                                           memory_t *out, int count, int max, int64_t *semantic_ids,
-                                           double *semantic_scores, int *semantic_hit_count,
-                                           int semantic_max)
+                                    memory_t *out, int count, int max, int64_t *semantic_ids,
+                                    double *semantic_scores, int *semantic_hit_count,
+                                    int semantic_max)
 {
    if (!query || !query[0] || !out || count >= max)
       return count;
@@ -630,9 +623,9 @@ int memory_collect_semantic_matches(const char *query, const char *command, int 
 }
 
 int memory_collect_unit_semantic_matches(const char *query, const char *command, int limit,
-                                                memory_t *out, int count, int max,
-                                                int64_t *semantic_ids, double *semantic_scores,
-                                                int *semantic_hit_count, int semantic_max)
+                                         memory_t *out, int count, int max, int64_t *semantic_ids,
+                                         double *semantic_scores, int *semantic_hit_count,
+                                         int semantic_max)
 {
    if (!query || !query[0] || !out || count >= max)
       return count;
@@ -759,7 +752,7 @@ int memory_collect_unit_semantic_matches(const char *query, const char *command,
 }
 
 double memory_semantic_bonus_lookup(int64_t memory_id, const int64_t *semantic_ids,
-                                           const double *semantic_scores, int semantic_hit_count)
+                                    const double *semantic_scores, int semantic_hit_count)
 {
    if (!semantic_ids || !semantic_scores || semantic_hit_count <= 0)
       return 0.0;
@@ -827,7 +820,7 @@ memory_query_shape_t memory_query_shape(const char *raw_query, const char *norm_
 }
 
 memory_query_route_t memory_query_route(const char *raw_query, const char *norm_query,
-                                               memory_query_shape_t shape)
+                                        memory_query_shape_t shape)
 {
    /* Profile-shaped queries benefit most from the graph + semantic hybrid */
    if (memory_is_profile_query(raw_query))
@@ -1389,7 +1382,7 @@ static int memory_date_compare(const memory_parsed_date_t *a, const memory_parse
 }
 
 int memory_parse_temporal_ref_date(const char *ref_key, const char *granularity,
-                                          memory_parsed_date_t *out)
+                                   memory_parsed_date_t *out)
 {
    if (!ref_key || !ref_key[0] || !out)
       return 0;
@@ -1409,7 +1402,7 @@ int memory_parse_temporal_ref_date(const char *ref_key, const char *granularity,
 }
 
 int memory_parse_temporal_constraint(const char *norm_query, char qtokens[][64], int nq,
-                                            memory_temporal_constraint_t *out)
+                                     memory_temporal_constraint_t *out)
 {
    if (!out)
       return 0;
@@ -1466,7 +1459,7 @@ int memory_parse_temporal_constraint(const char *norm_query, char qtokens[][64],
 }
 
 double memory_temporal_constraint_score(const memory_temporal_constraint_t *constraint,
-                                               const memory_parsed_date_t *candidate)
+                                        const memory_parsed_date_t *candidate)
 {
    if (!constraint || constraint->mode == MEM_DATE_CONSTRAINT_NONE || !candidate ||
        !candidate->valid)
@@ -1619,7 +1612,7 @@ int memory_add_expanded_term(char terms[][64], int count, int max_terms, const c
 }
 
 int memory_expand_query_terms(const char *norm_query, char base_tokens[][64], int base_count,
-                                     char expanded[][64], int max_terms)
+                              char expanded[][64], int max_terms)
 {
    int count = 0;
    int saw_before = 0, saw_after = 0, saw_between = 0;
@@ -1838,4 +1831,3 @@ double memory_speaker_bonus(int64_t memory_id, const char *raw_query)
    }
    return bonus;
 }
-

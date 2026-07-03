@@ -394,9 +394,8 @@ int liveness_circuit_breaker_tripped(int total_triggers)
    return total_triggers >= LIVENESS_REPEAT_ABORT_THRESHOLD;
 }
 
-liveness_final_response_mode_t liveness_final_response_mode(int turn, int max_turns,
-                                                            int total_tool_calls,
-                                                            int final_after_turns)
+liveness_final_response_mode_t
+liveness_final_response_mode(int turn, int max_turns, int total_tool_calls, int final_after_turns)
 {
    if (total_tool_calls <= 0)
       return LIVENESS_FINAL_RESPONSE_NONE;
