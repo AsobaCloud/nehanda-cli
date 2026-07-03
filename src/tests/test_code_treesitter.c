@@ -57,7 +57,7 @@ int main(void)
    const char *avail[] = {".c",     ".h",   ".cpp",    ".cc",     ".hpp",   ".cs", ".py",   ".go",
                           ".js",    ".mjs", ".jsx",    ".ts",     ".tsx",   ".rs", ".java", ".rb",
                           ".php",   ".lua", ".sh",     ".bash",   ".swift", ".kt", ".dart", ".css",
-                          ".scala", ".sc",  ".groovy", ".gradle", ".m",     ".mm"};
+                          ".scala", ".sc",  ".groovy", ".gradle", ".m",     ".mm", ".kts"};
    for (size_t i = 0; i < sizeof(avail) / sizeof(avail[0]); i++)
       assert(code_treesitter_available(avail[i]));
    assert(!code_treesitter_available(".txt"));
@@ -215,6 +215,15 @@ int main(void)
    want(".kt", kt, "shouldWork", "function");
    want(".kt", kt, "identity", "function");
    want(".kt", kt, "shout", "function");
+   /* Kotlin Script (.kts, incl. build.gradle.kts — the trailing .kts extension maps
+    * to the Kotlin grammar): top-level declarations extract even when interleaved
+    * with script-level statements (a val binding + a bare call). */
+   const char *kts = "val cfg = load()\nfun greet() = println(\"hi\")\n"
+                     "class Task { fun run() {} }\n";
+   want(".kts", kts, "greet", "function");
+   want(".kts", kts, "Task", "type");
+   want(".kts", kts, "run", "function"); /* method inside a script-level class */
+   wantcall(".kts", "fun deploy() { publish() }\n", "deploy", "publish");
 
    /* --- Dart (annotated mixin: name survives the leading annotation) --- */
    const char *dart = "void f(){}\nclass C{}\nenum E{a}\n@sealed mixin Foo {}\n";
