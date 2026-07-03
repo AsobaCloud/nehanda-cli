@@ -128,8 +128,7 @@ double db1_token_audit_cost_for_delegation(const char *delegation_id)
    return total;
 }
 
-int db1_token_audit_session_split(const char *session_id,
-                                  db1_token_audit_session_split_t *out)
+int db1_token_audit_session_split(const char *session_id, db1_token_audit_session_split_t *out)
 {
    if (!out)
       return -1;
@@ -151,8 +150,7 @@ int db1_token_audit_session_split(const char *session_id,
                             " COALESCE(SUM(cache_read_tokens), 0),"
                             " COALESCE(SUM(estimated_cost_usd), 0.0)"
                             " FROM token_audit"
-                            " WHERE session_id = ? AND " TA_REALIZED
-                            " GROUP BY is_supervisor";
+                            " WHERE session_id = ? AND " TA_REALIZED " GROUP BY is_supervisor";
    sqlite3_stmt *stmt = NULL;
    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
       return -1;
