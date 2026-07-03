@@ -326,6 +326,12 @@ CREATE TABLE IF NOT EXISTS code_projection_edges (  generation_id INTEGER NOT NU
 CREATE INDEX IF NOT EXISTS idx_cpe_project_triple ON code_projection_edges(project, source, relation, target);
 CREATE TABLE IF NOT EXISTS code_projection_communities (  generation_id INTEGER NOT NULL REFERENCES code_projection_generations(id) ON DELETE CASCADE,  project TEXT NOT NULL,  node_id TEXT NOT NULL,  community_id TEXT NOT NULL,  PRIMARY KEY (generation_id, node_id));
 CREATE INDEX IF NOT EXISTS idx_cpc_gen_community ON code_projection_communities(generation_id, community_id);
+CREATE TABLE IF NOT EXISTS lessons_outcome_ledger (  id INTEGER PRIMARY KEY AUTOINCREMENT,  session_id TEXT NOT NULL DEFAULT '',  turn_id TEXT NOT NULL DEFAULT '',  project_id TEXT NOT NULL DEFAULT '',  generation_id INTEGER NOT NULL DEFAULT 0,  answer_outcome TEXT NOT NULL CHECK (answer_outcome IN ('useful','dead_end','corrected')),  correction_text TEXT NOT NULL DEFAULT '',  finding_id TEXT NOT NULL DEFAULT '',  actor_id TEXT NOT NULL DEFAULT '',  actor_source TEXT NOT NULL DEFAULT 'agent' CHECK (actor_source IN ('user','reviewer','agent')),  confirmed INTEGER NOT NULL DEFAULT 0,  confirmed_by TEXT NOT NULL DEFAULT '',  confirmed_at TEXT NOT NULL DEFAULT '',  ts TEXT NOT NULL DEFAULT (datetime('now')));
+CREATE INDEX IF NOT EXISTS idx_lessons_ledger_project ON lessons_outcome_ledger(project_id);
+CREATE INDEX IF NOT EXISTS idx_lessons_ledger_finding ON lessons_outcome_ledger(finding_id);
+CREATE TABLE IF NOT EXISTS lessons_outcome_citations (  outcome_id INTEGER NOT NULL REFERENCES lessons_outcome_ledger(id) ON DELETE CASCADE,  node_id TEXT NOT NULL,  disposition TEXT NOT NULL DEFAULT 'unused' CHECK (disposition IN ('useful','stale','unused')),  PRIMARY KEY (outcome_id, node_id));
+CREATE TRIGGER IF NOT EXISTS trg_lessons_ledger_no_delete BEFORE DELETE ON lessons_outcome_ledger BEGIN  SELECT RAISE(ABORT, 'lessons_outcome_ledger is append-only (DELETE forbidden)');END;
+CREATE TRIGGER IF NOT EXISTS trg_lessons_ledger_immutable BEFORE UPDATE OF session_id, turn_id, project_id, generation_id, answer_outcome, correction_text, finding_id, actor_id, actor_source, ts ON lessons_outcome_ledger BEGIN  SELECT RAISE(ABORT, 'lessons_outcome_ledger is append-only (only the confirmation flag may change)');END;
 CREATE INDEX IF NOT EXISTS idx_ee_source_relation ON entity_edges(source, relation);
 CREATE INDEX IF NOT EXISTS idx_ee_target_relation ON entity_edges(target, relation);
 CREATE INDEX IF NOT EXISTS idx_ee_origin_source ON entity_edges(edge_origin, source);
