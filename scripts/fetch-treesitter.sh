@@ -50,6 +50,7 @@ fetch tree-sitter-swift      https://github.com/alex-pinkus/tree-sitter-swift   
 fetch tree-sitter-kotlin     https://github.com/fwcd/tree-sitter-kotlin           c8ac3d2627240160b999a2c100de3babbdb8f419
 fetch tree-sitter-dart       https://github.com/UserNobody14/tree-sitter-dart      a9bdfa3db2fbc9b9f12c93450d04a671f33a5102
 fetch tree-sitter-css        https://github.com/tree-sitter/tree-sitter-css        dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f
+fetch tree-sitter-scala      https://github.com/tree-sitter/tree-sitter-scala      4d081d98670ff6e98ca42c085294fc75eec15e1d
 
 echo "fetch-treesitter: done -> $VENDOR/tree-sitter*"
 

@@ -38,6 +38,7 @@ const TSLanguage *tree_sitter_swift(void);
 const TSLanguage *tree_sitter_kotlin(void);
 const TSLanguage *tree_sitter_dart(void);
 const TSLanguage *tree_sitter_css(void);
+const TSLanguage *tree_sitter_scala(void);
 
 typedef enum
 {
@@ -57,7 +58,8 @@ typedef enum
    TSL_SWIFT,
    TSL_KOTLIN,
    TSL_DART,
-   TSL_CSS
+   TSL_CSS,
+   TSL_SCALA
 } ts_lang_t;
 
 static const TSLanguage *ts_language_for_ext(const char *ext, ts_lang_t *which)
@@ -101,6 +103,8 @@ static const TSLanguage *ts_language_for_ext(const char *ext, ts_lang_t *which)
        {".kts", TSL_KOTLIN, tree_sitter_kotlin},
        {".dart", TSL_DART, tree_sitter_dart},
        {".css", TSL_CSS, tree_sitter_css},
+       {".scala", TSL_SCALA, tree_sitter_scala},
+       {".sc", TSL_SCALA, tree_sitter_scala},
    };
    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++)
       if (strcmp(ext, map[i].ext) == 0)
@@ -511,6 +515,23 @@ static int classify_css(TSNode node, const char **kind, TSNode *name_root)
    return 1;
 }
 
+/* Scala: `def` → function; class/object/trait/type/enum → type. The name comes via
+ * name_node (the `name` field, else a direct identifier child). Members live in a
+ * template_body (descended below). */
+static int classify_scala(TSNode node, const char **kind, TSNode *name_root)
+{
+   const char *t = ts_node_type(node);
+   static const char *const fns[] = {"function_definition", "function_declaration", NULL};
+   static const char *const types[] = {"class_definition", "object_definition", "trait_definition",
+                                       "type_definition",  "enum_definition",   NULL};
+   if (kind_lookup(t, fns, types, kind))
+   {
+      *name_root = name_node(node);
+      return 1;
+   }
+   return 0;
+}
+
 static int classify(ts_lang_t lang, TSNode node, const char **kind, TSNode *name_root)
 {
    switch (lang)
@@ -548,6 +569,8 @@ static int classify(ts_lang_t lang, TSNode node, const char **kind, TSNode *name
       return classify_dart(node, kind, name_root);
    case TSL_CSS:
       return classify_css(node, kind, name_root);
+   case TSL_SCALA:
+      return classify_scala(node, kind, name_root);
    }
    return 0;
 }
@@ -578,7 +601,9 @@ static int is_descendable(const char *t)
        "class_definition", "class", "interface_declaration", "trait_item", "impl_item", "mod_item",
        "trait_declaration", "object_declaration", "protocol_declaration", "struct_declaration",
        "record_declaration", "mixin_declaration", "extension_declaration", "enum_declaration",
-       "enum_specifier", "enum_item", NULL};
+       "enum_specifier", "enum_item",
+       /* Scala: object/trait bodies + the shared template_body that holds members */
+       "object_definition", "trait_definition", "template_body", "enum_definition", NULL};
    for (int i = 0; set[i]; i++)
       if (strcmp(t, set[i]) == 0)
          return 1;
