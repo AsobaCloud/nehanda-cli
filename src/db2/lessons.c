@@ -114,8 +114,11 @@ int db2_lessons_list_outcomes(const char *project_id, int64_t community_gen,
     * ordinal for the reflection's time-decay. */
    aimee_pg_stmt_t *st = aimee_pg_prepare(
        conn,
+       /* ts is stored as UTC 'YYYY-MM-DD HH24:MI:SS' TEXT; take the leading date
+        * substring so the day ordinal is a pure calendar parse — no session-TZ
+        * dependence, keeping the reflection byte-stable across servers. */
        "SELECT c.node_id, COALESCE(cpc.community_id, ''), l.answer_outcome, l.actor_source,"
-       "       (l.ts::date - DATE '1970-01-01'), l.confirmed"
+       "       (SUBSTRING(l.ts, 1, 10)::date - DATE '1970-01-01'), l.confirmed"
        " FROM lessons_outcome_ledger l"
        " JOIN lessons_outcome_citations c ON c.outcome_id = l.id"
        " LEFT JOIN code_projection_communities cpc"

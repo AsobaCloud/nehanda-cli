@@ -769,7 +769,15 @@ int handle_get_code_lessons(const char *query_string, char *out_buf, int out_cap
    long now_days = (long)(time(NULL) / 86400);
    int ne = lessons_reflect(inp, nr, now_days, NULL, ent, LESSONS_MAX_RECORDS);
    if (ne < 0)
-      ne = 0;
+   {
+      /* An internal reflection failure is a 500, not a silent "clean" 200. */
+      free(rows);
+      free(inp);
+      free(ent);
+      cJSON_Delete(resp);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"reflection failed\"}");
+      return 500;
+   }
 
    cJSON_AddStringToObject(resp, "status", "ok");
    cJSON_AddStringToObject(resp, "project", project);
