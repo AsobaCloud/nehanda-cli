@@ -3,10 +3,12 @@
  * (skip-when-unchanged vs publish-a-new-generation) is driven deterministically
  * without a live Postgres. */
 #include "kb_service_graph.h"
+#include "db2/code_projection.h"
 
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- controllable DB2 stubs ---- */
@@ -63,6 +65,40 @@ int db2_code_projection_generation_abort(int64_t gen, const char *err)
    (void)err;
    g_aborted++;
    return 0;
+}
+
+/* Controllable edge fixture + captured community persistence, for the
+ * kb_graph_persist_communities path that runs after a publish. */
+static const code_projection_edge_t *g_edges = NULL;
+static int g_n_edges = 0;
+static int64_t g_persist_gen = 0;
+static int g_persist_n = -1;
+static code_projection_community_t g_persist_rows[64];
+
+int db2_code_projection_list_edges_for_gen(int64_t gen, code_projection_edge_t *out, int max)
+{
+   (void)gen;
+   int n = g_n_edges < max ? g_n_edges : max;
+   for (int i = 0; i < n; i++)
+      out[i] = g_edges[i];
+   return n;
+}
+int db2_code_projection_communities_replace(int64_t gen, const char *project,
+                                            const code_projection_community_t *rows, int n)
+{
+   (void)project;
+   g_persist_gen = gen;
+   g_persist_n = n;
+   for (int i = 0; i < n && i < (int)(sizeof(g_persist_rows) / sizeof(g_persist_rows[0])); i++)
+      g_persist_rows[i] = rows[i];
+   return 0;
+}
+static const char *persisted_community_of(const char *node)
+{
+   for (int i = 0; i < g_persist_n; i++)
+      if (strcmp(g_persist_rows[i].node_id, node) == 0)
+         return g_persist_rows[i].community_id;
+   return NULL;
 }
 
 /* ---- link-only stubs for the rest of kb_service_graph.o (unused here) ---- */
@@ -150,11 +186,45 @@ static void test_idempotent_build(void)
    printf("  test_idempotent_build: ok\n");
 }
 
+/* After a publish, the derived community membership is computed from the
+ * generation's edges and persisted (keyed by generation id). Drives the real
+ * build path with a two-triangle fixture through the DB2 stubs. */
+static void test_community_persist(void)
+{
+   code_projection_edge_t edges[] = {
+       {"a", "calls", "b", 5}, {"b", "calls", "c", 5}, {"a", "calls", "c", 5},
+       {"x", "calls", "y", 5}, {"y", "calls", "z", 5}, {"x", "calls", "z", 5},
+       {"c", "calls", "x", 1},
+   };
+   g_edges = edges;
+   g_n_edges = 7;
+   g_persist_gen = 0;
+   g_persist_n = -1;
+
+   snprintf(g_fp, sizeof(g_fp), "aaa");
+   g_visible[0] = '\0'; /* first build -> rebuild + publish */
+   int rebuilt = -1;
+   int64_t r = kb_graph_build_project_if_changed("p", &rebuilt);
+   assert(r == 7 && rebuilt == 1);
+
+   assert(g_persist_gen == 42); /* keyed by the generation id */
+   assert(g_persist_n == 6);    /* six distinct nodes */
+   assert(strcmp(persisted_community_of("b"), "a") == 0);
+   assert(strcmp(persisted_community_of("c"), "a") == 0);
+   assert(strcmp(persisted_community_of("z"), "x") == 0);
+   assert(strcmp(persisted_community_of("a"), persisted_community_of("x")) != 0);
+
+   g_edges = NULL;
+   g_n_edges = 0;
+   printf("  test_community_persist: ok\n");
+}
+
 int main(void)
 {
    printf("test_kb_graph:\n");
    test_provenance();
    test_idempotent_build();
+   test_community_persist();
    printf("ALL PASS\n");
    return 0;
 }
