@@ -6,12 +6,15 @@
 #include "aimee.h"
 #include "cJSON.h"
 #include "db2/code_projection.h"
+#include "db2/lessons.h"
 #include "db2/lifecycle.h"
 #include "kb/kb_graph_analytics.h"
+#include "kb/lessons_reflect.h"
 #include "kb/prompt_sanitizer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* GET /v1/code/graph/audit?project=<proj>[&max_findings=N]
  *
@@ -714,4 +717,129 @@ int handle_get_code_graph_diff_route(const char *method, const char *query_strin
    if (strcmp(method, "GET") != 0)
       return code_method_not_allowed(out_buf, out_cap);
    return handle_get_code_graph_diff(query_string, out_buf, out_cap);
+}
+
+/* GET /v1/code/lessons?project=<proj>
+ *
+ * §3 lessons artifact: the deterministic reflection over the retrieval-outcome
+ * ledger (which sources earned trust), grouped by community. Read-only; every
+ * rendered node/community string passes the S0 sanitizer. Honesty gate: an empty
+ * ledger returns "no lessons yet", not invented noise. Consumed by S3c's session
+ * preamble + RRF tie-break. */
+#define LESSONS_MAX_RECORDS 5000
+
+int handle_get_code_lessons(const char *query_string, char *out_buf, int out_cap)
+{
+   char project[256] = "";
+   if (!code_qparam(query_string, "project", project, sizeof(project)) || !project[0])
+      return code_scan_write_error(out_buf, out_cap, "missing project");
+   if (!db2_is_initialized())
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"knowledge service not initialized\"}");
+      return 503;
+   }
+
+   int64_t vgen = db2_code_projection_visible_id(project);
+   db2_lessons_outcome_row_t *rows = calloc(LESSONS_MAX_RECORDS, sizeof(*rows));
+   lessons_reflect_input_t *inp = calloc(LESSONS_MAX_RECORDS, sizeof(*inp));
+   lessons_reflect_entry_t *ent = calloc(LESSONS_MAX_RECORDS, sizeof(*ent));
+   cJSON *resp = cJSON_CreateObject();
+   if (!rows || !inp || !ent || !resp)
+   {
+      free(rows);
+      free(inp);
+      free(ent);
+      cJSON_Delete(resp);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+
+   int nr = db2_lessons_list_outcomes(project, vgen > 0 ? vgen : 0, rows, LESSONS_MAX_RECORDS);
+   if (nr < 0)
+      nr = 0;
+   for (int i = 0; i < nr; i++)
+   {
+      snprintf(inp[i].node, sizeof(inp[i].node), "%s", rows[i].node_id);
+      snprintf(inp[i].community, sizeof(inp[i].community), "%s", rows[i].community);
+      snprintf(inp[i].answer_outcome, sizeof(inp[i].answer_outcome), "%s", rows[i].answer_outcome);
+      snprintf(inp[i].actor_source, sizeof(inp[i].actor_source), "%s", rows[i].actor_source);
+      inp[i].ts_days = rows[i].ts_days;
+      inp[i].confirmed = rows[i].confirmed;
+   }
+   long now_days = (long)(time(NULL) / 86400);
+   int ne = lessons_reflect(inp, nr, now_days, NULL, ent, LESSONS_MAX_RECORDS);
+   if (ne < 0)
+      ne = 0;
+
+   cJSON_AddStringToObject(resp, "status", "ok");
+   cJSON_AddStringToObject(resp, "project", project);
+   cJSON_AddNumberToObject(resp, "record_count", nr);
+   cJSON_AddBoolToObject(resp, "clean", ne == 0);
+   cJSON_AddBoolToObject(resp, "truncated", nr >= LESSONS_MAX_RECORDS);
+   cJSON_AddStringToObject(resp, "summary",
+                           ne == 0 ? "no lessons yet — the ledger has no outcome records"
+                                   : "sources ranked by earned trust, grouped by module");
+
+   /* ent is sorted by (community, class, node); emit one group per community. */
+   char sb[KB_GRAPH_NODE_MAX + 16];
+   cJSON *groups = cJSON_AddArrayToObject(resp, "communities");
+   cJSON *cur = NULL, *lessons = NULL;
+   const char *cur_comm = NULL;
+   for (int i = 0; groups && i < ne; i++)
+   {
+      if (!cur_comm || strcmp(cur_comm, ent[i].community) != 0)
+      {
+         cur = cJSON_CreateObject();
+         if (!cur)
+            continue;
+         cJSON_AddStringToObject(
+             cur, "community",
+             audit_safe(ent[i].community, SANITIZE_COMMUNITY_NAME, sb, sizeof(sb)));
+         lessons = cJSON_AddArrayToObject(cur, "lessons");
+         cJSON_AddItemToArray(groups, cur);
+         cur_comm = ent[i].community;
+      }
+      cJSON *l = cJSON_CreateObject();
+      if (!l || !lessons)
+         continue;
+      cJSON_AddStringToObject(l, "node",
+                              audit_safe(ent[i].node, SANITIZE_SYMBOL_LABEL, sb, sizeof(sb)));
+      cJSON_AddStringToObject(l, "class", lessons_class_name(ent[i].klass));
+      cJSON_AddNumberToObject(l, "score", ent[i].score);
+      cJSON_AddNumberToObject(l, "distinct_positive", ent[i].distinct_positive);
+      cJSON_AddNumberToObject(l, "distinct_negative", ent[i].distinct_negative);
+      cJSON_AddBoolToObject(l, "confirmed_correction", ent[i].has_confirmed_correction != 0);
+      cJSON_AddItemToArray(lessons, l);
+   }
+
+   free(rows);
+   free(inp);
+   free(ent);
+
+   char *s = cJSON_PrintUnformatted(resp);
+   int status = 200;
+   if (!s)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      status = 500;
+   }
+   else if (strlen(s) >= (size_t)out_cap)
+   {
+      snprintf(out_buf, (size_t)out_cap,
+               "{\"error\":\"result too large\",\"code\":\"result_too_large\"}");
+      status = 413;
+   }
+   else
+      snprintf(out_buf, (size_t)out_cap, "%s", s);
+   free(s);
+   cJSON_Delete(resp);
+   return status;
+}
+
+int handle_get_code_lessons_route(const char *method, const char *query_string, char *out_buf,
+                                  int out_cap)
+{
+   if (strcmp(method, "GET") != 0)
+      return code_method_not_allowed(out_buf, out_cap);
+   return handle_get_code_lessons(query_string, out_buf, out_cap);
 }

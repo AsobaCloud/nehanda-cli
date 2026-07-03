@@ -1087,6 +1087,16 @@ static cJSON *mcph_index_graph_audit(struct mcp_call *c)
    return code_graph_passthrough(json, status, "index_graph_audit");
 }
 
+static cJSON *mcph_index_lessons(struct mcp_call *c)
+{
+   cJSON *jp = cJSON_GetObjectItemCaseSensitive(c->jargs, "project");
+   if (!cJSON_IsString(jp) || !jp->valuestring[0])
+      return text_content("error: index_lessons requires 'project'");
+   int status = -1;
+   char *json = kb_client_code_lessons(jp->valuestring, &status);
+   return code_graph_passthrough(json, status, "index_lessons");
+}
+
 static cJSON *mcph_index_graph_diff(struct mcp_call *c)
 {
    cJSON *jp = cJSON_GetObjectItemCaseSensitive(c->jargs, "project");
@@ -1371,6 +1381,7 @@ static const struct
     {"index_graph_hubs", mcph_index_graph_hubs},
     {"index_graph_audit", mcph_index_graph_audit},
     {"index_graph_diff", mcph_index_graph_diff},
+    {"index_lessons", mcph_index_lessons},
     {"index_graph_surprising", mcph_index_graph_surprising},
     {"index_graph_node", mcph_index_graph_node},
     {"memory_explain_match", mcph_memory_explain_match},
