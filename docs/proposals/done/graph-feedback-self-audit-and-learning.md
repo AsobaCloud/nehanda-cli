@@ -1,6 +1,40 @@
 # Proposal: Graph feedback and coverage expansion — self-audit, snapshot diffing, retrieval that learns, and broader language coverage
 
-- **State:** PENDING — net-new design, not yet started. Builds on the existing
+- **State:** ✅ **DONE — the full feedback-loop core (§1–§3), the cache-correctness
+  hardening (§5), and all six §6a Tier-1 language grammars shipped to `testing`;
+  proposal filed.** Delivered slice-by-slice, each PR build-verified, `make lint`-clean,
+  per-slice reviewed, and CT-postgres-validated wherever there is a live DB path:
+  - **S0 — prompt-injection sanitizer** for corpus-derived strings (#988, with the plan).
+  - **S-community — deterministic Louvain community detection** + two-pass cross-generation
+    remap for stable ids (#989).
+  - **§1 self-audit** — `GET /v1/code/graph/audit` + MCP `index{command:audit}`: cycles,
+    orphans, bridges, low-cohesion communities, unverified-inferred edges, honesty gate (#991).
+  - **§2 snapshot diff** — determinism substrate (`extractor_version`/`pipeline_version`
+    stamping) + `GET /v1/code/graph/diff` + MCP `index{command:diff}` (#993).
+  - **§3 retrieval that learns** — the append-only outcome ledger + isolation guard
+    (#994), the cite-again capture call-site (#995), the deterministic reflection /
+    trust-scoring pass + community-grouped lessons artifact `GET /v1/code/lessons`
+    (#996), and the actuation layer — RRF earned-trust tie-break, correction-authority
+    gate, preamble renderer, and the §1↔§3 finding-verdict write path (#997).
+  - **§5 cache-correctness** — frontmatter-insensitive Markdown content hashing so a
+    metadata-only edit no longer re-bills extraction (#998).
+  - **§6a Tier-1 grammars** — one PR each: **Scala** (#999), **Groovy** + `.gradle`
+    (#1001), **Objective-C/C++** (#1003), **Kotlin Script** coverage-lock (#1004),
+    **Elixir** — the macro-`call` hard case (#1006), and **PowerShell** (#1007). All
+    behind the opt-in `AIMEE_TREESITTER` build with text-only fall-through when a
+    grammar is absent; each validated by the CI `treesitter` job.
+  - Plus the **`.254` roundtable-panel fix** (#992) that unblocked review during the build.
+  - **Carried forward (deploy-tier + successor proposals), explicitly out of scope here:**
+    (a) wiring the §3 actuation live — `kb_rrf_fuse_trust` into the hybrid route (needs an
+    id-space bridge between RRF file/symbol ids and lessons projection node-ids), the
+    preamble injection into `session_briefing`, and the live `lessons_capture_turn` hook —
+    all shipped as **tested substrate, default-off**, to be enabled with a deployed KB +
+    LLM testbed; (b) the full-contract **semantic-cache namespacing** (embedding / model /
+    prompt-schema versions) — the structural + conversion caches are already version-namespaced
+    (`extractor_version`, `docs.converter_version`); (c) **§6b visual-media grammars** and
+    **Tier 2–5 languages** — their own successor proposals; (d) deploy-tier **live e2e
+    measurement** of the net-token and retrieval-quality gains.
+- **Original design state (for history):** net-new design building on the existing
   code-graph substrate (`code_projection_edges`, `entity_nodes/edges`, `code_embeddings`,
   the memory graph in DB2, the MCP `index` family, `/v1/code/graph/*`) and the
   central agent-memory interception layer. Does **not** re-propose anything in
