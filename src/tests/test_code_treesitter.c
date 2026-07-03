@@ -54,9 +54,10 @@ int main(void)
    printf("test_code_treesitter:\n");
 
    /* availability gates the dispatch (a representative extension per language). */
-   const char *avail[] = {".c",   ".h",   ".cpp", ".cc",   ".hpp",   ".cs", ".py",   ".go",
-                          ".js",  ".mjs", ".jsx", ".ts",   ".tsx",   ".rs", ".java", ".rb",
-                          ".php", ".lua", ".sh",  ".bash", ".swift", ".kt", ".dart", ".css"};
+   const char *avail[] = {".c",    ".h",    ".cpp", ".cc",    ".hpp", ".cs",   ".py",
+                          ".go",   ".js",   ".mjs", ".jsx",   ".ts",  ".tsx",  ".rs",
+                          ".java", ".rb",   ".php", ".lua",   ".sh",  ".bash", ".swift",
+                          ".kt",   ".dart", ".css", ".scala", ".sc"};
    for (size_t i = 0; i < sizeof(avail) / sizeof(avail[0]); i++)
       assert(code_treesitter_available(avail[i]));
    assert(!code_treesitter_available(".txt"));
@@ -224,6 +225,20 @@ int main(void)
    /* --- CSS (@keyframes name) --- */
    want(".css", "@keyframes spin { from {} to {} }\n.cls { color: red }\n", "spin", "type");
 
+   /* --- Scala (object/class/trait → type; def → function, incl. members in a
+    * template_body; def also works as a top-level .sc script member) --- */
+   const char *scala = "object M {\n  def greet(): Unit = println(\"hi\")\n}\n"
+                       "class C { def m(): Int = 1 }\n"
+                       "trait T { def t(): Unit }\n";
+   want(".scala", scala, "M", "type");
+   want(".scala", scala, "greet", "function");
+   want(".scala", scala, "C", "type");
+   want(".scala", scala, "m", "function");
+   want(".scala", scala, "T", "type");
+   want(".scala", "enum Color { case Red, Green }\n", "Color", "type"); /* Scala 3 enum */
+   want(".scala", "type Id = Int\n", "Id", "type");                     /* type_definition */
+   want(".sc", "def top(): Int = 1\n", "top", "function");              /* .sc script member */
+
    /* --- nested members: methods inside a type body are surfaced (the walk descends type
     * bodies but never function bodies), across the OO languages. --- */
    want(".cpp", "class C { void m(){} };\n", "m", "function");
@@ -258,6 +273,7 @@ int main(void)
    wantcall(".c", "void f(){ g(); obj->m(); }\n", "f", "g");
    wantcall(".c", "void f(){ obj->m(); }\n", "f", "m"); /* method call -> last id */
    wantcall(".py", "def f():\n    g()\n    obj.m()\n", "f", "g");
+   wantcall(".scala", "object M { def f(): Unit = { g() } }\n", "f", "g");
    wantcall(".py", "def f():\n    obj.m()\n", "f", "m");
    wantcall(".js", "function f(){ g(); a.b.c(); }\n", "f", "g");
    wantcall(".js", "function f(){ a.b.c(); }\n", "f", "c"); /* chained -> last id */
