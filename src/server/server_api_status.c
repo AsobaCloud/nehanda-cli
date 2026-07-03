@@ -61,7 +61,6 @@
 #include <unistd.h>
 #include <string.h>
 
-
 /* api.status: report the aimee.api.* loopback /v1 listener config and emit
  * VS Code / OpenAI-compatible model-provider setup snippets. Read-only; the
  * bearer secret is never returned (only whether one is configured). The CLI
@@ -142,8 +141,8 @@ int handle_api_enable(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
       return handle_api_error(conn, "failed to persist aimee.api config");
 
    char snippets[2048];
-   server_http_api_status_report(cfg.server_api_http_port, 1,
-                                 cfg.server_api_rate_limit_per_min, snippets, sizeof(snippets));
+   server_http_api_status_report(cfg.server_api_http_port, 1, cfg.server_api_rate_limit_per_min,
+                                 snippets, sizeof(snippets));
 
    char report[4096];
    int off = snprintf(report, sizeof(report),

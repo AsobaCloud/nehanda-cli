@@ -37,11 +37,6 @@
 
 #ifdef AIMEE_POSIX
 
-
-
-
-
-
 /* The bridge child is stopped by the parent with SIGTERM when the OpenCode TUI
  * exits (see opencode_exec_tui). A flag handler lets the accept loop break and
  * run its normal cleanup — including the unified-presence detach — instead of
@@ -445,7 +440,7 @@ cJSON *opencode_v2_session_json_locked(opencode_v2_bridge_t *b)
 }
 
 cJSON *opencode_v2_message_json_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *turn,
-                                              int assistant)
+                                       int assistant)
 {
    cJSON *m = cJSON_CreateObject();
    cJSON_AddStringToObject(m, "id", assistant ? turn->assistant_id : turn->user_id);
@@ -493,7 +488,7 @@ cJSON *opencode_v2_messages_json_locked(opencode_v2_bridge_t *b)
 }
 
 cJSON *opencode_v2_legacy_part_json_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *turn,
-                                                  int assistant)
+                                           int assistant)
 {
    cJSON *p = cJSON_CreateObject();
    char part_id[128];
@@ -552,7 +547,7 @@ static cJSON *opencode_v2_legacy_message_info_locked(opencode_v2_bridge_t *b,
 }
 
 cJSON *opencode_v2_legacy_bundle_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *turn,
-                                               int assistant)
+                                        int assistant)
 {
    cJSON *item = cJSON_CreateObject();
    cJSON_AddItemToObject(item, "info", opencode_v2_legacy_message_info_locked(b, turn, assistant));
@@ -597,7 +592,7 @@ cJSON *opencode_v2_v2_messages_response_locked(opencode_v2_bridge_t *b)
 }
 
 opencode_v2_turn_t *opencode_v2_find_turn_locked(opencode_v2_bridge_t *b, const char *id,
-                                                        int *assistant)
+                                                 int *assistant)
 {
    for (opencode_v2_turn_t *turn = b->turns_head; turn; turn = turn->next)
    {
@@ -912,8 +907,7 @@ cJSON *opencode_v2_session_status_map_locked(opencode_v2_bridge_t *b)
    return map;
 }
 
-cJSON *opencode_v2_text_props_locked(opencode_v2_bridge_t *b, const char *field,
-                                            const char *value)
+cJSON *opencode_v2_text_props_locked(opencode_v2_bridge_t *b, const char *field, const char *value)
 {
    cJSON *props = cJSON_CreateObject();
    cJSON_AddStringToObject(props, "sessionID", b->session_id);
@@ -944,8 +938,8 @@ static void opencode_v2_part_id_locked(char *out, size_t out_len, opencode_v2_tu
    snprintf(out, out_len, "prt_%s", assistant ? turn->assistant_id : turn->user_id);
 }
 
-cJSON *opencode_v2_legacy_message_props_locked(opencode_v2_bridge_t *b,
-                                                      opencode_v2_turn_t *turn, int assistant)
+cJSON *opencode_v2_legacy_message_props_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *turn,
+                                               int assistant)
 {
    cJSON *props = cJSON_CreateObject();
    cJSON_AddStringToObject(props, "sessionID", b->session_id);
@@ -953,8 +947,8 @@ cJSON *opencode_v2_legacy_message_props_locked(opencode_v2_bridge_t *b,
    return props;
 }
 
-cJSON *opencode_v2_legacy_part_props_locked(opencode_v2_bridge_t *b,
-                                                   opencode_v2_turn_t *turn, int assistant)
+cJSON *opencode_v2_legacy_part_props_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *turn,
+                                            int assistant)
 {
    cJSON *props = cJSON_CreateObject();
    cJSON_AddStringToObject(props, "sessionID", b->session_id);
@@ -1287,8 +1281,8 @@ opencode_v2_turn_t *opencode_v2_create_turn_locked(opencode_v2_bridge_t *b, cons
    return turn;
 }
 
-static opencode_v2_turn_t *opencode_v2_create_assistant_continuation_locked(
-    opencode_v2_bridge_t *b, opencode_v2_turn_t *prev)
+static opencode_v2_turn_t *
+opencode_v2_create_assistant_continuation_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *prev)
 {
    opencode_v2_turn_t *turn = calloc(1, sizeof(*turn));
    if (!turn)
@@ -1314,8 +1308,7 @@ static opencode_v2_turn_t *opencode_v2_create_assistant_continuation_locked(
    return turn;
 }
 
-int opencode_v2_has_prior_unstarted_turn_locked(opencode_v2_bridge_t *b,
-                                                       opencode_v2_turn_t *turn)
+int opencode_v2_has_prior_unstarted_turn_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *turn)
 {
    for (opencode_v2_turn_t *it = b ? b->turns_head : NULL; it && it != turn; it = it->next)
    {

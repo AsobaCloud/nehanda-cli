@@ -19,7 +19,6 @@
 #include <unistd.h>
 #endif /* !_WIN32 (preamble guard) */
 
-
 static void print_worktree_gc(cJSON *resp)
 {
    if (!resp)

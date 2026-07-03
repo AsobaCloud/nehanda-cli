@@ -16,4 +16,3 @@ SpaceAfterCStyleCast: false
 SortIncludes: Never
 AlignConsecutiveMacros: Consecutive
 IndentCaseLabels: false
-PenaltyReturnTypeOnItsOwnLine: 100000

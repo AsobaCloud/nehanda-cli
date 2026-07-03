@@ -19,7 +19,6 @@
 #include <unistd.h>
 #endif /* !_WIN32 (preamble guard) */
 
-
 static cJSON *marshal_aux_test(int argc, char **argv)
 {
    rpc_opts_t opts;

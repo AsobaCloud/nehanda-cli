@@ -61,7 +61,6 @@
 #include <unistd.h>
 #include <string.h>
 
-
 #include "agent_eval.h"
 
 static const char *server_eval_json_str(cJSON *obj, const char *key)

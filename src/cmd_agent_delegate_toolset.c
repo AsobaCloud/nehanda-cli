@@ -36,7 +36,7 @@
 #include <unistd.h>
 
 const char *delegate_toolset_override_arg(const opt_parsed_t *opts, int argc, char **argv,
-                                                 const char **prompt_io)
+                                          const char **prompt_io)
 {
    const char *toolset = opt_get(opts, "tools");
    if (toolset && !toolset[0])

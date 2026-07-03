@@ -43,7 +43,6 @@
 #include <unistd.h>
 #include <stdatomic.h>
 
-
 /* Build the optional `X-Request-ID: <id>\r\n` header line into dst (or ""). */
 void request_id_header(char *dst, size_t n, const char *request_id)
 {

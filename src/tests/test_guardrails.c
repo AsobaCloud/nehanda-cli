@@ -1333,7 +1333,7 @@ static void test_hook_call_count_increments(void)
    assert(loaded.hook_call_count == 2);
 
    db1_session_state_delete(sid);
-guardrails_close_test_sqlite();
+   guardrails_close_test_sqlite();
 }
 
 static void test_no_worktree_blocks_writes(void)

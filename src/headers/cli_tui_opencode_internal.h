@@ -47,26 +47,24 @@ typedef struct
 /* promoted cross-TU (former .inc statics) */
 int append_text(char **buf, size_t *len, size_t *cap, const char *text);
 int builtin_chat_send_streaming_control(const char *sock, const char *provider_session_id,
-                                               const char *aimee_session_id, const char *message,
-                                               char **reply_out, char *provider_session_out,
-                                               size_t provider_session_out_len,
-                                               void (*text_cb)(const char *text, void *userdata),
-                                               void (*event_cb)(const char *event, void *userdata),
-                                               void *text_cb_data,
-                                               builtin_chat_stream_control_t *control);
-void chat_format_aimee_model_label(const char *provider, const char *model,
-                                          const char *effort, char *out, size_t out_len);
+                                        const char *aimee_session_id, const char *message,
+                                        char **reply_out, char *provider_session_out,
+                                        size_t provider_session_out_len,
+                                        void (*text_cb)(const char *text, void *userdata),
+                                        void (*event_cb)(const char *event, void *userdata),
+                                        void *text_cb_data, builtin_chat_stream_control_t *control);
+void chat_format_aimee_model_label(const char *provider, const char *model, const char *effort,
+                                   char *out, size_t out_len);
 int cli_chat_presence_attach(const char *sock, const char *session_id, const char *surface,
-                                    char *out_attach, size_t out_n);
-void cli_chat_presence_detach(const char *sock, const char *session_id,
-                                     const char *attach_id);
+                             char *out_attach, size_t out_n);
+void cli_chat_presence_detach(const char *sock, const char *session_id, const char *attach_id);
 int opencode_exec_tui(const char *sock, const char *agent_name, const char *model,
-                             const char *effort, const char *session_id, int autonomous, int debug,
-                             int default_launch, int argc, char **argv, int *handled);
+                      const char *effort, const char *session_id, int autonomous, int debug,
+                      int default_launch, int argc, char **argv, int *handled);
 
-#define BUILTIN_CHAT_SEND_TRANSPORT_ERROR   2
+#define BUILTIN_CHAT_SEND_TRANSPORT_ERROR 2
 
-#define CLI_TUI_PATH_MAX                    4096
+#define CLI_TUI_PATH_MAX 4096
 
 typedef struct
 {
@@ -124,24 +122,23 @@ cJSON *opencode_v2_file_content_json_locked(opencode_v2_bridge_t *b, const char 
 cJSON *opencode_v2_file_list_json_locked(opencode_v2_bridge_t *b, const char *query);
 int opencode_v2_find_on_path(const char *name, char *out, size_t out_len);
 opencode_v2_turn_t *opencode_v2_find_turn_locked(opencode_v2_bridge_t *b, const char *id,
-                                                        int *assistant);
+                                                 int *assistant);
 void opencode_v2_free_events(opencode_v2_bridge_t *b);
 void opencode_v2_free_prompt_jobs(opencode_v2_prompt_job_t *job);
 void opencode_v2_free_turns(opencode_v2_bridge_t *b);
-int opencode_v2_has_prior_unstarted_turn_locked(opencode_v2_bridge_t *b,
-                                                       opencode_v2_turn_t *turn);
+int opencode_v2_has_prior_unstarted_turn_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *turn);
 void opencode_v2_hash_id(char *out, size_t out_len, const char *prefix, const char *seed);
 cJSON *opencode_v2_legacy_bundle_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *turn,
+                                        int assistant);
+cJSON *opencode_v2_legacy_message_props_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *turn,
                                                int assistant);
-cJSON *opencode_v2_legacy_message_props_locked(opencode_v2_bridge_t *b,
-                                                      opencode_v2_turn_t *turn, int assistant);
 cJSON *opencode_v2_legacy_messages_json_locked(opencode_v2_bridge_t *b);
 cJSON *opencode_v2_legacy_part_json_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *turn,
-                                                  int assistant);
-cJSON *opencode_v2_legacy_part_props_locked(opencode_v2_bridge_t *b,
-                                                   opencode_v2_turn_t *turn, int assistant);
+                                           int assistant);
+cJSON *opencode_v2_legacy_part_props_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *turn,
+                                            int assistant);
 cJSON *opencode_v2_message_json_locked(opencode_v2_bridge_t *b, opencode_v2_turn_t *turn,
-                                              int assistant);
+                                       int assistant);
 cJSON *opencode_v2_messages_json_locked(opencode_v2_bridge_t *b);
 cJSON *opencode_v2_model_json(opencode_v2_bridge_t *b);
 long long opencode_v2_now_ms(void);
@@ -172,8 +169,7 @@ void opencode_v2_stream_event(const char *event, void *userdata);
 void opencode_v2_stream_events(opencode_v2_bridge_t *b, int fd, int global);
 cJSON *opencode_v2_sync_history_json_locked(opencode_v2_bridge_t *b);
 opencode_v2_prompt_job_t *opencode_v2_take_prompt_jobs_locked(opencode_v2_bridge_t *b);
-cJSON *opencode_v2_text_props_locked(opencode_v2_bridge_t *b, const char *field,
-                                            const char *value);
+cJSON *opencode_v2_text_props_locked(opencode_v2_bridge_t *b, const char *field, const char *value);
 cJSON *opencode_v2_v2_messages_response_locked(opencode_v2_bridge_t *b);
 cJSON *opencode_v2_v2_sessions_response_locked(opencode_v2_bridge_t *b);
 
@@ -184,5 +180,6 @@ typedef struct
    opencode_v2_turn_t *turn;
 } opencode_v2_stream_t;
 
-opencode_v2_turn_t * opencode_v2_create_turn_locked(opencode_v2_bridge_t *b, const char *prompt, const char *message_id);
+opencode_v2_turn_t *opencode_v2_create_turn_locked(opencode_v2_bridge_t *b, const char *prompt,
+                                                   const char *message_id);
 #endif

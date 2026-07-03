@@ -39,7 +39,6 @@
 #include <unistd.h>
 #include <pthread.h>
 
-
 /* gate_check_sensitive, gate_check_ephemeral, and gate_has_evidence_markers
  * are platform-owned quality gates. */
 

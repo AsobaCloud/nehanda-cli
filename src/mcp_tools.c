@@ -649,9 +649,9 @@ cJSON *mcp_build_tools_list(void)
                           "\"required\":[\"diff\"]}")));
    }
 
-/* mcp_tools_pipeline.inc: roundtable authoring pipeline (pipeline_*) MCP tool
- * definitions, #included by mcp_build_tools_list() in mcp_tools.c (kept as an
- * .inc to stay under the per-file line cap). */
+   /* mcp_tools_pipeline.inc: roundtable authoring pipeline (pipeline_*) MCP tool
+    * definitions, #included by mcp_build_tools_list() in mcp_tools.c (kept as an
+    * .inc to stay under the per-file line cap). */
 
    /* Roundtable authoring pipeline (pipeline_* tools): idea -> reviewed proposal
     * -> implementation -> reviewed PR, with two human gates and two roundtable

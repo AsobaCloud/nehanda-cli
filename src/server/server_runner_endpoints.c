@@ -30,7 +30,6 @@
 #include <time.h>
 #include <unistd.h>
 
-
 /* workspace.get: read-only manifest for a workspace handle — which provider
  * backs it, its root, existence, and VCS state (workspace-resource-plane §1). */
 int handle_workspace_get(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)

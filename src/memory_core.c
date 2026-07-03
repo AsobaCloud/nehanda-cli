@@ -701,8 +701,6 @@ void memory_coref_stats_reset(void)
 
 #include <pthread.h>
 
-
-
 pthread_mutex_t s_memory_pagerank_stats_mu = PTHREAD_MUTEX_INITIALIZER;
 memory_pagerank_runtime_stats_t s_memory_pagerank_stats;
 

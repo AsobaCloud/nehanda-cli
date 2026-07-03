@@ -282,8 +282,8 @@ static void chat_stream_finish(builtin_chat_stream_t *st)
 static void chat_detect_model(const char *provider, const char *model, char *out, size_t out_len);
 static void chat_detect_effort(const char *provider, char *out, size_t out_len);
 #ifdef AIMEE_POSIX /* defined and used only by the POSIX-only OpenCode TUI */
-void chat_format_aimee_model_label(const char *provider, const char *model,
-                                          const char *effort, char *out, size_t out_len);
+void chat_format_aimee_model_label(const char *provider, const char *model, const char *effort,
+                                   char *out, size_t out_len);
 #endif
 static int chat_config_read_scalar(const char *key, char *out, size_t out_len);
 
@@ -307,8 +307,8 @@ static void chat_copy_canonical_model(char *out, size_t out_len, const char *mod
 }
 
 #ifdef AIMEE_POSIX /* only the OpenCode TUI (POSIX-only) uses this label helper */
-void chat_format_aimee_model_label(const char *provider, const char *model,
-                                          const char *effort, char *out, size_t out_len)
+void chat_format_aimee_model_label(const char *provider, const char *model, const char *effort,
+                                   char *out, size_t out_len)
 {
    const char *p = provider && provider[0] ? provider : "primary";
    const char *m = model && model[0] ? model : "aimee";
@@ -319,15 +319,14 @@ void chat_format_aimee_model_label(const char *provider, const char *model,
 }
 #endif
 
-static int builtin_chat_send_ex(const char *sock, const char *provider_session_id,
-                                const char *aimee_session_id, const char *message, char **reply_out,
-                                char *provider_session_out, size_t provider_session_out_len,
-                                FILE *out, int render_markdown,
-                                void (*text_cb)(const char *text, void *userdata),
-                                void (*event_cb)(const char *event, void *userdata),
-                                void (*tool_cb)(const char *phase, const char *tool_name,
-                                                void *userdata),
-                                void *text_cb_data, builtin_chat_stream_control_t *control)
+static int
+builtin_chat_send_ex(const char *sock, const char *provider_session_id,
+                     const char *aimee_session_id, const char *message, char **reply_out,
+                     char *provider_session_out, size_t provider_session_out_len, FILE *out,
+                     int render_markdown, void (*text_cb)(const char *text, void *userdata),
+                     void (*event_cb)(const char *event, void *userdata),
+                     void (*tool_cb)(const char *phase, const char *tool_name, void *userdata),
+                     void *text_cb_data, builtin_chat_stream_control_t *control)
 {
    if (reply_out)
       *reply_out = NULL;
@@ -464,7 +463,7 @@ static int builtin_chat_send(const char *sock, const char *provider_session_id,
  * minted attach id on success, 0 on any failure (the chat then proceeds
  * unarbitrated). */
 int cli_chat_presence_attach(const char *sock, const char *session_id, const char *surface,
-                                    char *out_attach, size_t out_n)
+                             char *out_attach, size_t out_n)
 {
    (void)sock; /* presence attach is a co-located /v1 call */
    if (out_attach && out_n)
@@ -494,8 +493,7 @@ int cli_chat_presence_attach(const char *sock, const char *session_id, const cha
 
 /* Detach a "cli" surface previously registered by cli_chat_presence_attach.
  * Best-effort; ignores failures. */
-void cli_chat_presence_detach(const char *sock, const char *session_id,
-                                     const char *attach_id)
+void cli_chat_presence_detach(const char *sock, const char *session_id, const char *attach_id)
 {
    (void)sock; /* presence detach is a co-located /v1 call */
    if (!session_id || !session_id[0] || !attach_id || !attach_id[0])
@@ -562,20 +560,18 @@ char *cli_chat_stream(const char *sock, const char *session_id, const char *mess
 
 #ifdef AIMEE_POSIX /* only the OpenCode TUI (POSIX-only) drives streaming control */
 int builtin_chat_send_streaming_control(const char *sock, const char *provider_session_id,
-                                               const char *aimee_session_id, const char *message,
-                                               char **reply_out, char *provider_session_out,
-                                               size_t provider_session_out_len,
-                                               void (*text_cb)(const char *text, void *userdata),
-                                               void (*event_cb)(const char *event, void *userdata),
-                                               void *text_cb_data,
-                                               builtin_chat_stream_control_t *control)
+                                        const char *aimee_session_id, const char *message,
+                                        char **reply_out, char *provider_session_out,
+                                        size_t provider_session_out_len,
+                                        void (*text_cb)(const char *text, void *userdata),
+                                        void (*event_cb)(const char *event, void *userdata),
+                                        void *text_cb_data, builtin_chat_stream_control_t *control)
 {
    return builtin_chat_send_ex(sock, provider_session_id, aimee_session_id, message, reply_out,
                                provider_session_out, provider_session_out_len, NULL, 0, text_cb,
                                event_cb, NULL, text_cb_data, control);
 }
 #endif
-
 
 static int chat_is_codex_provider(const char *provider)
 {

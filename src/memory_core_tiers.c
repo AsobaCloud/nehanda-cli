@@ -39,7 +39,6 @@
 #include <unistd.h>
 #include <pthread.h>
 
-
 int memory_tier_priority(const char *tier)
 {
    if (!tier)

@@ -32,8 +32,6 @@ void __attribute__((unused)) cli_v1_sleep_ms(int ms)
 
 /* --- Minimal arg parser (no util.h dependency) --- */
 
-
-
 static int rpc_is_bool(const char *name, const char **bool_flags)
 {
    if (!bool_flags)

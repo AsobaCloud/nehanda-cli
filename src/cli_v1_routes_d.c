@@ -19,7 +19,6 @@
 #include <unistd.h>
 #endif /* !_WIN32 (preamble guard) */
 
-
 typedef void (*pt_print_fn)(const char *method, cJSON *resp);
 static const struct
 {
@@ -777,7 +776,6 @@ static const struct
     {"rules.generate", "POST", "/v1/rules/generate"},
 };
 /* @@GEN-CLI-V1-ROUTES END @@ */
-
 
 /* First-class /v1 REST route resolvers — SHARED across POSIX and Windows so both
  * thin clients route a method to its dedicated dispatch-backed endpoint. Pure

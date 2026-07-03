@@ -30,7 +30,6 @@
 #include <time.h>
 #include <unistd.h>
 
-
 /* /v1/audit/trace handler. Its op (evidence.trace_retrieval_event) is a KB-only
  * action, so — like handle_kb_search and the curator handlers — the server
  * forwards it to aimee-kb via kb_client and passes the JSON response through.

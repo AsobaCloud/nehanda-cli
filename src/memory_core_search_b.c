@@ -242,10 +242,10 @@ memory_ranker_input_t memory_ranker_input_from(const memory_t *m)
 }
 
 void memory_compute_score_parts(const char *raw_query, const char *norm_query,
-                                       const memory_ranker_input_t *m, const int64_t *semantic_ids,
-                                       const double *semantic_scores, int semantic_hit_count,
-                                       const memory_pagerank_score_t *pagerank_scores,
-                                       int pagerank_count, memory_score_parts_t *parts)
+                                const memory_ranker_input_t *m, const int64_t *semantic_ids,
+                                const double *semantic_scores, int semantic_hit_count,
+                                const memory_pagerank_score_t *pagerank_scores, int pagerank_count,
+                                memory_score_parts_t *parts)
 {
    if (!parts)
       return;
@@ -436,7 +436,7 @@ static int memory_compact_signal_tokens(char tokens[][64], int start, int end, c
 }
 
 int memory_build_query_decomposition(const char *norm_query, char subqueries[][128],
-                                            int max_subqueries)
+                                     int max_subqueries)
 {
    if (!norm_query || !norm_query[0] || !subqueries || max_subqueries <= 0)
       return 0;
@@ -576,11 +576,9 @@ static double memory_scene_cluster_bonus(const memory_t *matches, int count, int
    return bonus;
 }
 
-
-
 void memory_note_candidate_sources(memory_candidate_source_t *stats, int *stats_count,
-                                          int stats_max, const memory_t *matches, int start,
-                                          int end, unsigned int source_mask)
+                                   int stats_max, const memory_t *matches, int start, int end,
+                                   unsigned int source_mask)
 {
    if (!stats || !stats_count || !matches || source_mask == 0)
       return;
@@ -642,8 +640,7 @@ static double memory_source_fusion_bonus(const memory_candidate_source_t *stats,
    return bonus;
 }
 
-void memory_record_query_stage_metric(const memory_query_plan_t *plan,
-                                             const char *stage_name)
+void memory_record_query_stage_metric(const memory_query_plan_t *plan, const char *stage_name)
 {
    char key[128];
    if (!stage_name || !stage_name[0])
@@ -842,10 +839,9 @@ static const char *memory_cross_encoder_command(const config_t *cfg)
 }
 
 int memory_rerank_matches(const char *raw_query, memory_t *matches, int count, int limit,
-                                 const int64_t *semantic_ids, const double *semantic_scores,
-                                 int semantic_hit_count,
-                                 const memory_candidate_source_t *source_stats,
-                                 int source_stats_count)
+                          const int64_t *semantic_ids, const double *semantic_scores,
+                          int semantic_hit_count, const memory_candidate_source_t *source_stats,
+                          int source_stats_count)
 {
    if (!raw_query || !matches || count <= 1)
       return count < limit ? count : limit;
@@ -1067,7 +1063,7 @@ int memory_scope_matches(int64_t memory_id, const char *scope_type, const char *
 }
 
 int memory_filter_scope(memory_t *matches, int count, const char *scope_type,
-                               const char *scope_value)
+                        const char *scope_value)
 {
    if (!scope_type || !scope_type[0] || !scope_value || !scope_value[0])
       return count;
@@ -1084,8 +1080,7 @@ int memory_filter_scope(memory_t *matches, int count, const char *scope_type,
 }
 
 int memory_find_facts_lexical_fallback(const char *query, const char *scope_type,
-                                              const char *scope_value, int limit, memory_t *out,
-                                              int max)
+                                       const char *scope_value, int limit, memory_t *out, int max)
 {
    if (!query || !query[0] || !out || max <= 0)
       return 0;
@@ -1130,8 +1125,8 @@ int memory_find_facts_lexical_fallback(const char *query, const char *scope_type
 }
 
 int memory_find_facts_visible_lexical_fallback(const char *query, const char *workspace,
-                                                      const char *project, int limit, memory_t *out,
-                                                      int max)
+                                               const char *project, int limit, memory_t *out,
+                                               int max)
 {
    if (!query || !query[0] || !out || max <= 0)
       return 0;
@@ -1271,8 +1266,8 @@ static int memory_collect_code_matches(const char *query, int fetch_limit, memor
  * `out` with the parent memory_t rows ordered by hit_count DESC then best
  * score DESC. Replaces the old unit-text lookup path with a vector-native
  * corroboration filter. */
-int memory_collect_unit_matches_via_vector(const char *query, const char *embed_cmd,
-                                                  int limit, memory_t *out, int max)
+int memory_collect_unit_matches_via_vector(const char *query, const char *embed_cmd, int limit,
+                                           memory_t *out, int max)
 {
    if (!query || !query[0] || !out || limit <= 0 || max <= 0)
       return 0;
@@ -1366,8 +1361,8 @@ int memory_collect_unit_matches_via_vector(const char *query, const char *embed_
 /* Embed `query`, search the pgvector memory index, and fill `out` with the
  * resulting memory_t rows in score order. Dense memory retrieval lives in
  * pgvector inside DB2 (no separate tier). */
-int memory_collect_memory_matches_via_vector(const char *query, const char *embed_cmd,
-                                                    int limit, memory_t *out, int max)
+int memory_collect_memory_matches_via_vector(const char *query, const char *embed_cmd, int limit,
+                                             memory_t *out, int max)
 {
    if (!query || !query[0] || !out || limit <= 0 || max <= 0)
       return 0;
@@ -1481,8 +1476,8 @@ static int memory_collect_memory_matches_via_vector_with_kinds(const char *query
  * apply floors for multiple lanes in sequence MUST pass the return value of
  * each call as `total` to the next call — this prevents the second floor from
  * displacing items promoted by the first. */
-int memory_apply_lane_floor(memory_t *matches, int count, const int64_t *lane_ids,
-                                   int lane_count, int floor_n, int total)
+int memory_apply_lane_floor(memory_t *matches, int count, const int64_t *lane_ids, int lane_count,
+                            int floor_n, int total)
 {
    if (floor_n <= 0 || count <= 0 || lane_count <= 0 || total <= 0)
       return total;
@@ -1613,10 +1608,9 @@ static int memory_expand_query_semantic(const char *query, const char *embed_cmd
 }
 
 int memory_collect_variant_candidates(const char *raw_query, const char *norm_variant,
-                                             memory_query_intent_t intent, int fetch_limit,
-                                             memory_t *out, int count, int max,
-                                             memory_candidate_source_t *source_stats,
-                                             int *source_stats_count)
+                                      memory_query_intent_t intent, int fetch_limit, memory_t *out,
+                                      int count, int max, memory_candidate_source_t *source_stats,
+                                      int *source_stats_count)
 {
    if (!raw_query || !raw_query[0] || !norm_variant || !norm_variant[0] || !out || max <= 0)
       return count;
@@ -1850,4 +1844,3 @@ int memory_collect_variant_candidates(const char *raw_query, const char *norm_va
 
    return count;
 }
-

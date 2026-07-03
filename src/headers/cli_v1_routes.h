@@ -6,6 +6,7 @@
 #define V1_PROTOCOL_VERSION 1
 const char *json_str(cJSON *obj, const char *key);
 const char *cli_v1_route_for_method(const char *method, const char **verb_out);
-const char *cli_v1_pathid_route_for_method(const char *method, const char **verb_out, const char **suffix_out, const char **id_field_out);
+const char *cli_v1_pathid_route_for_method(const char *method, const char **verb_out,
+                                           const char **suffix_out, const char **id_field_out);
 cJSON *cli_v1_dispatch_local(cJSON *req, int timeout_ms);
 #endif

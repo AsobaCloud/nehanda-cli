@@ -49,10 +49,8 @@
 #include <stdarg.h>
 #include "agent_help_data.h"
 
-
 /* Per-call bundle passed to every handler: the request context plus the
  * out-param for tools that emit an MCP `structured` payload alongside text. */
-
 
 /* ── thin wrappers: uniform signature over the existing tool_* helpers ─────── */
 
@@ -1249,8 +1247,8 @@ static cJSON *mcph_code_span_get(struct mcp_call *c)
    config_load(&cfg);
    int max_lines = cfg.code_span_max_lines > 0 ? cfg.code_span_max_lines : 400;
 
-   cJSON *result = code_span_read(jp->valuestring, root, jf->valuestring, line_start, line_end,
-                                  max_lines);
+   cJSON *result =
+       code_span_read(jp->valuestring, root, jf->valuestring, line_start, line_end, max_lines);
    if (!result)
       return text_content("error: out of memory");
    return json_result_content(result);

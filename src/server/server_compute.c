@@ -88,8 +88,6 @@ static void delegate_generate_id(char *out, size_t cap)
             seq);
 }
 
-
-
 /* compute_ctx_t is defined in server_compute_impl.h */
 
 void compute_ctx_begin_budget(compute_ctx_t *cctx)
@@ -1638,7 +1636,6 @@ static int roundtable_run_cancel_requested(void *ctx)
    const char *run_id = (const char *)ctx;
    return run_id && run_id[0] && openai_runs_store_cancel_requested(run_id);
 }
-
 
 int handle_tool_execute(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {

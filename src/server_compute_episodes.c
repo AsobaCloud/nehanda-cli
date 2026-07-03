@@ -57,7 +57,6 @@
 #include <time.h>
 #include <unistd.h>
 
-
 #define EPISODE_LIST_MAX 64
 
 static cJSON *agent_log_entries_to_json(const char *agent_filter, int limit)

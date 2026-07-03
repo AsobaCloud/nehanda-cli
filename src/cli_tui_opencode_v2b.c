@@ -1208,7 +1208,8 @@ static void opencode_v2_server(int listen_fd, const char *sock, const char *agen
     * AIMEE_ATTACH_ID, which builtin_chat_send_ex forwards on every turn.
     * Best-effort: if the attach fails the TUI proceeds unarbitrated. */
    if (b.aimee_session_id && b.aimee_session_id[0] &&
-       cli_chat_presence_attach(b.sock, b.aimee_session_id, "tui", b.attach_id, sizeof(b.attach_id)))
+       cli_chat_presence_attach(b.sock, b.aimee_session_id, "tui", b.attach_id,
+                                sizeof(b.attach_id)))
    {
       b.attached = 1;
       platform_setenv("AIMEE_ATTACH_ID", b.attach_id);
@@ -1283,8 +1284,8 @@ static void opencode_v2_print_install_hint(const char *frontend)
 }
 
 int opencode_exec_tui(const char *sock, const char *agent_name, const char *model,
-                             const char *effort, const char *session_id, int autonomous, int debug,
-                             int default_launch, int argc, char **argv, int *handled)
+                      const char *effort, const char *session_id, int autonomous, int debug,
+                      int default_launch, int argc, char **argv, int *handled)
 {
    (void)default_launch;
    if (handled)
@@ -1379,8 +1380,8 @@ int opencode_exec_tui(const char *sock, const char *agent_name, const char *mode
 
 #else
 int opencode_exec_tui(const char *sock, const char *agent_name, const char *model,
-                             const char *effort, const char *session_id, int autonomous, int debug,
-                             int default_launch, int argc, char **argv, int *handled)
+                      const char *effort, const char *session_id, int autonomous, int debug,
+                      int default_launch, int argc, char **argv, int *handled)
 {
    (void)sock;
    (void)agent_name;

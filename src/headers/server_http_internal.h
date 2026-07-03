@@ -29,7 +29,12 @@ void handle_session_events(int fd, const char *id_in, const char *request_id);
 
 extern atomic_int g_conn_live;
 #define CONN_LIVE_MAX 64
-typedef struct { int fd; int is_tcp; int is_tls; } conn_job_t;
+typedef struct
+{
+   int fd;
+   int is_tcp;
+   int is_tls;
+} conn_job_t;
 void handle_conn(int fd, int is_tcp);
 /* promoted cross-TU (former .inc statics) */
 int emit(char *resp, int cap, cJSON *obj);
@@ -38,15 +43,14 @@ int write_all_fd(int fd, const char *buf, int len);
 void write_sse_headers(int fd, const char *request_id);
 
 /* promoted cross-TU (former .inc statics) */
-int loopback_rpc(const char *body, int body_len, char *resp, int resp_cap,
-                        uint32_t conn_caps);
+int loopback_rpc(const char *body, int body_len, char *resp, int resp_cap, uint32_t conn_caps);
 int route_capabilities(char *resp, int cap);
 int route_completion(server_http_completion_fn fn, const char *body, char *resp, int cap);
 int route_health(char *resp, int cap);
 int route_json_provider(server_http_json_provider fn, char *resp, int cap, const char *what);
 int route_models(char *resp, int cap);
 int route_native_post(server_http_completion_fn fn, const char *body, char *resp, int cap,
-                             const char *unavailable_msg);
+                      const char *unavailable_msg);
 int route_runs_get(const char *id, char *resp, int cap);
 int route_runs_stop(const char *id, char *resp, int cap);
 int route_session_attach(const char *session_id, const char *body, char *resp, int cap);
@@ -60,7 +64,7 @@ int route_sessions_list(char *resp, int cap);
 int route_version(char *resp, int cap);
 uint32_t v1_route_caps_lookup(const char *method, const char *path);
 int v1_route_dispatch(const char *method, const char *path, const char *body, int body_len,
-                             char *resp, int resp_cap);
+                      char *resp, int resp_cap);
 int v1_route_is_local_only(const char *method, const char *path);
 
 extern server_http_json_provider g_agents_provider;

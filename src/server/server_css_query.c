@@ -30,7 +30,6 @@
 #include <time.h>
 #include <unistd.h>
 
-
 /* Defined in kb_client.c; takes ownership of req. */
 char *kb_v1_action_request(const char *method, cJSON *req);
 
