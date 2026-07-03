@@ -22,7 +22,7 @@ aimee config set <key> <value>    # set one value
 
 Structured options (arrays, nested objects — e.g. `ensemble.reference_models`) are not CLI-settable; they are written into the config file under the sections listed at the end.
 
-## CLI-settable keys (136)
+## CLI-settable keys (137)
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -40,6 +40,7 @@ Structured options (arrays, nested objects — e.g. `ensemble.reference_models`)
 | `code_hybrid_weight_vector` | float | RRF weight for the embedding-similarity signal in /v1/code/hybrid (default 1.0; <=0 disables it; auto-skips when no dim-matched embedder). |
 | `code_span_max_lines` | int | Max line span the code_span_get recovery resolver returns per call (default 400). |
 | `code_surprising_precision_floor` | float | §4 self-suppress: when the LLM-judge-sampled precision of surprising-link candidates falls below this floor, an unjudged /v1/code/graph/surprising request returns no candidates (default 0 = disabled). |
+| `code_trust_actuation_enabled` | bool | — |
 | `cost_reward_enabled` | bool | Factor token cost into the reward signal. |
 | `cost_reward_lambda_pct` | int | Cost-penalty weight (percent) in the reward. |
 | `cost_reward_ref_usd_milli` | int | Reference cost (USD-milli) normalizing the cost reward. |
@@ -163,7 +164,7 @@ Structured options (arrays, nested objects — e.g. `ensemble.reference_models`)
 | `virtual_context_enabled` | bool | Enable virtual-context assembly. |
 | `wfe_live_forge_enabled` | bool | — |
 
-> **Undocumented** (add to `CFG_KEY_DESC` in gen-reference-docs.py): `audit_action_enabled`, `wfe_live_forge_enabled`
+> **Undocumented** (add to `CFG_KEY_DESC` in gen-reference-docs.py): `audit_action_enabled`, `code_trust_actuation_enabled`, `wfe_live_forge_enabled`
 
 ## Config-file sections (51)
 
