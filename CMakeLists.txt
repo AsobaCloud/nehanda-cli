@@ -705,6 +705,7 @@ set(GIT_SRCS
     ${AIMEE_SRC_DIR}/mcp_git_branch.c
     ${AIMEE_SRC_DIR}/mcp_git_pr.c
     ${AIMEE_SRC_DIR}/git_verify.c
+    ${AIMEE_SRC_DIR}/git_verify_state.c
     ${AIMEE_SRC_DIR}/git_verify_config.c
     ${AIMEE_SRC_DIR}/git_verify_hook.c
     ${AIMEE_SRC_DIR}/git_verify_jobs.c
@@ -742,6 +743,7 @@ set(CMD_SRCS
     ${AIMEE_SRC_DIR}/cmd_agent_setup.c
     ${AIMEE_SRC_DIR}/cmd_agent_trace.c
     ${AIMEE_SRC_DIR}/cmd_agent_delegate.c
+    ${AIMEE_SRC_DIR}/cmd_agent_delegate_toolset.c
     ${AIMEE_SRC_DIR}/server/delegate_prompt_stdin.c
     ${AIMEE_SRC_DIR}/server/delegate_depth.c
     ${AIMEE_SRC_DIR}/server/delegate_plan.c
@@ -800,7 +802,14 @@ set(CLI_SRCS
     ${AIMEE_SRC_DIR}/cli_code_audit.c
     ${AIMEE_SRC_DIR}/cli_css.c
     ${AIMEE_SRC_DIR}/cli_tui.c
+    ${AIMEE_SRC_DIR}/cli_tui_opencode_v2b.c
+    ${AIMEE_SRC_DIR}/cli_tui_opencode_v2.c
+    ${AIMEE_SRC_DIR}/cli_tui_misc.c
     ${AIMEE_SRC_DIR}/cli_client.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes_d.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes_c.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes_b.c
     ${AIMEE_SRC_DIR}/cli_launch.c
     ${AIMEE_SRC_DIR}/cli_mcp_serve.c
     ${AIMEE_SRC_DIR}/cli_profile.c
@@ -827,6 +836,12 @@ set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/server/server_main.c
     ${AIMEE_SRC_DIR}/server/server.c
     ${AIMEE_SRC_DIR}/server/s2_native_gate_hook.c
+    ${AIMEE_SRC_DIR}/server_provider.c
+    ${AIMEE_SRC_DIR}/server_insights.c
+    ${AIMEE_SRC_DIR}/server_eval.c
+    ${AIMEE_SRC_DIR}/server_provider_slots.c
+    ${AIMEE_SRC_DIR}/server/server_api_status.c
+    ${AIMEE_SRC_DIR}/server/server_seed_config.c
     ${AIMEE_SRC_DIR}/server/server_auth.c
     ${AIMEE_SRC_DIR}/server/server_hooks.c
     ${AIMEE_SRC_DIR}/server/server_session.c
@@ -844,6 +859,19 @@ set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/server/vault_capability.c
     ${AIMEE_SRC_DIR}/server/server_vault.c
     ${AIMEE_SRC_DIR}/server/server_state.c
+    ${AIMEE_SRC_DIR}/server/server_runner_endpoints.c
+    ${AIMEE_SRC_DIR}/server/server_state_audit.c
+    ${AIMEE_SRC_DIR}/server/server_css_query.c
+    ${AIMEE_SRC_DIR}/server/server_runner_endpoints.c
+    ${AIMEE_SRC_DIR}/server/server_state_audit.c
+    ${AIMEE_SRC_DIR}/server/server_css_query.c
+    ${AIMEE_SRC_DIR}/server/server_state.c
+    ${AIMEE_SRC_DIR}/server/server_runner_endpoints.c
+    ${AIMEE_SRC_DIR}/server/server_state_audit.c
+    ${AIMEE_SRC_DIR}/server/server_css_query.c
+    ${AIMEE_SRC_DIR}/server/server_runner_endpoints.c
+    ${AIMEE_SRC_DIR}/server/server_state_audit.c
+    ${AIMEE_SRC_DIR}/server/server_css_query.c
     ${AIMEE_SRC_DIR}/server/server_state_index.c
     ${AIMEE_SRC_DIR}/server/harness_memory_routes.c
     ${AIMEE_SRC_DIR}/server/server_plugin.c
@@ -852,6 +880,10 @@ set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/server/server_coord_dispatcher.c
     ${AIMEE_SRC_DIR}/server/server_agent.c
     ${AIMEE_SRC_DIR}/server/server_compute.c
+    ${AIMEE_SRC_DIR}/server/server_compute_roundtable.c
+    ${AIMEE_SRC_DIR}/server/server_compute_mailbox.c
+    ${AIMEE_SRC_DIR}/server_compute_concurrency.c
+    ${AIMEE_SRC_DIR}/server_compute_episodes.c
     ${AIMEE_SRC_DIR}/server/server_delegate_ondemand.c
     ${AIMEE_SRC_DIR}/server/server_delegate_status.c
     ${AIMEE_SRC_DIR}/server/server_compute_async.c
@@ -859,6 +891,8 @@ set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/server/server_skill.c
     ${AIMEE_SRC_DIR}/server/server_skill_jobs.c
     ${AIMEE_SRC_DIR}/server/server_mcp.c
+    ${AIMEE_SRC_DIR}/server/server_mcp_call_table.c
+    ${AIMEE_SRC_DIR}/server/server_mcp_ast_grep.c
     ${AIMEE_SRC_DIR}/server/server_mcp_tools.c
     ${AIMEE_SRC_DIR}/server/server_mcp_delegate.c
     ${AIMEE_SRC_DIR}/server/server_mcp_process.c
@@ -870,6 +904,10 @@ set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/server/session_search_tool.c
     ${AIMEE_SRC_DIR}/server/compute_pool.c
     ${AIMEE_SRC_DIR}/cli_client.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes_d.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes_c.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes_b.c
     ${AIMEE_SRC_DIR}/server/compute_concurrency.c
     ${AIMEE_SRC_DIR}/server/provider_catalog.c
     ${AIMEE_SRC_DIR}/server/dashboard_server.c

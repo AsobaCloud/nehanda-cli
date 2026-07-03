@@ -666,6 +666,7 @@ void memory_coref_stats_reset(void)
 }
 
 #else
+#include "memory_core_internal.h"
 
 #include "db1_optional.h"
 #include "db2/entity_edges.h"
@@ -700,121 +701,10 @@ void memory_coref_stats_reset(void)
 
 #include <pthread.h>
 
-static int memory_split_tokens(const char *norm, char tokens[][64], int max_tokens);
-static int memory_token_in_norm(const char *norm, const char *token);
-static int memory_expand_query_terms(const char *norm_query, char base_tokens[][64], int base_count,
-                                     char expanded[][64], int max_terms);
-static int memory_is_month_token(const char *tok);
-static int memory_is_weekday_token(const char *tok);
-static int memory_is_probable_location_token(const char *tok);
-static int memory_is_relation_token(const char *tok);
-static int memory_is_likely_action_token(const char *tok);
-static int memory_is_coref_pronoun_token(const char *tok);
-static int memory_temporal_value_conflict(const char *a, const char *b);
-static double memory_env_weight(const char *name, double fallback);
-static int memory_env_int(const char *name, int fallback, int min_value, int max_value);
-static void memory_refresh_aliases(int64_t memory_id, const char *key, const char *content);
-static void memory_refresh_summaries(int64_t memory_id, const char *key, const char *content);
-static void memory_refresh_coref_entities(int64_t memory_id, const char *content);
-static void memory_refresh_event_frames(int64_t memory_id, const char *key, const char *content);
-static void memory_refresh_chunks(int64_t memory_id, const char *content);
-static void memory_refresh_units_graph(int64_t memory_id, const char *key, const char *content);
-static void memory_refresh_unit_embeddings(int64_t memory_id);
-static int memory_fetch_row_by_id(int64_t memory_id, memory_t *out);
-static int memory_fetch_row_by_unit_id(int64_t unit_id, memory_t *out);
-static void memory_refresh_episode_relations(int64_t memory_id, const char *key,
-                                             const char *content);
-
-typedef enum
-{
-   MEM_QUERY_GENERAL = 0,
-   MEM_QUERY_TEMPORAL,
-   MEM_QUERY_ENTITY,
-   MEM_QUERY_PROCEDURAL
-} memory_query_intent_t;
-
-static memory_query_intent_t memory_query_intent(const char *raw_query, const char *norm_query);
-static memory_query_shape_t memory_query_shape(const char *raw_query, const char *norm_query);
-static memory_query_route_t memory_query_route(const char *raw_query, const char *norm_query,
-                                               memory_query_shape_t shape);
-static int memory_query_has_term(const char *norm_query, const char *term);
-static int memory_query_is_code_like(const char *query);
-
-typedef struct
-{
-   int year;
-   int month;
-   int day;
-   int granularity; /* 1=year, 2=month, 3=day */
-   int valid;
-} memory_parsed_date_t;
-
-typedef struct
-{
-   enum
-   {
-      MEM_DATE_CONSTRAINT_NONE = 0,
-      MEM_DATE_CONSTRAINT_MATCH,
-      MEM_DATE_CONSTRAINT_BEFORE,
-      MEM_DATE_CONSTRAINT_AFTER,
-      MEM_DATE_CONSTRAINT_BETWEEN
-   } mode;
-   memory_parsed_date_t first;
-   memory_parsed_date_t second;
-} memory_temporal_constraint_t;
-
-typedef struct
-{
-   double lexical_key;
-   double lexical_content;
-   double lexical_long_token_bonus;
-   double coverage;
-   double entity;
-   double temporal;
-   double evidence;
-   double semantic;
-   double state;
-   double workflow_intent;
-   double entity_intent;
-   double temporal_intent;
-   double salience;
-   double surprise;
-   double speaker;
-} memory_rank_weights_t;
-
-typedef struct
-{
-   int enabled;
-   int iterations;
-   double weight;
-   char relations[256];
-} memory_pagerank_config_t;
-
-typedef struct
-{
-   int64_t memory_id;
-   double score;
-} memory_pagerank_score_t;
-
-typedef struct
-{
-   double last_ms;
-   double avg_ms;
-   double max_ms;
-   int samples;
-   int last_candidates;
-   int last_edges;
-} memory_pagerank_runtime_stats_t;
-
-static pthread_mutex_t s_memory_pagerank_stats_mu = PTHREAD_MUTEX_INITIALIZER;
-static memory_pagerank_runtime_stats_t s_memory_pagerank_stats;
+pthread_mutex_t s_memory_pagerank_stats_mu = PTHREAD_MUTEX_INITIALIZER;
+memory_pagerank_runtime_stats_t s_memory_pagerank_stats;
 
 /* Keep the monolith split by responsibility without changing linkage.
  * The included fragments share this translation unit private state. */
-#include "memory_core_helpers.inc"
-#include "memory_core_crud.inc"
-#include "memory_core_search.inc"
-#include "memory_core_scope_embed.inc"
-#include "memory_core_tiers.inc"
 
 #endif /* AIMEE_DB2_DISABLED */

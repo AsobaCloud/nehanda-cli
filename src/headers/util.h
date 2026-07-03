@@ -374,4 +374,17 @@ size_t aimee_base64_encode(const unsigned char *in, size_t in_len, char *out, si
  * or (size_t)-1 on malformed input / insufficient out_cap. */
 size_t aimee_base64_decode(const char *in, unsigned char *out, size_t out_cap);
 
+/* Worktree isolation helpers (shared by the client hook dispatch and the
+ * server-side hook handler). A main clone's top-level .git is a DIRECTORY; a
+ * linked worktree's is a FILE. aimee_path_is_main_clone walks up to the nearest
+ * .git and returns 1 for a main clone, 0 for a worktree / no repo.
+ * aimee_main_clone_edits_allowed is the branch-owner escape hatch: env
+ * AIMEE_ALLOW_MAIN_CHECKOUT=1 or a .git/aimee-allow-main-edits marker up the tree. */
+int aimee_path_is_main_clone(const char *path);
+int aimee_main_clone_edits_allowed(const char *repo_cwd);
+/* Resolve the mutation target (file_path relative to cwd; falls back to cwd) and
+ * return aimee_path_is_main_clone for it — the guard keys on the file being
+ * edited, not just the session cwd. */
+int aimee_edit_target_in_main_clone(const char *file_path, const char *cwd);
+
 #endif /* DEC_UTIL_H */

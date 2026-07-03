@@ -14,6 +14,7 @@
 #include "cli_profile.h"
 #include "client_constants.h"
 #include "client_integrations.h"
+#include "headers/util.h"
 #include "code_collect.h"          /* code_index_install_branch_hook (index watch) */
 #include "harness_memory_audit.h"  /* hmem_audit (diagnostic when project unresolved) */
 #include "harness_memory_common.h" /* hmem_resolve_project (client-side project key) */
@@ -632,6 +633,49 @@ static int client_failopen_subagent_deny(const char *phase, const char *tool_nam
    return 2;
 }
 
+/* Worktree isolation (client-side, server-independent — mirrors the sub-agent
+ * guard above). aimee isolates its OWN work in worktrees, but the primary
+ * session's harness Edit/Write never reach aimee's gateway, so the shared main
+ * clone was editable directly — how concurrent sessions entangle uncommitted
+ * work on one branch. Enforce it here so it holds even when aimee-server is
+ * down. A main clone's .git is a directory; a worktree's is a file. Returns the
+ * process exit code, or -1 when not applicable (caller proceeds). */
+static int client_failopen_worktree_deny(const char *phase, const char *tool_name,
+                                         const char *file_path, const char *payload_cwd)
+{
+   if (!phase || strcmp(phase, "pre") != 0 || !tool_name)
+      return -1;
+   if (!(strcmp(tool_name, "Write") == 0 || strcmp(tool_name, "Edit") == 0 ||
+         strcmp(tool_name, "MultiEdit") == 0 || strcmp(tool_name, "NotebookEdit") == 0))
+      return -1;
+   /* Prefer the session cwd from the hook payload (authoritative); fall back to
+    * this process's cwd (the hook usually inherits the session's dir). */
+   char cwd[MAX_PATH_LEN];
+   if (payload_cwd && payload_cwd[0])
+      snprintf(cwd, sizeof(cwd), "%s", payload_cwd);
+   else if (!getcwd(cwd, sizeof(cwd)))
+      return -1;
+   /* Key on the file being edited (resolved against cwd), not just the cwd — an
+    * absolute Edit into the main clone from a worktree session must still be caught. */
+   if (!aimee_edit_target_in_main_clone(file_path, cwd) || aimee_main_clone_edits_allowed(cwd))
+      return -1;
+   char reason[1024];
+   snprintf(reason, sizeof(reason),
+            "BLOCKED: %s edits the SHARED MAIN CLONE (%s), not a git worktree — concurrent "
+            "sessions entangle uncommitted work this way. Isolate the task in its own worktree:\n"
+            "  git -C %s worktree add ../<name>-<task> -b <branch> origin/testing\n"
+            "then work there. (Branch-owner override: AIMEE_ALLOW_MAIN_CHECKOUT=1 or "
+            "touch %s/.git/aimee-allow-main-edits.)",
+            tool_name, cwd, cwd, cwd);
+   if (cli_hook_client_uses_pretool_json())
+   {
+      emit_pretool_deny_json(reason);
+      return 0;
+   }
+   fprintf(stderr, "aimee: %s\n", reason);
+   return 2;
+}
+
 /* Handle hooks specially -- use dedicated server methods for lower latency */
 static int handle_hooks(int argc, char **argv, int json_output)
 {
@@ -666,6 +710,34 @@ static int handle_hooks(int argc, char **argv, int json_output)
          if (tool_input_heap)
             tool_input = tool_input_heap;
       }
+   }
+
+   /* Worktree isolation — pure filesystem check, before we even try the server,
+    * so it holds regardless of aimee-server reachability. */
+   const char *hook_cwd = NULL;
+   const char *hook_file_path = NULL;
+   if (json)
+   {
+      cJSON *cj = cJSON_GetObjectItemCaseSensitive(json, "cwd");
+      if (cJSON_IsString(cj))
+         hook_cwd = cj->valuestring;
+      cJSON *ti = cJSON_GetObjectItemCaseSensitive(json, "tool_input");
+      if (cJSON_IsObject(ti))
+      {
+         cJSON *fp = cJSON_GetObjectItemCaseSensitive(ti, "file_path");
+         if (!cJSON_IsString(fp))
+            fp = cJSON_GetObjectItemCaseSensitive(ti, "notebook_path");
+         if (cJSON_IsString(fp))
+            hook_file_path = fp->valuestring;
+      }
+   }
+   int wt_deny = client_failopen_worktree_deny(phase, tool_name, hook_file_path, hook_cwd);
+   if (wt_deny >= 0)
+   {
+      free(stdin_data);
+      cJSON_Delete(json);
+      free(tool_input_heap);
+      return wt_deny;
    }
 
    const char *sock = cli_ensure_server_for_method(method);

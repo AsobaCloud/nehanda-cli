@@ -9,7 +9,7 @@ conscious decision to exclude it — i.e. it stops op-parity from silently
 regressing.
 
 A method is considered routed when it appears as the `op` twin of a route row
-in src/server/server_http_routes.inc (the declarative registry). Routes backed
+in src/server/server_http_routes.c (the declarative registry). Routes backed
 by a bespoke handler with no op twin (op == NULL) are listed in DEDICATED.
 
 See docs/v1-op-parity-buildout.md for the convention and the exclusion
@@ -24,7 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DISPATCH = ROOT / "src" / "server" / "server.c"
-REGISTRY = ROOT / "src" / "server" / "server_http_routes.inc"
+REGISTRY = ROOT / "src" / "server" / "server_http_routes.c"
 
 METHOD_RE = re.compile(r'"([a-z_]+\.[a-z_]+)"')
 
@@ -114,7 +114,7 @@ def main() -> int:
               "and no documented exclusion:")
         for m in missing:
             print(f"  {m}")
-        print("Add a route row in src/server/server_http_routes.inc (+ an "
+        print("Add a route row in src/server/server_http_routes.c (+ an "
               "OpenAPI path), or add the method to DEDICATED/EXCLUDED in "
               "scripts/check-v1-method-coverage.py with a rationale "
               "(see docs/v1-op-parity-buildout.md).")

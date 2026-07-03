@@ -29,11 +29,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = ROOT / "api" / "openapi-server-v1.yaml"
 # The router (server_http.c) plus the declarative route registry it includes
-# (server_http_routes.inc). Route path literals live in the registry now; the
+# (server_http_routes.c). Route path literals live in the registry now; the
 # router still holds the streaming-route literals handled before the table.
 SRC_GLOBS = [
     str(ROOT / "src" / "server" / "server_http.c"),
-    str(ROOT / "src" / "server" / "server_http_routes.inc"),
+    str(ROOT / "src" / "server" / "server_http_routes.c"),
 ]
 
 

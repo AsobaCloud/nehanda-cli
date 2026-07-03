@@ -185,8 +185,1758 @@ static void insert_agent_log_row(const char *agent_name, const char *role, int s
    assert(db1_agent_log_insert(&row) > 0);
 }
 
-#include "test_memory_cases_a.inc"
-#include "test_memory_cases_b.inc"
+static void test_insert_memory(void)
+{
+   setup();
+   memory_t m;
+   int rc = memory_insert(TIER_L1, KIND_FACT, "test key", "test content", 0.8, "s1", &m);
+   assert(rc == 0);
+   assert(strcmp(m.tier, TIER_L1) == 0);
+   assert(strcmp(m.kind, KIND_FACT) == 0);
+   assert(m.confidence >= 0.79 && m.confidence <= 0.81);
+   assert(m.use_count >= 1);
+   teardown();
+}
+
+static void test_insert_merge(void)
+{
+   setup();
+   memory_t m1, m2;
+   memory_insert(TIER_L1, KIND_FACT, "dup key", "old content", 0.5, "s1", &m1);
+   memory_insert(TIER_L1, KIND_FACT, "dup key", "new content", 0.9, "s2", &m2);
+
+   assert(m2.id == m1.id); /* merged, same ID */
+   assert(m2.use_count >= 2);
+   assert(m2.confidence >= 0.89); /* kept higher */
+   teardown();
+}
+
+static void test_touch_memory(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(TIER_L2, KIND_PREFERENCE, "style", "concise", 0.8, "s1", &m);
+   memory_touch(m.id);
+
+   memory_t updated;
+   memory_get(m.id, &updated);
+   assert(updated.use_count >= 2);
+   teardown();
+}
+
+static void test_promote(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(TIER_L1, KIND_FACT, "promote me", "important", 0.5, "s1", &m);
+
+   /* Bump use_count above threshold */
+   for (int i = 0; i < PROMOTE_L1_USE_COUNT; i++)
+      memory_touch(m.id);
+
+   int promoted = memory_promote();
+   assert(promoted >= 1);
+
+   memory_t updated;
+   memory_get(m.id, &updated);
+   assert(strcmp(updated.tier, TIER_L2) == 0);
+   teardown();
+}
+
+static void test_expire_l0(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(TIER_L0, KIND_SCRATCH, "temp", "scratch data", 0.3, "s1", &m);
+
+   int expired = memory_expire();
+   assert(expired >= 1);
+
+   memory_t check;
+   int rc = memory_get(m.id, &check);
+   assert(rc != 0); /* should be gone */
+   teardown();
+}
+
+static void test_fold_session(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(TIER_L0, KIND_SCRATCH, "task1", "content 1", 0.5, "fold-sess", &m);
+   memory_insert(TIER_L0, KIND_SCRATCH, "task2", "content 2", 0.5, "fold-sess", &m);
+
+   int rc = memory_fold_session("fold-sess");
+   assert(rc == 0);
+
+   /* L0 should be gone */
+   memory_t l0[10];
+   int n = memory_list(TIER_L0, "", 10, l0, 10);
+   assert(n == 0);
+
+   /* Should have L1 checkpoint */
+   memory_t l1[10];
+   n = memory_list(TIER_L1, KIND_EPISODE, 10, l1, 10);
+   assert(n >= 1);
+   teardown();
+}
+
+static void test_stats(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(TIER_L2, KIND_FACT, "f1", "fact one", 0.9, "s1", &m);
+   memory_insert(TIER_L1, KIND_PREFERENCE, "p1", "pref", 0.7, "s1", &m);
+
+   memory_stats_t s;
+   memory_stats(&s);
+   assert(s.total == 2);
+   teardown();
+}
+
+static void test_delete_memory(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(TIER_L1, KIND_FACT, "deleteme", "temp", 0.5, "s1", &m);
+   int rc = memory_delete(m.id);
+   assert(rc == 0);
+
+   memory_t check;
+   rc = memory_get(m.id, &check);
+   assert(rc != 0);
+   teardown();
+}
+
+/* --- Deeper coverage --- */
+
+static void test_list_by_tier_and_kind(void)
+{
+   setup();
+   memory_t out;
+   memory_insert(TIER_L0, KIND_FACT, "l0-fact", "content", 1.0, "s1", &out);
+   memory_insert(TIER_L1, KIND_FACT, "l1-fact", "content", 1.0, "s1", &out);
+   memory_insert(TIER_L1, KIND_PREFERENCE, "l1-pref", "content", 1.0, "s1", &out);
+   memory_insert(TIER_L2, KIND_DECISION, "l2-dec", "content", 1.0, "s1", &out);
+
+   memory_t results[16];
+
+   /* Filter by tier */
+   int count = memory_list(TIER_L1, NULL, 10, results, 16);
+   assert(count == 2);
+
+   /* Filter by kind */
+   count = memory_list(NULL, KIND_FACT, 10, results, 16);
+   assert(count == 2);
+
+   /* Filter by both */
+   count = memory_list(TIER_L1, KIND_FACT, 10, results, 16);
+   assert(count == 1);
+   assert(strcmp(results[0].key, "l1-fact") == 0);
+
+   /* No matches */
+   count = memory_list(TIER_L3, KIND_EPISODE, 10, results, 16);
+   assert(count == 0);
+
+   teardown();
+}
+
+static void test_get_nonexistent(void)
+{
+   setup();
+   memory_t out;
+   int rc = memory_get(99999, &out);
+   assert(rc != 0);
+   teardown();
+}
+
+static void test_delete_nonexistent(void)
+{
+   setup();
+   int rc = memory_delete(99999);
+   /* Should not crash, may return 0 or error */
+   (void)rc;
+   teardown();
+}
+
+static void test_insert_empty_content(void)
+{
+   setup();
+   memory_t out;
+   int rc = memory_insert(TIER_L0, KIND_FACT, "empty", "", 1.0, "s1", &out);
+   assert(rc == 0);
+   assert(out.id > 0);
+
+   memory_t loaded;
+   rc = memory_get(out.id, &loaded);
+   assert(rc == 0);
+   assert(loaded.content[0] == '\0');
+   teardown();
+}
+
+static void test_confidence_bounds(void)
+{
+   setup();
+   memory_t out;
+
+   /* Zero confidence */
+   int rc = memory_insert(TIER_L0, KIND_FACT, "low", "content", 0.0, "s1", &out);
+   assert(rc == 0);
+   assert(out.confidence < 0.01);
+
+   /* High confidence */
+   rc = memory_insert(TIER_L0, KIND_FACT, "high", "content", 1.0, "s1", &out);
+   assert(rc == 0);
+   assert(out.confidence > 0.99);
+
+   teardown();
+}
+
+static void test_list_respects_limit(void)
+{
+   setup();
+   memory_t out;
+   for (int i = 0; i < 10; i++)
+   {
+      char key[32];
+      snprintf(key, sizeof(key), "limit-test-%d", i);
+      memory_insert(TIER_L0, KIND_FACT, key, "content", 1.0, "s1", &out);
+   }
+
+   memory_t results[16];
+   int count = memory_list(TIER_L0, NULL, 3, results, 16);
+   assert(count == 3);
+
+   count = memory_list(TIER_L0, NULL, 100, results, 16);
+   assert(count == 10);
+
+   teardown();
+}
+
+static void test_run_maintenance_cycle(void)
+{
+   setup();
+   memory_t out;
+
+   /* Create some L0 memories with high use_count (should promote) */
+   memory_insert(TIER_L0, KIND_FACT, "promote-me", "content", 0.95, "s1", &out);
+   for (int i = 0; i < PROMOTE_L1_USE_COUNT + 1; i++)
+      memory_touch(out.id);
+
+   int promoted = 0, demoted = 0, expired = 0;
+   memory_run_maintenance(&promoted, &demoted, &expired);
+   assert(promoted >= 0);
+   assert(demoted >= 0);
+   assert(expired >= 0);
+
+   teardown();
+}
+
+static void test_insert_triggers_maintenance_when_threshold_met(void)
+{
+   char tmpdir[128];
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-memory-trigger-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_SALIENCE_ENABLED", "1") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_SALIENCE_WEIGHT", "1.2") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_MAINTENANCE_TRIGGER_INSERTS", "2") == 0);
+
+   char cfgdir[256];
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   char cfgpath[320];
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fprintf(fp, "memory_maintenance:\n  trigger_inserts: 2\n");
+   fclose(fp);
+
+   setup();
+   memory_t first, second;
+   assert(memory_insert(TIER_L1, KIND_FACT, "trigger-promote", "important fact", 0.95, "s1",
+                        &first) == 0);
+   for (int i = 0; i < PROMOTE_L1_USE_COUNT + 1; i++)
+      memory_touch(first.id);
+   assert(memory_insert(TIER_L1, KIND_FACT, "trigger-second", "second fact", 0.8, "s2", &second) ==
+          0);
+
+   memory_t updated;
+   assert(memory_get(first.id, &updated) == 0);
+   assert(updated.use_count >= PROMOTE_L1_USE_COUNT + 2);
+
+   char state_buf[32];
+   assert(db1_runtime_state_get("maintenance_pending_writes", state_buf, sizeof(state_buf)) == 0);
+   assert(atoi(state_buf) >= 0);
+   assert(db1_runtime_state_get("maintenance_last_run_epoch", state_buf, sizeof(state_buf)) == 0);
+   assert(atoi(state_buf) > 0);
+
+   char hc_err[128] = "";
+   aimee_pg_stmt_t *hc_st =
+       aimee_pg_prepare(db2_conn(), "SELECT COUNT(*) FROM memory_health", hc_err, sizeof(hc_err));
+   assert(hc_st != NULL);
+   assert(aimee_pg_step(hc_st, hc_err, sizeof(hc_err)) == AIMEE_PG_ROW);
+   assert(aimee_pg_column_int(hc_st, 0) > 0);
+   aimee_pg_finalize(hc_st);
+
+   teardown();
+   /* Reset HOME and overrides — leaving them set leaks files into the
+    * tmpdir from later tests via dogfood logs and config caches. */
+   (void)platform_unsetenv("HOME");
+   (void)platform_unsetenv("AIMEE_NO_CACHE");
+   (void)platform_unsetenv("AIMEE_MEMORY_SALIENCE_ENABLED");
+   (void)platform_unsetenv("AIMEE_MEMORY_SALIENCE_WEIGHT");
+   (void)platform_unsetenv("AIMEE_MEMORY_MAINTENANCE_TRIGGER_INSERTS");
+   platform_test_rmrf(tmpdir);
+}
+
+static void test_temporal_retrieval_prefers_matching_date(void)
+{
+   setup();
+   memory_t a, b;
+   memory_insert(TIER_L2, KIND_FACT, "concert", "We met on March 10 at the park", 0.9, "s1", &a);
+   memory_insert(TIER_L2, KIND_FACT, "meeting", "We talked in April at the office", 0.9, "s1", &b);
+
+   memory_t results[8];
+   int count = memory_find_facts("when march 10 park", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == a.id);
+   teardown();
+}
+
+static void test_temporal_retrieval_honors_before_date_constraint(void)
+{
+   setup();
+   memory_t early, late;
+   memory_insert(TIER_L2, KIND_FACT, "project review",
+                 "The project review happened on May 20 2023.", 0.9, "s1", &early);
+   memory_insert(TIER_L2, KIND_FACT, "project review",
+                 "The project review happened on June 2 2023.", 0.9, "s1", &late);
+
+   memory_t results[8];
+   int count = memory_find_facts("project review before 25 May 2023", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == early.id);
+   teardown();
+}
+
+static void test_temporal_retrieval_honors_between_date_constraint(void)
+{
+   setup();
+   memory_t april, may, june;
+   memory_insert(TIER_L2, KIND_FACT, "training day", "The training day was on April 10 2023.", 0.9,
+                 "s1", &april);
+   memory_insert(TIER_L2, KIND_FACT, "training day", "The training day was on May 18 2023.", 0.9,
+                 "s1", &may);
+   memory_insert(TIER_L2, KIND_FACT, "training day", "The training day was on June 12 2023.", 0.9,
+                 "s1", &june);
+
+   memory_t results[8];
+   int count = memory_find_facts("training day between 1 May 2023 and 31 May 2023", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == may.id);
+   teardown();
+}
+
+static void test_temporal_retrieval_honors_last_week_phrase(void)
+{
+   setup();
+   memory_t last_week, this_week;
+   struct tm now_tm;
+   current_utc_tm(&now_tm);
+   int weekday = now_tm.tm_wday == 0 ? 7 : now_tm.tm_wday;
+   time_t now = time(NULL);
+   time_t last_week_t = now - (time_t)(weekday + 4) * 86400; /* previous Wednesday */
+   time_t this_week_t = now - (time_t)(weekday > 3 ? (weekday - 3) : 0) * 86400;
+   struct tm last_week_tm, this_week_tm;
+   gmtime_r(&last_week_t, &last_week_tm);
+   gmtime_r(&this_week_t, &this_week_tm);
+   char last_month[32];
+   char this_month[32];
+   strftime(last_month, sizeof(last_month), "%B", &last_week_tm);
+   strftime(this_month, sizeof(this_month), "%B", &this_week_tm);
+
+   char last_text[128];
+   char this_text[128];
+   snprintf(last_text, sizeof(last_text), "The team sync happened on %s %d %d.", last_month,
+            last_week_tm.tm_mday, last_week_tm.tm_year + 1900);
+   snprintf(this_text, sizeof(this_text), "The team sync happened on %s %d %d.", this_month,
+            this_week_tm.tm_mday, this_week_tm.tm_year + 1900);
+
+   memory_insert(TIER_L2, KIND_FACT, "team sync", last_text, 0.9, "s1", &last_week);
+   memory_insert(TIER_L2, KIND_FACT, "team sync", this_text, 0.9, "s2", &this_week);
+
+   memory_t results[8];
+   int count = memory_find_facts("team sync last week", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == last_week.id);
+   teardown();
+}
+
+static void test_temporal_retrieval_honors_next_month_phrase(void)
+{
+   setup();
+   memory_t next_month, current_month;
+   struct tm now_tm;
+   current_utc_tm(&now_tm);
+
+   int current_year = now_tm.tm_year + 1900;
+   int current_month_num = now_tm.tm_mon + 1;
+   int next_month_num = current_month_num == 12 ? 1 : current_month_num + 1;
+   int next_month_year = current_month_num == 12 ? current_year + 1 : current_year;
+   struct tm current_month_tm;
+   struct tm next_month_tm;
+   memset(&current_month_tm, 0, sizeof(current_month_tm));
+   memset(&next_month_tm, 0, sizeof(next_month_tm));
+   current_month_tm.tm_year = current_year - 1900;
+   current_month_tm.tm_mon = current_month_num - 1;
+   current_month_tm.tm_mday = 15;
+   next_month_tm.tm_year = next_month_year - 1900;
+   next_month_tm.tm_mon = next_month_num - 1;
+   next_month_tm.tm_mday = 15;
+   char current_month_name[32];
+   char next_month_name[32];
+   strftime(current_month_name, sizeof(current_month_name), "%B", &current_month_tm);
+   strftime(next_month_name, sizeof(next_month_name), "%B", &next_month_tm);
+
+   char current_text[128];
+   char next_text[128];
+   snprintf(current_text, sizeof(current_text), "The doctor appointment is on %s 15 %d.",
+            current_month_name, current_year);
+   snprintf(next_text, sizeof(next_text), "The doctor appointment is on %s 15 %d.", next_month_name,
+            next_month_year);
+
+   memory_insert(TIER_L2, KIND_FACT, "doctor appointment", current_text, 0.9, "s1", &current_month);
+   memory_insert(TIER_L2, KIND_FACT, "doctor appointment", next_text, 0.9, "s2", &next_month);
+
+   memory_t results[8];
+   int count = memory_find_facts("doctor appointment next month", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == next_month.id);
+   teardown();
+}
+
+static void test_chunk_retrieval_finds_sentence_evidence(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(TIER_L2, KIND_FACT, "trip",
+                 "We had breakfast at home. Then we visited the riverside museum after lunch.", 0.9,
+                 "s1", &m);
+
+   memory_t results[8];
+   int count = memory_find_facts("riverside museum", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == m.id);
+   teardown();
+}
+
+static void test_superseded_memory_penalized(void)
+{
+   setup();
+   memory_t old_mem;
+   memory_insert(TIER_L2, KIND_FACT, "deploy target", "Use server-a", 0.9, "s1", &old_mem);
+   memory_t new_mem;
+   assert(memory_supersede(old_mem.id, "Use server-b", 0.95, "s2", &new_mem) == 0);
+
+   memory_t results[8];
+   int count = memory_find_facts("deploy target server", 5, results, 8);
+   assert(count >= 1);
+   assert(strstr(results[0].content, "server-b") != NULL);
+   teardown();
+}
+
+static void test_contradiction_reranking_prefers_newer_fact(void)
+{
+   setup();
+   memory_t older, newer;
+   assert(memory_insert(TIER_L2, KIND_FACT, "release venue",
+                        "The release is in Berlin on March 10 2023.", 0.95, "s1", &older) == 0);
+   assert(memory_supersede(older.id, "The release is in Paris on March 10 2023.", 0.95, "s2",
+                           &newer) == 0);
+
+   memory_t results[8];
+   int count = memory_find_facts("release venue march 10 2023", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == newer.id);
+   teardown();
+}
+
+static void test_insert_versions_temporal_fact_updates(void)
+{
+   setup();
+   memory_t first, second;
+   assert(memory_insert(TIER_L2, KIND_FACT, "release day", "The release day is March 10 2023.",
+                        0.92, "s1", &first) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "release day", "The release day is March 12 2023.",
+                        0.95, "s2", &second) == 0);
+   assert(first.id != second.id);
+
+   memory_t history[8];
+   int hist_count = memory_fact_history("release day", history, 8);
+   assert(hist_count >= 2);
+
+   memory_t results[8];
+   int count = memory_find_facts("release day march 12 2023", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == second.id);
+   teardown();
+}
+
+static void test_semantic_profile_duplicate_keeps_single_active_entry(void)
+{
+   setup();
+   memory_t first, second;
+   assert(memory_insert(TIER_L2, KIND_FACT, "Alice:favorite_food", "Thai food", 0.9, "s1",
+                        &first) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "alice:favorite_food", "thai food.", 0.95, "s2",
+                        &second) == 0);
+   assert(first.id == second.id);
+
+   char dup_err[128] = "";
+   aimee_pg_stmt_t *dup_st = aimee_pg_prepare(
+       db2_conn(), "SELECT COUNT(*), use_count, content FROM memories WHERE id = ?1", dup_err,
+       sizeof(dup_err));
+   assert(dup_st != NULL);
+   aimee_pg_bind_int64(dup_st, "?1", first.id);
+   assert(aimee_pg_step(dup_st, dup_err, sizeof(dup_err)) == AIMEE_PG_ROW);
+   assert(aimee_pg_column_int(dup_st, 0) == 1);
+   assert(aimee_pg_column_int(dup_st, 1) >= 2);
+   assert(aimee_pg_column_text(dup_st, 2)[0] != '\0');
+   aimee_pg_finalize(dup_st);
+   teardown();
+}
+
+static void test_semantic_profile_replacement_creates_history(void)
+{
+   setup();
+   memory_t first, second;
+   assert(memory_insert(TIER_L2, KIND_FACT, "alice:favorite_food", "Thai food", 0.92, "s1",
+                        &first) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "alice:favorite_food", "Sushi", 0.96, "s2", &second) ==
+          0);
+   assert(first.id != second.id);
+
+   char hist_err[128] = "";
+   aimee_pg_stmt_t *hist_st =
+       aimee_pg_prepare(db2_conn(), "SELECT key, valid_until FROM memories WHERE id = ?1", hist_err,
+                        sizeof(hist_err));
+   assert(hist_st != NULL);
+   aimee_pg_bind_int64(hist_st, "?1", first.id);
+   assert(aimee_pg_step(hist_st, hist_err, sizeof(hist_err)) == AIMEE_PG_ROW);
+   assert(strstr(aimee_pg_column_text(hist_st, 0), "#v") != NULL);
+   assert(aimee_pg_column_text(hist_st, 1)[0] != '\0');
+   aimee_pg_finalize(hist_st);
+
+   memory_t history[8];
+   int hist_count = memory_fact_history("alice:favorite_food", history, 8);
+   assert(hist_count >= 2);
+
+   memory_t results[8];
+   int count = memory_find_facts("alice favorite food sushi", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == second.id);
+   teardown();
+}
+
+static void test_semantic_profile_history_retains_superseded_value(void)
+{
+   setup();
+   memory_t old_mem, new_mem;
+   assert(memory_insert(TIER_L2, KIND_FACT, "alice:favorite_food", "Thai food", 0.92, "s1",
+                        &old_mem) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "alice:favorite_food", "Sushi", 0.96, "s2", &new_mem) ==
+          0);
+
+   char upd_err[128] = "";
+   const char *upd_sql = "UPDATE memories SET valid_from = ?1, valid_until = ?2 WHERE id = ?3";
+   aimee_pg_stmt_t *upd = aimee_pg_prepare(db2_conn(), upd_sql, upd_err, sizeof(upd_err));
+   assert(upd != NULL);
+   aimee_pg_bind_text(upd, "?1", "2023-01-01");
+   aimee_pg_bind_text(upd, "?2", "2023-12-31");
+   aimee_pg_bind_int64(upd, "?3", old_mem.id);
+   assert(aimee_pg_step(upd, upd_err, sizeof(upd_err)) == AIMEE_PG_DONE);
+   aimee_pg_finalize(upd);
+   upd = aimee_pg_prepare(db2_conn(), upd_sql, upd_err, sizeof(upd_err));
+   assert(upd != NULL);
+   aimee_pg_bind_text(upd, "?1", "2024-01-01");
+   aimee_pg_bind_text(upd, "?2", "");
+   aimee_pg_bind_int64(upd, "?3", new_mem.id);
+   assert(aimee_pg_step(upd, upd_err, sizeof(upd_err)) == AIMEE_PG_DONE);
+   aimee_pg_finalize(upd);
+
+   memory_t history[8];
+   int hist_count = memory_fact_history("alice:favorite_food", history, 8);
+   assert(hist_count >= 2);
+   int saw_thai = 0, saw_sushi = 0;
+   for (int i = 0; i < hist_count; i++)
+   {
+      if (strstr(history[i].content, "Thai food"))
+         saw_thai = 1;
+      if (strstr(history[i].content, "Sushi"))
+         saw_sushi = 1;
+   }
+   assert(saw_thai);
+   assert(saw_sushi);
+   teardown();
+}
+
+static void test_query_decomposition_recovers_compound_prompt(void)
+{
+   setup();
+   memory_t decision, architecture;
+   memory_insert(TIER_L2, KIND_DECISION, "transport decision",
+                 "The team chose server sent events for live frontend updates.", 0.92, "s1",
+                 &decision);
+   memory_insert(TIER_L2, KIND_FACT, "frontend architecture",
+                 "Frontend network architecture uses an event stream transport layer.", 0.87, "s1",
+                 &architecture);
+
+   memory_t results[8];
+   int count = memory_find_facts(
+       "did we decide to use sse or websockets for the frontend network architecture last week", 5,
+       results, 8);
+   assert(count >= 1);
+   assert(results[0].id == decision.id || results[0].id == architecture.id);
+   teardown();
+}
+
+static void test_code_identifier_retrieval_handles_snake_and_camel(void)
+{
+   setup();
+   memory_t code_mem;
+   memory_insert(TIER_L2, KIND_FACT, "db-step-log",
+                 "DB_STEP_LOG is the macro used by DbStepLog style tracing paths.", 0.91, "s1",
+                 &code_mem);
+
+   memory_t results[8];
+   int count = memory_find_facts("db_step_log", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == code_mem.id);
+   teardown();
+}
+
+static void test_rebuild_derived_indexes_populates_searchable_structures(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(TIER_L2, KIND_FACT, "timeline", "Yesterday Alice visited the old harbor museum.",
+                 0.9, "s1", &m);
+   int rebuilt = memory_rebuild_derived_indexes(10);
+   assert(rebuilt >= 1);
+
+   memory_t results[8];
+   int count = memory_find_facts("alice harbor museum", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == m.id);
+   teardown();
+}
+
+static void test_rebuild_derived_indexes_assigns_memory_unit_kinds(void)
+{
+   setup();
+   memory_t episodic;
+   memory_t procedural;
+   assert(memory_insert(TIER_L2, KIND_FACT, "timeline",
+                        "Yesterday Alice visited the old harbor museum.", 0.9, "s1",
+                        &episodic) == 0);
+   assert(memory_insert(TIER_L2, KIND_PREFERENCE, "style", "User prefers tabs over spaces.", 0.8,
+                        "s1", &procedural) == 0);
+   assert(memory_rebuild_derived_indexes(10) >= 2);
+
+   char mu_err[128] = "";
+   const char *mu_sql =
+       "SELECT COUNT(*) FROM memory_units WHERE memory_id = ?1 AND memory_kind = ?2";
+
+   aimee_pg_stmt_t *mu_st = aimee_pg_prepare(db2_conn(), mu_sql, mu_err, sizeof(mu_err));
+   assert(mu_st != NULL);
+   aimee_pg_bind_int64(mu_st, "?1", episodic.id);
+   aimee_pg_bind_text(mu_st, "?2", MEMORY_UNIT_KIND_EPISODIC_STR);
+   assert(aimee_pg_step(mu_st, mu_err, sizeof(mu_err)) == AIMEE_PG_ROW);
+   assert(aimee_pg_column_int(mu_st, 0) >= 1);
+   aimee_pg_finalize(mu_st);
+
+   mu_st = aimee_pg_prepare(db2_conn(), mu_sql, mu_err, sizeof(mu_err));
+   assert(mu_st != NULL);
+   aimee_pg_bind_int64(mu_st, "?1", procedural.id);
+   aimee_pg_bind_text(mu_st, "?2", MEMORY_UNIT_KIND_PROCEDURAL_STR);
+   assert(aimee_pg_step(mu_st, mu_err, sizeof(mu_err)) == AIMEE_PG_ROW);
+   assert(aimee_pg_column_int(mu_st, 0) >= 1);
+   aimee_pg_finalize(mu_st);
+
+   teardown();
+}
+
+static void test_memory_diagnose_reports_score_breakdown(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(TIER_L2, KIND_FACT, "museum trip", "Alice visited the harbor museum on March 10.",
+                 0.9, "s1", &m);
+
+   memory_diagnostic_t rows[4];
+   int count = memory_diagnose("when did alice visit the harbor museum", 3, rows, 4);
+   assert(count >= 1);
+   assert(rows[0].memory.id == m.id);
+   assert(rows[0].parts.total > 0.0);
+   assert(rows[0].parts.temporal > 0.0 || rows[0].parts.entity > 0.0);
+   teardown();
+}
+
+static void test_memory_explain_match_reports_specific_memory(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(TIER_L2, KIND_FACT, "release", "The release happened on March 10 at the office.",
+                 0.8, "s1", &m);
+
+   memory_diagnostic_t row;
+   assert(memory_explain_match("when was the release", m.id, &row) == 0);
+   assert(row.memory.id == m.id);
+   assert(row.parts.temporal > 0.0 || row.parts.confidence > 0.0);
+   teardown();
+}
+
+static void test_memory_answer_query_prefers_temporal_evidence(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(TIER_L2, KIND_FACT, "concert", "Alice went to the concert on March 10.", 0.9, "s1",
+                 &m);
+
+   char *answer = memory_answer_query("When did Alice go to the concert?", 5);
+   assert(answer != NULL);
+   assert(strstr(answer, "March 10") != NULL || strstr(answer, "march 10") != NULL);
+   free(answer);
+   teardown();
+}
+
+static void test_memory_answer_query_uses_session_cluster_evidence(void)
+{
+   setup();
+   memory_t summary;
+   memory_t detail;
+   memory_insert(TIER_L2, KIND_EPISODE, "trip recap",
+                 "Alice talked about the museum trip and later discussed scheduling details.", 0.95,
+                 "trip1", &summary);
+   memory_insert(TIER_L2, KIND_FACT, "museum date", "Alice visited the harbor museum on March 10.",
+                 0.85, "trip1", &detail);
+
+   char *answer = memory_answer_query("When did Alice visit the museum?", 5);
+   assert(answer != NULL);
+   assert(strstr(answer, "March 10") != NULL || strstr(answer, "march 10") != NULL);
+   free(answer);
+   teardown();
+}
+static void test_context_budget_prefers_project_l4_rule_over_long_global_l1(void)
+{
+   char tmpdir[512];
+   char cfgdir[640];
+   char cfgpath[768];
+   char cwd[MAX_PATH_LEN];
+   char project[MAX_PATH_LEN];
+   const char *old_home = getenv("HOME");
+   char old_home_copy[512];
+   old_home_copy[0] = '\0';
+   if (old_home && old_home[0])
+      snprintf(old_home_copy, sizeof(old_home_copy), "%s", old_home);
+
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-memory-budget-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fputs("memory:\n  context_budget:\n    enabled: true\n    tokens: 24\n", fp);
+   fclose(fp);
+
+   assert(getcwd(cwd, sizeof(cwd)) != NULL);
+   {
+      const char *slash = strrchr(cwd, '/');
+      snprintf(project, sizeof(project), "%s", slash ? slash + 1 : cwd);
+   }
+
+   setup();
+   memory_t rule;
+   memory_t episode;
+   char long_content[768];
+   snprintf(
+       long_content, sizeof(long_content),
+       "snake case rule migration checklist notes repeated for context assembly budget pressure. "
+       "snake case rule migration checklist notes repeated for context assembly budget pressure. "
+       "snake case rule migration checklist notes repeated for context assembly budget pressure.");
+
+   assert(memory_insert(TIER_L4, KIND_POLICY, "project-naming-rule",
+                        "Use snake_case for project identifiers.", 0.98, "s1", &rule) == 0);
+   assert(memory_tag_project(rule.id, project) == 0);
+   assert(memory_insert(TIER_L1, KIND_EPISODE, "migration-notes", long_content, 0.99, "s2",
+                        &episode) == 0);
+
+   context_assemble_explain_entry_t entries[32];
+   int ecount = 0;
+   context_budget_metrics_t metrics;
+   memset(&metrics, 0, sizeof(metrics));
+
+   char *ctx = memory_assemble_context_explain("snake case rule", entries, &ecount, 32, &metrics);
+   assert(ctx != NULL);
+   assert(strstr(ctx, "Use snake_case for project identifiers.") != NULL);
+   assert(strstr(ctx, long_content) == NULL);
+   assert(metrics.budget_tokens == 24);
+   assert(metrics.rejected_for_budget >= 1);
+
+   int saw_rule = 0;
+   int saw_episode = 0;
+   for (int i = 0; i < ecount; i++)
+   {
+      if (entries[i].id == rule.id)
+      {
+         saw_rule = 1;
+         assert(entries[i].selected == 1);
+         assert(strcmp(entries[i].tier, "L4") == 0);
+         assert(strcmp(entries[i].scope, "project") == 0);
+      }
+      if (entries[i].id == episode.id)
+      {
+         saw_episode = 1;
+         assert(entries[i].selected == 0);
+      }
+   }
+   assert(saw_rule == 1);
+   assert(saw_episode == 1);
+
+   free(ctx);
+   teardown();
+   platform_test_rmrf(tmpdir);
+
+   if (old_home_copy[0])
+      assert(platform_setenv("HOME", old_home_copy) == 0);
+   else
+      assert(platform_unsetenv("HOME") == 0);
+}
+
+static void test_context_budget_prefers_project_scope_over_global_l5(void)
+{
+   char tmpdir[512];
+   char cfgdir[640];
+   char cfgpath[768];
+   char cwd[MAX_PATH_LEN];
+   char project[MAX_PATH_LEN];
+   const char *old_home = getenv("HOME");
+   char old_home_copy[512];
+   old_home_copy[0] = '\0';
+   if (old_home && old_home[0])
+      snprintf(old_home_copy, sizeof(old_home_copy), "%s", old_home);
+
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-memory-scope-budget-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fputs("memory:\n  context_budget:\n    enabled: true\n    tokens: 14\n", fp);
+   fclose(fp);
+
+   assert(getcwd(cwd, sizeof(cwd)) != NULL);
+   {
+      /* Project label keys on the repository identity (canonical remote URL)
+       * so recall matches across clones/machines, with a repo-root basename
+       * fallback for remote-less roots.  Mirrors memory_scope_labels_for_cwd()
+       * in production. */
+      if (workspace_repo_identity(cwd, project, sizeof(project), NULL, 0) != 0 || !project[0])
+      {
+         char project_root[MAX_PATH_LEN];
+         if (workspace_active_root(NULL, cwd, project_root, sizeof(project_root)) == 0 &&
+             project_root[0])
+         {
+            const char *slash = strrchr(project_root, '/');
+            snprintf(project, sizeof(project), "%s", slash ? slash + 1 : project_root);
+         }
+         else
+         {
+            const char *slash = strrchr(cwd, '/');
+            snprintf(project, sizeof(project), "%s", slash ? slash + 1 : cwd);
+         }
+      }
+   }
+
+   setup();
+   memory_t project_policy;
+   memory_t global_policy;
+
+   assert(memory_insert(TIER_L3, KIND_POLICY, "deploy-target-project",
+                        "Project deploy target is the staging sandbox.", 0.95, "s1",
+                        &project_policy) == 0);
+   assert(memory_tag_project(project_policy.id, project) == 0);
+
+   assert(memory_insert(TIER_L5, KIND_POLICY, "deploy-pattern-global",
+                        "Across many repos, deploy targets usually require extra platform review.",
+                        0.98, "s2", &global_policy) == 0);
+   assert(memory_tag_global(global_policy.id) == 0);
+   assert(memory_scope_visibility_rank(project_policy.id, NULL, project) == 3);
+   assert(memory_scope_visibility_rank(global_policy.id, NULL, project) < 3);
+
+   context_assemble_explain_entry_t entries[32];
+   int ecount = 0;
+   context_budget_metrics_t metrics;
+   memset(&metrics, 0, sizeof(metrics));
+
+   char *ctx = memory_assemble_context_explain("deploy target", entries, &ecount, 32, &metrics);
+   assert(ctx != NULL);
+   assert(metrics.rejected_for_budget >= 1);
+
+   int saw_project = 0;
+   int saw_global = 0;
+   int project_index = -1;
+   int global_index = -1;
+   for (int i = 0; i < ecount; i++)
+   {
+      if (entries[i].id == project_policy.id && project_index < 0)
+      {
+         saw_project = 1;
+         project_index = i;
+         assert(strcmp(entries[i].tier, "L3") == 0);
+      }
+      if (entries[i].id == global_policy.id && global_index < 0)
+      {
+         saw_global = 1;
+         global_index = i;
+         assert(strcmp(entries[i].tier, "L5") == 0);
+      }
+   }
+   assert(saw_project == 1);
+   assert(saw_global == 1);
+   assert(project_index < global_index);
+
+   free(ctx);
+   teardown();
+   platform_test_rmrf(tmpdir);
+
+   if (old_home_copy[0])
+      assert(platform_setenv("HOME", old_home_copy) == 0);
+   else
+      assert(platform_unsetenv("HOME") == 0);
+}
+static void test_memory_answer_query_adds_citations_when_enabled(void)
+{
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_CITATIONS_MODE", "required") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_CITATIONS_STRIP_UNVERIFIED", "0") == 0);
+
+   setup();
+   memory_t m;
+   memory_insert(TIER_L2, KIND_FACT, "concert", "Alice went to the concert on March 10.", 0.9, "s1",
+                 &m);
+
+   char *answer = memory_answer_query("When did Alice go to the concert?", 5);
+   assert(answer != NULL);
+   char citation[64];
+   snprintf(citation, sizeof(citation), "[#%lld", (long long)m.id);
+   assert(strstr(answer, citation) != NULL);
+   assert(fetch_runtime_state_int("memory.citation.required") == 1);
+   assert(fetch_runtime_state_int("memory.citation.verified") == 1);
+   free(answer);
+   teardown();
+   assert(platform_setenv("AIMEE_MEMORY_CITATIONS_MODE", "off") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_CITATIONS_STRIP_UNVERIFIED", "0") == 0);
+}
+
+static void test_memory_ask_query_returns_structured_result(void)
+{
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_CITATIONS_MODE", "required") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_CITATIONS_STRIP_UNVERIFIED", "0") == 0);
+
+   setup();
+   memory_t m;
+   assert(memory_insert(TIER_L2, KIND_FACT, "concert-date",
+                        "Alice went to the concert on March 10.", 0.9, "s1", &m) == 0);
+
+   memory_answer_result_t result;
+   memset(&result, 0, sizeof(result));
+   assert(memory_ask_query("When did Alice go to the concert?", 5, &result) == 0);
+   assert(result.no_answer == 0);
+   assert(result.answer[0] != '\0');
+   assert(result.confidence > 0.6);
+   assert(strcmp(result.evidence_mode, "verbatim") == 0);
+   assert(result.citation_count >= 1);
+   assert(result.citation_ids[0] == m.id);
+
+   teardown();
+   assert(platform_setenv("AIMEE_MEMORY_CITATIONS_MODE", "off") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_CITATIONS_STRIP_UNVERIFIED", "0") == 0);
+}
+
+static void test_memory_ask_query_reports_no_answer(void)
+{
+   setup();
+   memory_answer_result_t result;
+   memset(&result, 0, sizeof(result));
+   assert(memory_ask_query("What is Alice's favorite lunch?", 5, &result) == 0);
+   assert(result.no_answer == 1);
+   assert(result.answer[0] == '\0');
+   assert(result.confidence == 0.0);
+   assert(result.citation_count == 0);
+   teardown();
+}
+
+/* Multi-word entity phrases extracted from memory content should boost
+ * retrieval when the query contains the same phrase tokens. */
+static void test_multiword_entity_phrase_boosts_retrieval(void)
+{
+   setup();
+   memory_t target, noise;
+   /* Target has a multi-word phrase that the query asks about */
+   assert(memory_insert(TIER_L2, KIND_FACT, "project-update",
+                        "The deployment pipeline ran successfully last night.", 0.9, "s1",
+                        &target) == 0);
+   /* Noise has unrelated content */
+   assert(memory_insert(TIER_L2, KIND_FACT, "weather-note", "It was raining heavily all morning.",
+                        0.9, "s1", &noise) == 0);
+
+   memory_diagnostic_t rows[4];
+   int count = memory_diagnose("deployment pipeline status", 4, rows, 4);
+   assert(count >= 1);
+   /* Target should rank above noise */
+   assert(rows[0].memory.id == target.id);
+   /* Entity part should be non-zero for the matching memory */
+   assert(rows[0].parts.entity > 0.0);
+   teardown();
+}
+
+/* Memories stored with "Speaker: text" format should be boosted when the
+ * query names that speaker explicitly. */
+static void test_speaker_alignment_boosts_actor_entity_matches(void)
+{
+   setup();
+   memory_t alice_mem, bob_mem;
+   /* Alice's turn */
+   assert(memory_insert(TIER_L2, KIND_FACT, "turn-1",
+                        "Alice: I finished the report on budget projections.", 0.9, "s1",
+                        &alice_mem) == 0);
+   /* Bob's turn */
+   assert(memory_insert(TIER_L2, KIND_FACT, "turn-2", "Bob: I reviewed the deployment schedule.",
+                        0.9, "s1", &bob_mem) == 0);
+
+   memory_diagnostic_t rows[4];
+   int count = memory_diagnose("What did Alice say about the report?", 4, rows, 4);
+   assert(count >= 1);
+   /* Alice's memory should rank first — it matches "report" and has Alice as actor */
+   assert(rows[0].memory.id == alice_mem.id);
+   /* Entity part (includes speaker bonus) must be non-zero */
+   assert(rows[0].parts.entity > 0.0);
+   teardown();
+}
+
+static void test_entity_canonicalization_handles_titles_and_plurals(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(TIER_L2, KIND_FACT, "Dr. Rivers", "Dr Rivers visited the museums with the teams.",
+                 0.9, "s1", &m);
+
+   memory_t results[8];
+   int count = memory_find_facts("river museum team", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == m.id);
+   teardown();
+}
+
+static void test_memory_query_plan_prefers_lexical_for_code_queries(void)
+{
+   memory_query_plan_t plan;
+   assert(memory_query_plan("src/memory_core.c memory_query_plan", 10, 96, &plan) == 0);
+   assert(plan.route == MEM_ROUTE_LEXICAL);
+   assert(plan.semantic_enabled == 0);
+   assert(plan.max_fetch <= 48);
+}
+
+static void test_memory_query_plan_prefers_semantic_for_when_queries(void)
+{
+   memory_query_plan_t plan;
+   assert(memory_query_plan("When did Alice visit the museum?", 10, 96, &plan) == 0);
+   assert(plan.shape == MEM_SHAPE_WHEN);
+   assert(plan.route == MEM_ROUTE_SEMANTIC);
+   assert(plan.semantic_enabled == 1);
+   assert(plan.fetch_multiplier >= 5);
+   assert(plan.weights.temporal_weight > 0.8);
+}
+
+static void test_memory_query_plan_prefers_graph_for_dependency_queries(void)
+{
+   memory_query_plan_t plan;
+   assert(memory_query_plan("what calls memory_find_facts_scoped", 10, 96, &plan) == 0);
+   assert(plan.route == MEM_ROUTE_GRAPH);
+   assert(plan.graph_hops == 2);
+   assert(plan.semantic_enabled == 0);
+}
+
+static void test_memory_query_plan_respects_routing_disable_flag(void)
+{
+   char tmpdir[512];
+   char cfgdir[640];
+   char cfgpath[768];
+   const char *old_home = getenv("HOME");
+   char old_home_copy[512];
+   old_home_copy[0] = '\0';
+   if (old_home && old_home[0])
+      snprintf(old_home_copy, sizeof(old_home_copy), "%s", old_home);
+
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-routing-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fputs("memory:\n  routing:\n    enabled: false\n", fp);
+   fclose(fp);
+
+   memory_query_plan_t plan;
+   assert(memory_query_plan("what calls memory_find_facts_scoped", 10, 96, &plan) == 0);
+   assert(plan.route == MEM_ROUTE_HYBRID);
+   assert(plan.semantic_enabled == 1);
+   assert(plan.graph_hops == 1);
+
+   if (old_home_copy[0])
+      assert(platform_setenv("HOME", old_home_copy) == 0);
+   else
+      assert(platform_unsetenv("HOME") == 0);
+   assert(platform_unsetenv("AIMEE_NO_CACHE") == 0);
+   platform_test_rmrf(tmpdir);
+}
+
+static void test_memory_fetch_budget_factor_shape_aware(void)
+{
+   /* Base expectation: a 3-token query is token_factor=1.0; shape
+    * then scales up (list/quantitative) or down (yes_no), and the
+    * semantic shapes leave the factor unchanged. */
+   double list3 = memory_fetch_budget_factor(MEM_SHAPE_LIST, 3);
+   double quant3 = memory_fetch_budget_factor(MEM_SHAPE_QUANTITATIVE, 3);
+   double temporal3 = memory_fetch_budget_factor(MEM_SHAPE_TEMPORAL_INTERVAL, 3);
+   double when3 = memory_fetch_budget_factor(MEM_SHAPE_WHEN, 3);
+   double yesno3 = memory_fetch_budget_factor(MEM_SHAPE_YES_NO, 3);
+   double factoid3 = memory_fetch_budget_factor(MEM_SHAPE_FACTOID, 3);
+   double how3 = memory_fetch_budget_factor(MEM_SHAPE_HOW, 3);
+   double why3 = memory_fetch_budget_factor(MEM_SHAPE_WHY, 3);
+   double unknown3 = memory_fetch_budget_factor(MEM_SHAPE_UNKNOWN, 3);
+
+   assert(list3 == 1.3);
+   assert(quant3 == 1.3);
+   assert(temporal3 == 1.3);
+   assert(when3 == 1.15);
+   assert(yesno3 == 0.75);
+   assert(factoid3 == 0.9);
+   assert(how3 == 1.0);
+   assert(why3 == 1.0);
+   assert(unknown3 == 1.0);
+
+   /* Token-count scaling still stacks on top of shape. */
+   double list_short = memory_fetch_budget_factor(MEM_SHAPE_LIST, 2);    /* 1.5 * 1.3 */
+   double list_long = memory_fetch_budget_factor(MEM_SHAPE_LIST, 10);    /* 0.5 * 1.3 */
+   double yesno_short = memory_fetch_budget_factor(MEM_SHAPE_YES_NO, 2); /* 1.5 * 0.75 */
+   double yesno_long = memory_fetch_budget_factor(MEM_SHAPE_YES_NO, 10); /* 0.5 * 0.75 */
+
+   assert(list_short > list_long);
+   assert(list_short > yesno_short); /* wide shape widens on short queries */
+   assert(list_long > yesno_long);   /* wide shape stays wider even when long */
+   /* Concrete values — catches anyone accidentally rescaling one side. */
+   assert(list_short > 1.94 && list_short < 1.96);   /* 1.95 */
+   assert(list_long > 0.64 && list_long < 0.66);     /* 0.65 */
+   assert(yesno_short > 1.12 && yesno_short < 1.13); /* 1.125 */
+   assert(yesno_long > 0.37 && yesno_long < 0.38);   /* 0.375 */
+}
+
+static void test_memory_find_facts_handles_lexical_code_query(void)
+{
+   setup();
+   memory_t m;
+   memory_insert(
+       TIER_L2, KIND_FACT, "memory_query_plan",
+       "memory_query_plan is implemented in src/memory_core.c and drives retrieval routing.", 0.95,
+       "s1", &m);
+
+   memory_t results[8];
+   int count = memory_find_facts("src/memory_core.c memory_query_plan", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == m.id);
+   teardown();
+}
+
+static void test_memory_find_facts_falls_back_when_vector_index_unavailable(void)
+{
+   setup();
+   char err[128] = "";
+   assert(aimee_pg_exec(db2_conn(), "DROP VIEW IF EXISTS pg_indexes", err, sizeof(err)) == 0);
+
+   memory_t m;
+   assert(memory_insert(TIER_L2, KIND_FACT, "agent role model",
+                        "There is one primary agent and delegated work uses delegates.", 0.95, "s1",
+                        &m) == 0);
+
+   memory_t results[8];
+   int count = memory_find_facts("agent delegates", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == m.id);
+   teardown();
+}
+
+static void test_memory_find_facts_records_route_and_shape_metrics(void)
+{
+   setup();
+   memory_t m;
+   assert(memory_insert(TIER_L2, KIND_FACT, "museum visit", "Alice visited the museum on March 10.",
+                        0.95, "s1", &m) == 0);
+
+   memory_t results[8];
+   int count = memory_find_facts("When did Alice visit the museum?", 5, results, 8);
+   assert(count >= 1);
+   assert(fetch_runtime_state_int("memory.query.total") >= 1);
+   assert(fetch_runtime_state_int("memory.query.route.semantic") >= 1);
+   assert(fetch_runtime_state_int("memory.query.shape.when") >= 1);
+   assert(fetch_runtime_state_int("memory.query.route.semantic.latency_ms") >= 0);
+   assert(fetch_runtime_state_int("memory.query.shape.when.latency_ms") >= 0);
+   teardown();
+}
+
+static void test_memory_find_facts_graph_route_uses_graph_stage(void)
+{
+   setup();
+   char gr_err[128] = "";
+   /* PRAGMA passes through to sqlite under the test shim. */
+   assert(aimee_pg_exec(db2_conn(), "PRAGMA foreign_keys=OFF", gr_err, sizeof(gr_err)) == 0);
+
+   memory_t callsite;
+   assert(memory_insert(TIER_L2, KIND_FACT, "graph-callsite",
+                        "Scoped retrieval helper is invoked by the routing layer.", 0.92, "s1",
+                        &callsite) == 0);
+
+   aimee_pg_stmt_t *stmt = aimee_pg_prepare(
+       db2_conn(),
+       "INSERT INTO memory_relations"
+       " (memory_id, src_entity, relation, dst_entity, fact_text, valid_at, invalid_at,"
+       "  weight, created_at)"
+       " VALUES (?1, 'memory_generate_candidates', 'calls',"
+       " 'memory_find_facts_scoped', 'memory_generate_candidates calls"
+       " memory_find_facts_scoped', '2026-01-01', '', 1.0, pg_now_text())",
+       gr_err, sizeof(gr_err));
+   assert(stmt != NULL);
+   aimee_pg_bind_int64(stmt, "?1", callsite.id);
+   assert(aimee_pg_step(stmt, gr_err, sizeof(gr_err)) == AIMEE_PG_DONE);
+   aimee_pg_finalize(stmt);
+
+   memory_t results[8];
+   int count = memory_find_facts("what calls memory_find_facts_scoped", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == callsite.id);
+   assert(fetch_runtime_state_int_or_zero("memory.query.route.graph.stage.graph") >= 1);
+   assert(fetch_runtime_state_int_or_zero("memory.query.route.graph.stage.semantic") == 0);
+   teardown();
+}
+
+static void test_memory_find_facts_lexical_route_skips_semantic_and_graph_stages(void)
+{
+   setup();
+   memory_t m;
+   assert(memory_insert(
+              TIER_L2, KIND_FACT, "memory_query_plan",
+              "memory_query_plan is implemented in src/memory_core.c and drives retrieval routing.",
+              0.95, "s1", &m) == 0);
+
+   memory_t results[8];
+   int count = memory_find_facts("src/memory_core.c memory_query_plan", 5, results, 8);
+   assert(count >= 1);
+   assert(results[0].id == m.id);
+   assert(fetch_runtime_state_int_or_zero("memory.query.route.lexical.stage.variant") >= 1);
+   assert(fetch_runtime_state_int_or_zero("memory.query.route.lexical.stage.semantic") == 0);
+   assert(fetch_runtime_state_int_or_zero("memory.query.route.lexical.stage.graph") == 0);
+   teardown();
+}
+
+static void test_noise_utterance_gets_low_salience(void)
+{
+   setup();
+   memory_t noise, fact;
+   assert(memory_insert(TIER_L2, KIND_FACT, "noise", "omg jordan!!", 0.9, "s1", &noise) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "fact",
+                        "Jordan owns the build pipeline for release automation.", 0.9, "s1",
+                        &fact) == 0);
+   assert(noise.salience < 0.1);
+   assert(fact.salience > 0.4);
+   teardown();
+}
+
+static void test_salience_demotes_noise_matches(void)
+{
+   char tmpdir[128];
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-memory-salience-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+
+   char cfgdir[256];
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   char cfgpath[320];
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fprintf(fp, "memory:\n  salience:\n    enabled: true\n    weight: 1.2\n");
+   fclose(fp);
+
+   setup();
+   memory_t noise, fact;
+   assert(memory_insert(TIER_L2, KIND_FACT, "jordan-chat", "omg jordan!!", 0.99, "s1", &noise) ==
+          0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "jordan-role",
+                        "Jordan owns the build pipeline and release automation.", 0.75, "s1",
+                        &fact) == 0);
+
+   memory_diagnostic_t rows[4];
+   int count = memory_diagnose("jordan", 4, rows, 4);
+   assert(count >= 2);
+   assert(rows[0].memory.id == fact.id);
+   assert(rows[1].memory.id == noise.id);
+   teardown();
+   platform_test_rmrf(tmpdir);
+}
+
+static void test_surprise_scores_first_mention_higher(void)
+{
+   setup();
+   memory_t first, repeat;
+   assert(memory_insert(TIER_L2, KIND_FACT, "jordan-first", "Jordan owns the release pipeline.",
+                        0.9, "surprise-s1", &first) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "jordan-repeat",
+                        "Jordan still owns the release pipeline.", 0.9, "surprise-s1",
+                        &repeat) == 0);
+
+   double first_surprise = fetch_surprise(first.id);
+   double repeat_surprise = fetch_surprise(repeat.id);
+   assert(first_surprise > repeat_surprise);
+   assert(first_surprise >= 0.95);
+   assert(repeat_surprise < 0.95);
+   teardown();
+}
+
+static void test_surprise_demotes_repeated_fact_matches(void)
+{
+   char tmpdir[128];
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-memory-surprise-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_SURPRISE_ENABLED", "1") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_SURPRISE_WEIGHT", "3.0") == 0);
+
+   char cfgdir[256];
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   char cfgpath[320];
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fprintf(fp, "memory:\n"
+               "  salience:\n"
+               "    surprise_enabled: true\n"
+               "    surprise_weight: 3.0\n"
+               "    window_size: 8\n");
+   fclose(fp);
+
+   setup();
+   memory_t first, repeat;
+   assert(memory_insert(TIER_L2, KIND_FACT, "jordan-origin",
+                        "Jordan owns the release pipeline and approves deployment plans.", 0.9,
+                        "surprise-rank", &first) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "jordan-repeat",
+                        "Jordan still owns the release pipeline and approves deployment plans.",
+                        0.9, "surprise-rank", &repeat) == 0);
+
+   memory_diagnostic_t rows[4];
+   int count = memory_diagnose("Who owns the release pipeline?", 4, rows, 4);
+   assert(count >= 2);
+   assert(rows[0].memory.id == first.id);
+   assert(rows[1].memory.id == repeat.id);
+   assert(rows[0].parts.surprise > rows[1].parts.surprise);
+   teardown();
+   platform_test_rmrf(tmpdir);
+}
+
+static void test_pagerank_promotes_linked_definition_memory(void)
+{
+   char tmpdir[128];
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-memory-pagerank-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_PAGERANK_ENABLED", "1") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_PAGERANK_WEIGHT", "1.2") == 0);
+   assert(platform_setenv("AIMEE_MEMORY_PAGERANK_ITERATIONS", "8") == 0);
+
+   char cfgdir[256];
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   char cfgpath[320];
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fprintf(fp, "memory:\n"
+               "  pagerank:\n"
+               "    enabled: true\n"
+               "    iterations: 8\n"
+               "    weight: 1.2\n"
+               "    relations: depends_on\n");
+   fclose(fp);
+
+   setup();
+   memory_t definition, caller_a, caller_b;
+   assert(memory_insert(TIER_L2, KIND_FACT, "struct ReleasePlan",
+                        "ReleasePlan struct defines owner, approvals, and deployment windows.",
+                        0.82, "graph-s1", &definition) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "build_release_plan",
+                        "build_release_plan validates deployment windows and approvals.", 0.94,
+                        "graph-s1", &caller_a) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "ship_release",
+                        "ship_release uses build_release_plan before deployment.", 0.93, "graph-s1",
+                        &caller_b) == 0);
+
+   assert(memory_link_create(caller_a.id, definition.id, "depends_on") == 0);
+   assert(memory_link_create(caller_b.id, definition.id, "depends_on") == 0);
+
+   memory_diagnostic_t rows[6];
+   int count = memory_diagnose("who defines deployment windows approvals", 6, rows, 6);
+   assert(count >= 3);
+   assert(rows[0].memory.id == definition.id);
+   assert(rows[0].parts.pagerank > 0.0);
+
+   memory_stats_t stats;
+   assert(memory_stats(&stats) == 0);
+   assert(stats.pagerank_samples > 0);
+   assert(stats.pagerank_last_candidates >= 3);
+   assert(stats.pagerank_last_edges >= 2);
+   teardown();
+   platform_test_rmrf(tmpdir);
+}
+
+static void test_memory_embed_records_embedder_version(void)
+{
+   char tmpdir[128];
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-embedder-version-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+
+   char cfgdir[256];
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   char cfgpath[320];
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fprintf(fp, "embedding_command: builtin\n"
+               "embedding_model: nomic-embed-text-v1.5\n"
+               "embedding_dim: 768\n");
+   fclose(fp);
+
+   setup();
+   /* This test embeds with the builtin embedder, which emits 384-dim vectors;
+    * align the active dim so the upsert dim guard accepts them. */
+   db2_set_embedding_dim(384);
+   memory_t mem;
+   assert(memory_insert(TIER_L2, KIND_FACT, "embed-version", "test content", 0.9, "", &mem) == 0);
+   assert(memory_embed(mem.id, "builtin") == 0);
+
+   char vio_err[128] = "";
+   aimee_pg_stmt_t *vio_st = aimee_pg_prepare(
+       db2_conn(), "SELECT collection, status FROM vector_index_ops WHERE point_id = ?1", vio_err,
+       sizeof(vio_err));
+   assert(vio_st != NULL);
+   aimee_pg_bind_int64(vio_st, "?1", mem.id);
+   assert(aimee_pg_step(vio_st, vio_err, sizeof(vio_err)) == AIMEE_PG_ROW);
+   const char *collection = aimee_pg_column_text(vio_st, 0);
+   const char *status = aimee_pg_column_text(vio_st, 1);
+   assert(collection && strcmp(collection, "memory_embeddings") == 0);
+   assert(status && strcmp(status, "ok") == 0);
+   aimee_pg_finalize(vio_st);
+
+   teardown();
+   platform_test_rmrf(tmpdir);
+   assert(platform_unsetenv("AIMEE_NO_CACHE") == 0);
+}
+
+static void test_coref_heuristic_indexes_recent_named_entity(void)
+{
+   char tmpdir[128];
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-coref-heuristic-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+
+   char cfgdir[256];
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   char cfgpath[320];
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fprintf(fp, "memory:\n  coref:\n    mode: heuristic\n    window: 5\n");
+   fclose(fp);
+
+   setup();
+   memory_t first, second;
+   assert(memory_insert(TIER_L2, KIND_FACT, "camping", "Melanie went camping on March 8.", 0.9,
+                        "coref-s1", &first) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "return", "She got back on March 12.", 0.9, "coref-s1",
+                        &second) == 0);
+
+   char ce_err[128] = "";
+   aimee_pg_stmt_t *ce_st = aimee_pg_prepare(
+       db2_conn(), "SELECT entity FROM memory_entities WHERE memory_id = ?1 AND role = 'coref'",
+       ce_err, sizeof(ce_err));
+   assert(ce_st != NULL);
+   aimee_pg_bind_int64(ce_st, "?1", second.id);
+   assert(aimee_pg_step(ce_st, ce_err, sizeof(ce_err)) == AIMEE_PG_ROW);
+   const char *entity = aimee_pg_column_text(ce_st, 0);
+   assert(entity && strcmp(entity, "melanie") == 0);
+   aimee_pg_finalize(ce_st);
+
+   memory_t rows[4];
+   int count = memory_find_facts("When did Melanie get back?", 3, rows, 4);
+   assert(count >= 1);
+   int found = 0;
+   for (int i = 0; i < count; i++)
+   {
+      if (rows[i].id == second.id)
+      {
+         found = 1;
+         break;
+      }
+   }
+   assert(found == 1);
+
+   teardown();
+   platform_test_rmrf(tmpdir);
+   assert(platform_unsetenv("AIMEE_NO_CACHE") == 0);
+}
+
+static void test_coref_heuristic_skips_ambiguous_prior_turn(void)
+{
+   char tmpdir[128];
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-coref-ambiguous-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+
+   char cfgdir[256];
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   char cfgpath[320];
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fprintf(fp, "memory:\n  coref:\n    mode: heuristic\n    window: 5\n");
+   fclose(fp);
+
+   setup();
+   memory_t first, second;
+   assert(memory_insert(TIER_L2, KIND_FACT, "meeting", "Melanie met Sarah after lunch.", 0.9,
+                        "coref-s2", &first) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "return", "She got back on March 12.", 0.9, "coref-s2",
+                        &second) == 0);
+
+   char cea_err[128] = "";
+   aimee_pg_stmt_t *cea_st = aimee_pg_prepare(
+       db2_conn(), "SELECT COUNT(*) FROM memory_entities WHERE memory_id = ?1 AND role = 'coref'",
+       cea_err, sizeof(cea_err));
+   assert(cea_st != NULL);
+   aimee_pg_bind_int64(cea_st, "?1", second.id);
+   assert(aimee_pg_step(cea_st, cea_err, sizeof(cea_err)) == AIMEE_PG_ROW);
+   assert(aimee_pg_column_int(cea_st, 0) == 0);
+   aimee_pg_finalize(cea_st);
+
+   teardown();
+   platform_test_rmrf(tmpdir);
+   assert(platform_unsetenv("AIMEE_NO_CACHE") == 0);
+}
+
+static void test_coref_audit_bound_recorded(void)
+{
+   char tmpdir[128];
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-coref-audit-bound-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+
+   char cfgdir[256];
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   char cfgpath[320];
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fprintf(fp, "memory:\n  coref:\n    mode: heuristic\n    window: 5\n");
+   fclose(fp);
+
+   setup();
+   memory_t first, second;
+   assert(memory_insert(TIER_L2, KIND_FACT, "camping", "Jordan went hiking on April 1.", 0.9,
+                        "audit-s1", &first) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "return", "He got back on April 3.", 0.9, "audit-s1",
+                        &second) == 0);
+
+   /* audit table must have a 'bound' row for the second memory */
+   char audit_err[128] = "";
+   aimee_pg_stmt_t *audit_st = aimee_pg_prepare(
+       db2_conn(), "SELECT outcome, mode FROM memory_coref_audit WHERE memory_id = ?1", audit_err,
+       sizeof(audit_err));
+   assert(audit_st != NULL);
+   aimee_pg_bind_int64(audit_st, "?1", second.id);
+   int found_bound = 0;
+   while (aimee_pg_step(audit_st, audit_err, sizeof(audit_err)) == AIMEE_PG_ROW)
+   {
+      const char *outcome = aimee_pg_column_text(audit_st, 0);
+      const char *mode = aimee_pg_column_text(audit_st, 1);
+      if (outcome && strcmp(outcome, "bound") == 0 && mode && strcmp(mode, "heuristic") == 0)
+         found_bound = 1;
+   }
+   aimee_pg_finalize(audit_st);
+   assert(found_bound == 1);
+
+   teardown();
+   platform_test_rmrf(tmpdir);
+   assert(platform_unsetenv("AIMEE_NO_CACHE") == 0);
+}
+
+static void test_coref_audit_ambiguous_recorded(void)
+{
+   char tmpdir[128];
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-coref-audit-amb-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+
+   char cfgdir[256];
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   char cfgpath[320];
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fprintf(fp, "memory:\n  coref:\n    mode: heuristic\n    window: 5\n");
+   fclose(fp);
+
+   setup();
+   memory_t first, second;
+   /* Two distinct named entities → pronoun is ambiguous → outcome should be 'ambiguous' */
+   assert(memory_insert(TIER_L2, KIND_FACT, "meeting", "Melanie met Jordan after lunch.", 0.9,
+                        "audit-s2", &first) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "return", "She got back on April 3.", 0.9, "audit-s2",
+                        &second) == 0);
+
+   char au2_err[128] = "";
+   aimee_pg_stmt_t *au2_st =
+       aimee_pg_prepare(db2_conn(), "SELECT outcome FROM memory_coref_audit WHERE memory_id = ?1",
+                        au2_err, sizeof(au2_err));
+   assert(au2_st != NULL);
+   aimee_pg_bind_int64(au2_st, "?1", second.id);
+   int found_ambiguous = 0;
+   while (aimee_pg_step(au2_st, au2_err, sizeof(au2_err)) == AIMEE_PG_ROW)
+   {
+      const char *outcome = aimee_pg_column_text(au2_st, 0);
+      if (outcome && strcmp(outcome, "ambiguous") == 0)
+         found_ambiguous = 1;
+   }
+   aimee_pg_finalize(au2_st);
+   assert(found_ambiguous == 1);
+
+   teardown();
+   platform_test_rmrf(tmpdir);
+   assert(platform_unsetenv("AIMEE_NO_CACHE") == 0);
+}
+
+static void test_coref_stats_increments_bound(void)
+{
+   char tmpdir[128];
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-coref-stats-bound-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+
+   char cfgdir[256];
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   char cfgpath[320];
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fprintf(fp, "memory:\n  coref:\n    mode: heuristic\n    window: 5\n");
+   fclose(fp);
+
+   memory_coref_stats_reset();
+   memory_coref_stats_t before;
+   memory_coref_stats(&before);
+
+   setup();
+   memory_t first, second;
+   assert(memory_insert(TIER_L2, KIND_FACT, "hike", "Alice went hiking on Friday.", 0.9, "stats-s1",
+                        &first) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "return", "She got back on Sunday.", 0.9, "stats-s1",
+                        &second) == 0);
+
+   memory_coref_stats_t after;
+   memory_coref_stats(&after);
+   assert(after.bound >= before.bound + 1);
+
+   teardown();
+   platform_test_rmrf(tmpdir);
+   assert(platform_unsetenv("AIMEE_NO_CACHE") == 0);
+}
+
+static void test_coref_stats_increments_ambiguous(void)
+{
+   char tmpdir[128];
+   snprintf(tmpdir, sizeof(tmpdir), "%s/aimee-test-coref-stats-amb-XXXXXX", platform_tmpdir());
+   assert(platform_mkdtemp(tmpdir) != NULL);
+   assert(platform_setenv("HOME", tmpdir) == 0);
+   assert(platform_setenv("AIMEE_NO_CACHE", "1") == 0);
+
+   char cfgdir[256];
+   snprintf(cfgdir, sizeof(cfgdir), "%s/.config/aimee", tmpdir);
+   assert(platform_mkdir_p(cfgdir, 0700) == 0);
+   char cfgpath[320];
+   snprintf(cfgpath, sizeof(cfgpath), "%s/aimee.yaml", cfgdir);
+   FILE *fp = fopen(cfgpath, "w");
+   assert(fp != NULL);
+   fprintf(fp, "memory:\n  coref:\n    mode: heuristic\n    window: 5\n");
+   fclose(fp);
+
+   memory_coref_stats_reset();
+   memory_coref_stats_t before;
+   memory_coref_stats(&before);
+
+   setup();
+   memory_t first, second;
+   /* Two distinct named entities → pronoun is ambiguous */
+   assert(memory_insert(TIER_L2, KIND_FACT, "meeting", "Carlos met Diana at the conference.", 0.9,
+                        "stats-s2", &first) == 0);
+   assert(memory_insert(TIER_L2, KIND_FACT, "depart", "She left early.", 0.9, "stats-s2",
+                        &second) == 0);
+
+   memory_coref_stats_t after;
+   memory_coref_stats(&after);
+   assert(after.ambiguous >= before.ambiguous + 1);
+
+   teardown();
+   platform_test_rmrf(tmpdir);
+   assert(platform_unsetenv("AIMEE_NO_CACHE") == 0);
+}
 
 static void test_memory_demote_from_failures_uses_db1_agent_log(void)
 {
@@ -574,7 +2324,7 @@ static void measure_query_embedding_memo_recall(void)
 
 /* The semantic-memory legs were gated on `qdim == 384` (the retired builtin) and
  * used 384-calibrated cosine floors, so semantic recall was silently dead for
- * pplx-0.6b (1024) / pplx-4b (2560). Verify the gate now tracks the active
+ * Qwen3-0.6B (1024) / Qwen3-4B (2560). Verify the gate now tracks the active
  * embedding dim and the floor scales down for the compressed-range embedders. */
 static void test_semantic_recall_is_embedder_aware(void)
 {
@@ -586,14 +2336,14 @@ static void test_semantic_recall_is_embedder_aware(void)
    assert(memory_semantic_dim_ok_test(0) == 0);    /* embed failure */
    assert(fabs(memory_semantic_floor_scale_test() - 1.0) < 1e-9);
 
-   db2_set_embedding_dim(1024); /* pplx-0.6b: the leg must now run */
+   db2_set_embedding_dim(1024); /* Qwen3-0.6B: the leg must now run */
    assert(memory_semantic_dim_ok_test(1024) == 1);
    assert(memory_semantic_dim_ok_test(384) == 0);
    double s1024 = memory_semantic_floor_scale_test();
    assert(s1024 > 0.0 && s1024 < 1.0); /* floors relaxed vs the 384 baseline */
    assert(0.62 * s1024 < 0.45);        /* 384-era 0.62 floor now clears ~0.38 hits */
 
-   db2_set_embedding_dim(2560); /* pplx-4b */
+   db2_set_embedding_dim(2560); /* Qwen3-4B */
    assert(memory_semantic_dim_ok_test(2560) == 1);
    double s2560 = memory_semantic_floor_scale_test();
    assert(s2560 > s1024 && s2560 <= 1.0); /* 4b range wider than 0.6b, <= builtin */

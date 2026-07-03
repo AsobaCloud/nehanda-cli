@@ -25,6 +25,7 @@
 #include "slop_detect.h"
 #include "git_verify.h"
 #include "cJSON.h"
+#include "headers/util.h"
 #include "headers/conversation_context.h"
 #include <dirent.h>
 #include <pthread.h>
@@ -38,6 +39,9 @@ static int is_write_tool(const char *tool)
    return strcmp(tool, "Write") == 0 || strcmp(tool, "Edit") == 0 ||
           strcmp(tool, "MultiEdit") == 0 || strcmp(tool, "write_file") == 0;
 }
+
+/* Worktree isolation helpers (aimee_path_is_main_clone / aimee_main_clone_edits_allowed)
+ * are shared with the client hook dispatch — see headers/util.h. */
 
 /* Emit slop findings to stderr (advisory). */
 static void slop_emit_stderr(const char *file_path, slop_finding_t *findings, int n)
@@ -332,6 +336,53 @@ void cmd_hooks(app_ctx_t *ctx, int argc, char **argv)
          {
             fputs(cwd, fp);
             fclose(fp);
+         }
+      }
+
+      /* Worktree isolation. aimee already isolates its OWN work — every delegate/
+       * work item runs in a locked worktree (delegate_checkout.c, wfe_blocks.c).
+       * But the PRIMARY session's harness Edit/Write never traverse aimee's /v1
+       * gateway, so nothing stopped it from editing the SHARED MAIN CLONE directly
+       * — which is how concurrent sessions pile uncommitted work onto one branch.
+       * This is the one seam that sees those edits, so enforce it here: a file
+       * mutation in a main clone (its .git is a directory; a worktree's is a file)
+       * is denied and steered into a dedicated worktree. Delegates are unaffected
+       * (their worktree .git is a file). Escape hatch for the branch owner:
+       * AIMEE_ALLOW_MAIN_CHECKOUT=1 or a .git/aimee-allow-main-edits marker. */
+      {
+         /* Key on the file being edited (resolved against cwd), not just cwd. */
+         const char *wt_fpath = NULL;
+         cJSON *wt_ti = (tool_input && tool_input[0]) ? cJSON_Parse(tool_input) : NULL;
+         if (wt_ti)
+         {
+            cJSON *fp = cJSON_GetObjectItemCaseSensitive(wt_ti, "file_path");
+            if (!cJSON_IsString(fp))
+               fp = cJSON_GetObjectItemCaseSensitive(wt_ti, "notebook_path");
+            if (cJSON_IsString(fp))
+               wt_fpath = fp->valuestring;
+         }
+         int wt_block = is_write_tool(tool_name) && cwd[0] &&
+                        aimee_edit_target_in_main_clone(wt_fpath, cwd) &&
+                        !aimee_main_clone_edits_allowed(cwd);
+         cJSON_Delete(wt_ti);
+         if (wt_block)
+         {
+            char reason[1024];
+            snprintf(reason, sizeof(reason),
+                     "BLOCKED: %s edits the SHARED MAIN CLONE (%s), not a git worktree — "
+                     "concurrent sessions entangle their uncommitted work this way. Isolate "
+                     "this task in its own worktree first:\n"
+                     "  git -C %s worktree add ../<name>-<task> -b <branch> origin/testing\n"
+                     "then work there. (Branch owner override: AIMEE_ALLOW_MAIN_CHECKOUT=1 or "
+                     "touch %s/.git/aimee-allow-main-edits.)",
+                     tool_name, cwd, cwd, cwd);
+            if (hook_client_uses_pretool_json())
+            {
+               emit_pretool_deny_json(reason);
+               exit(0);
+            }
+            fprintf(stderr, "aimee: %s\n", reason);
+            exit(2);
          }
       }
 
