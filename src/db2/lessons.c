@@ -102,6 +102,55 @@ int db2_lessons_node_citation_count(const char *session_id, const char *node_id)
    return n;
 }
 
+int db2_lessons_list_outcomes(const char *project_id, int64_t community_gen,
+                              db2_lessons_outcome_row_t *out, int max)
+{
+   void *conn = db2_conn();
+   if (!conn || !out || max <= 0)
+      return -1;
+   char err[LES_ERR] = "";
+   /* One row per (outcome, cited node), joined to the generation's community
+    * partition for grouping. ts is stored ISO text; ::date - epoch gives a day
+    * ordinal for the reflection's time-decay. */
+   aimee_pg_stmt_t *st = aimee_pg_prepare(
+       conn,
+       /* ts is stored as UTC 'YYYY-MM-DD HH24:MI:SS' TEXT; take the leading date
+        * substring so the day ordinal is a pure calendar parse — no session-TZ
+        * dependence, keeping the reflection byte-stable across servers. */
+       "SELECT c.node_id, COALESCE(cpc.community_id, ''), l.answer_outcome, l.actor_source,"
+       "       (SUBSTRING(l.ts, 1, 10)::date - DATE '1970-01-01'), l.confirmed"
+       " FROM lessons_outcome_ledger l"
+       " JOIN lessons_outcome_citations c ON c.outcome_id = l.id"
+       " LEFT JOIN code_projection_communities cpc"
+       "        ON cpc.node_id = c.node_id AND cpc.generation_id = ?2"
+       " WHERE l.project_id = ?1"
+       " ORDER BY c.node_id, l.ts, l.id"
+       " LIMIT ?3",
+       err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_text(st, "?1", project_id ? project_id : "");
+   aimee_pg_bind_int64(st, "?2", community_gen);
+   aimee_pg_bind_int64(st, "?3", max);
+   int n = 0;
+   while (n < max && aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+   {
+      const char *node = aimee_pg_column_text(st, 0);
+      const char *comm = aimee_pg_column_text(st, 1);
+      const char *oc = aimee_pg_column_text(st, 2);
+      const char *actor = aimee_pg_column_text(st, 3);
+      snprintf(out[n].node_id, sizeof(out[n].node_id), "%s", node ? node : "");
+      snprintf(out[n].community, sizeof(out[n].community), "%s", comm ? comm : "");
+      snprintf(out[n].answer_outcome, sizeof(out[n].answer_outcome), "%s", oc ? oc : "");
+      snprintf(out[n].actor_source, sizeof(out[n].actor_source), "%s", actor ? actor : "");
+      out[n].ts_days = (long)aimee_pg_column_int64(st, 4);
+      out[n].confirmed = (int)aimee_pg_column_int64(st, 5);
+      n++;
+   }
+   aimee_pg_finalize(st);
+   return n;
+}
+
 int db2_lessons_confirm_outcome(int64_t outcome_id, const char *confirmed_by)
 {
    void *conn = db2_conn();

@@ -34,6 +34,25 @@ extern "C"
     * the count, or -1 on error. */
    int db2_lessons_node_citation_count(const char *session_id, const char *node_id);
 
+   /* One (outcome, cited node) row for the S3b reflection pass, with the node's
+    * community label (from the given generation's partition, "" if unknown) and
+    * the record age as a day ordinal. */
+   typedef struct
+   {
+      char node_id[512];
+      char community[512];
+      char answer_outcome[16];
+      char actor_source[16];
+      long ts_days; /* days since the unix epoch (for the reflection's time-decay) */
+      int confirmed;
+   } db2_lessons_outcome_row_t;
+
+   /* List a project's outcome records (one row per cited node) into out[] (up to
+    * max), joined to `community_gen`'s community partition for grouping, ordered
+    * (node, ts) for a stable read. Returns the count written, or -1 on error. */
+   int db2_lessons_list_outcomes(const char *project_id, int64_t community_gen,
+                                 db2_lessons_outcome_row_t *out, int max);
+
    /* Confirm an outcome (S3c authority gate lives above this — only a
     * user/reviewer actor should reach here). Sets confirmed=true + confirmed_by/at;
     * the append-only trigger permits exactly this transition. Returns 0 on success,
