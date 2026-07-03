@@ -61,10 +61,12 @@ def main():
 
     violations = []
     scanned = 0
+    missing = []
     for rel in GUARDED:
         path = os.path.join(ROOT, rel)
         if not os.path.isfile(path):
-            continue  # a file may be renamed/removed; not our failure
+            missing.append(rel)  # renamed/removed — warn so the list doesn't silently rot
+            continue
         scanned += 1
         with open(path, encoding="utf-8", errors="replace") as f:
             for ln, tok, src in scan_text(f.read()):
@@ -82,6 +84,12 @@ def main():
             print(f"  {v}", file=sys.stderr)
         sys.exit(1)
 
+    for rel in missing:
+        print(
+            f"check-lessons-isolation: WARN: guarded recall/prune file {rel} not found "
+            "(renamed?) — update GUARDED so the isolation invariant keeps covering it",
+            file=sys.stderr,
+        )
     print(f"check-lessons-isolation: ok ({scanned} recall/prune file(s) clean of lessons_ refs)")
 
 
