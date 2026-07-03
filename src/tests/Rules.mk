@@ -158,6 +158,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-kb-graph \
                $(TESTPREFIX)/unit-test-kb-rrf \
                $(TESTPREFIX)/unit-test-kb-graph-analytics \
+               $(TESTPREFIX)/unit-test-prompt-sanitizer \
                $(TESTPREFIX)/unit-test-guardrails-blast-radius \
                $(TESTPREFIX)/unit-test-code-collect \
                $(TESTPREFIX)/unit-test-server-compute \
@@ -1712,6 +1713,7 @@ $(OBJDIR)/tests/test_aimee_client.o: C_FLAGS += $(TLS_FLAGS)
 $(OBJDIR)/tests/test_kb_graph.o: C_FLAGS += -Ikb
 $(OBJDIR)/tests/test_kb_rrf.o: C_FLAGS += -Ikb
 $(OBJDIR)/tests/test_kb_graph_analytics.o: C_FLAGS += -Ikb
+$(OBJDIR)/tests/test_prompt_sanitizer.o: C_FLAGS += -Ikb
 
 $(TESTPREFIX)/unit-test-kb-graph: $(OBJDIR)/tests/test_kb_graph.o \
                                   $(OBJDIR)/kb/kb_service_graph.o $(OBJDIR)/cJSON.o
@@ -1724,6 +1726,11 @@ $(TESTPREFIX)/unit-test-kb-rrf: $(OBJDIR)/tests/test_kb_rrf.o $(OBJDIR)/kb/kb_rr
 # Graph analytics: degree-centrality hub ranking (§4). Pure: no DB.
 $(TESTPREFIX)/unit-test-kb-graph-analytics: $(OBJDIR)/tests/test_kb_graph_analytics.o \
                                             $(OBJDIR)/kb/kb_graph_analytics.o
+	$(TESTLINK) -o $@ $^ $(L_CORE)
+
+# Render-boundary prompt sanitizer (graph-feedback §4 / P0). Pure: no DB.
+$(TESTPREFIX)/unit-test-prompt-sanitizer: $(OBJDIR)/tests/test_prompt_sanitizer.o \
+                                          $(OBJDIR)/kb/prompt_sanitizer.o
 	$(TESTLINK) -o $@ $^ $(L_CORE)
 
 # Blast-radius advisory: structural §7 actuation. Hermetic — config_load and the
