@@ -1,6 +1,7 @@
 /* cli_tui_opencode_v2.c: split from cli_tui.c into a real translation unit
  * (was cli_tui_opencode_v2.inc, textually included only to stay under the
  * line-check ceiling). Cross-TU declarations live in the module header. */
+#ifdef AIMEE_POSIX /* whole opencode module is POSIX-only */
 #include "cli_tui_opencode_internal.h"
 #include "aimee_home.h"
 #include "cli_client.h"
@@ -34,8 +35,6 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <termios.h>
-
-#ifdef AIMEE_POSIX
 
 /* The bridge child is stopped by the parent with SIGTERM when the OpenCode TUI
  * exits (see opencode_exec_tui). A flag handler lets the accept loop break and
