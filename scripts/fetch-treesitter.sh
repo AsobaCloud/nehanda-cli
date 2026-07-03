@@ -53,6 +53,7 @@ fetch tree-sitter-css        https://github.com/tree-sitter/tree-sitter-css     
 fetch tree-sitter-scala      https://github.com/tree-sitter/tree-sitter-scala      4d081d98670ff6e98ca42c085294fc75eec15e1d
 fetch tree-sitter-groovy     https://github.com/murtaza64/tree-sitter-groovy       deb0dcf8c4544f07564060f6e9b9f6e4b0bfc27d
 fetch tree-sitter-objc       https://github.com/tree-sitter-grammars/tree-sitter-objc 181a81b8f23a2d593e7ab4259981f50122909fda
+fetch tree-sitter-elixir     https://github.com/elixir-lang/tree-sitter-elixir      c4f9f5a15ddad8635ba59a5b99c2e9124e74ad91
 
 echo "fetch-treesitter: done -> $VENDOR/tree-sitter*"
 
