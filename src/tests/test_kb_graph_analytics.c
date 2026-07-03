@@ -498,9 +498,118 @@ static void test_audit_permutation_invariant(void)
    printf("  test_audit_permutation_invariant: ok\n");
 }
 
+/* ── S2 tests: community remap + snapshot diff ────────────────────────────── */
+
+/* A node joins a community, shifting its min-member id; the remap must keep the
+ * community's OLD (stable) id via best-overlap, not renumber it. */
+static void test_community_remap_stable(void)
+{
+   kb_graph_community_t old[] = {{"b", "b"}, {"c", "b"}, {"d", "b"}, {"x", "x"}, {"y", "x"}};
+   kb_graph_community_t nw[] = {{"a", "a"}, {"b", "a"}, {"c", "a"},
+                                {"d", "a"}, {"x", "x"}, {"y", "x"}};
+   kb_graph_community_t out[8];
+   int n = kb_graph_community_remap(old, 5, nw, 6, out, 8);
+   assert(n == 6);
+   assert(strcmp(commof(out, n, "a"), "b") == 0); /* inherited old id */
+   assert(strcmp(commof(out, n, "b"), "b") == 0);
+   assert(strcmp(commof(out, n, "d"), "b") == 0);
+   assert(strcmp(commof(out, n, "x"), "x") == 0);
+   printf("  test_community_remap_stable: ok\n");
+}
+
+/* A split: two new communities over one old — best-overlap (tie → lex-smaller new
+ * id) inherits the old id; the other gets a fresh id. Never a collision. */
+static void test_community_remap_split(void)
+{
+   kb_graph_community_t old[] = {{"a", "a"}, {"b", "a"}, {"c", "a"}, {"d", "a"}};
+   kb_graph_community_t nw[] = {{"a", "a"}, {"b", "a"}, {"c", "c"}, {"d", "c"}};
+   kb_graph_community_t out[8];
+   int n = kb_graph_community_remap(old, 4, nw, 4, out, 8);
+   assert(n == 4);
+   assert(strcmp(commof(out, n, "a"), "a") == 0);
+   assert(strcmp(commof(out, n, "b"), "a") == 0);
+   assert(strcmp(commof(out, n, "c"), "c") == 0); /* loser keeps fresh id */
+   assert(strcmp(commof(out, n, "d"), "c") == 0);
+   printf("  test_community_remap_split: ok\n");
+}
+
+static int diff_has(const kb_graph_diff_entry_t *d, int n, kb_graph_diff_kind_t k, const char *a,
+                    const char *b)
+{
+   for (int i = 0; i < n; i++)
+      if (d[i].kind == k && strcmp(d[i].a, a) == 0 && (!b || strcmp(d[i].b, b) == 0))
+         return 1;
+   return 0;
+}
+
+/* Node/edge add-remove + new cross-community coupling. */
+static void test_diff_addremove_cross(void)
+{
+   kb_graph_reledge_t old[] = {{"a", "calls", "b"}};
+   kb_graph_reledge_t nw[] = {{"a", "calls", "b"}, {"a", "calls", "c"}};
+   /* a,b in community "a"; c in its own community "c" -> a->c crosses. */
+   kb_graph_community_t oc[] = {{"a", "a"}, {"b", "a"}};
+   kb_graph_community_t nc[] = {{"a", "a"}, {"b", "a"}, {"c", "c"}};
+   kb_graph_diff_entry_t out[32];
+   int trunc = 0;
+   int n = kb_graph_diff(old, 1, oc, 2, nw, 2, nc, 3, out, 32, &trunc);
+   assert(n > 0);
+   assert(diff_has(out, n, KB_DIFF_NODE_ADDED, "c", ""));
+   assert(diff_has(out, n, KB_DIFF_EDGE_ADDED, "a", "c"));
+   assert(diff_has(out, n, KB_DIFF_NEW_CROSS_COMMUNITY, "a", "c"));
+   assert(!diff_has(out, n, KB_DIFF_NODE_REMOVED, "b", "")); /* b still present */
+   printf("  test_diff_addremove_cross: ok\n");
+}
+
+/* A back edge introduces a file cycle absent from the old generation. */
+static void test_diff_new_cycle(void)
+{
+   kb_graph_reledge_t old[] = {
+       {"fa", "defines", "sa"}, {"fb", "defines", "sb"}, {"fc", "defines", "sc"},
+       {"sa", "calls", "sb"},   {"sb", "calls", "sc"}, /* linear: no cycle */
+   };
+   kb_graph_reledge_t nw[] = {
+       {"fa", "defines", "sa"}, {"fb", "defines", "sb"}, {"fc", "defines", "sc"},
+       {"sa", "calls", "sb"},   {"sb", "calls", "sc"},   {"sc", "calls", "sa"}, /* ring */
+   };
+   kb_graph_diff_entry_t out[32];
+   int trunc = 0;
+   int n = kb_graph_diff(old, 5, NULL, 0, nw, 6, NULL, 0, out, 32, &trunc);
+   assert(diff_has(out, n, KB_DIFF_NEW_CYCLE_MEMBER, "fa", ""));
+   printf("  test_diff_new_cycle: ok\n");
+}
+
+/* Determinism: the diff is byte-identical under input edge reordering. */
+static void test_diff_permutation_invariant(void)
+{
+   kb_graph_reledge_t old[] = {{"a", "calls", "b"}, {"b", "calls", "c"}};
+   kb_graph_reledge_t nw[] = {{"a", "calls", "b"}, {"a", "calls", "d"}, {"b", "calls", "c"}};
+   kb_graph_reledge_t oldr[2], nwr[3];
+   for (int i = 0; i < 2; i++)
+      oldr[i] = old[1 - i];
+   for (int i = 0; i < 3; i++)
+      nwr[i] = nw[2 - i];
+   kb_graph_diff_entry_t a[32], b[32];
+   int ta = 0, tb = 0;
+   int na = kb_graph_diff(old, 2, NULL, 0, nw, 3, NULL, 0, a, 32, &ta);
+   int nb = kb_graph_diff(oldr, 2, NULL, 0, nwr, 3, NULL, 0, b, 32, &tb);
+   assert(na == nb);
+   for (int i = 0; i < na; i++)
+   {
+      assert(a[i].kind == b[i].kind);
+      assert(strcmp(a[i].a, b[i].a) == 0 && strcmp(a[i].b, b[i].b) == 0);
+   }
+   printf("  test_diff_permutation_invariant: ok\n");
+}
+
 int main(void)
 {
    printf("test_kb_graph_analytics:\n");
+   test_community_remap_stable();
+   test_community_remap_split();
+   test_diff_addremove_cross();
+   test_diff_new_cycle();
+   test_diff_permutation_invariant();
    test_orphans_bottom_mode();
    test_cycles_ring();
    test_cycles_acyclic_and_selfdrop();
