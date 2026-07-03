@@ -93,4 +93,62 @@ int kb_graph_surprising(const kb_graph_edge_t *edges, int n_edges, const kb_grap
  * disabled (`floor` <= 0), or precision is at/above the floor. Pure. */
 int kb_surprising_precision_suppress(int judged, int confirmed, int min_samples, double floor);
 
+/* ── S-community: deterministic community detection (graph-feedback foundation) ── */
+
+/* One node's community assignment. `community` is the community id: the
+ * lexicographically-smallest member node id (see contract below). */
+typedef struct
+{
+   char node[KB_GRAPH_NODE_MAX];
+   char community[KB_GRAPH_NODE_MAX];
+} kb_graph_community_t;
+
+/* Cap on local-moving passes. Convergence is a no-move pass; this only bounds a
+ * pathological graph that never settles. */
+#define KB_GRAPH_COMMUNITY_MAX_PASSES 64
+
+/* Upper bound on 2m (the summed weighted degree). The exact-integer gain forms
+ * the products 2m*k_in and k_i*sigma_tot, each <= (2m)^2; keeping 2m below
+ * floor(sqrt(INT64_MAX)) guarantees they never overflow int64. A graph whose
+ * total weight exceeds this is rejected (-1). Real callers pass structural
+ * weights <= 3 over a few thousand edges — many orders of magnitude below it. */
+#define KB_GRAPH_COMMUNITY_MAX_TWO_M 3037000499LL
+
+/* Partition the nodes of `edges` into communities by deterministic modularity
+ * maximization, writing one row per distinct node into out[] (up to `max`, in
+ * node-ascending order). Returns the distinct-node count written (<= max), 0 if
+ * there are no usable edges, or -1 on a bad argument. Never allocates
+ * caller-visible memory; out[] is caller-owned.
+ *
+ * NORMALIZATION SPEC (fully pinned — single method, no fallback):
+ *   - Edges are treated UNDIRECTED.
+ *   - Parallel edges between the same pair are AGGREGATED by summed weight.
+ *   - Self-loops (source==target) are DROPPED.
+ *   - Edge weight = the edge's `weight` (structural trust), clamped to >= 0; a
+ *     0-weight edge is inert (present but exerts no pull).
+ *   - Objective: modularity with resolution gamma = 1.0.
+ *   - Method: single-level Louvain local moving. Every node starts in its own
+ *     singleton. Nodes are processed in a FIXED order (node id ascending) each
+ *     pass; a node stays in its current community unless a neighbouring community
+ *     offers STRICTLY positive modularity gain, in which case it moves to the
+ *     best such neighbour. The gain is EXACT INTEGER arithmetic (compared as
+ *     2m*k_in - k_i*sigma_tot, gamma=1) so it is permutation-invariant — no
+ *     floating point, no summation-order sensitivity. (A node only re-isolates at
+ *     initialization; a merged node staying by default keeps its current
+ *     community — standard single-level behaviour.)
+ *   - Iteration: repeat passes until a pass moves nothing (convergence) or
+ *     KB_GRAPH_COMMUNITY_MAX_PASSES is reached.
+ *   - Total-order tie-break among the positive-gain neighbours of equal gain:
+ *     pick the one whose min-member node id is lexicographically smallest, as
+ *     snapshotted at the start of the current pass (a deterministic key; at
+ *     convergence the snapshot equals the exact current min-member). A zero-gain
+ *     neighbour never displaces the stay option, so there is no gain-free churn.
+ *   - Community id = the min-member node id (lex). Ids are GENERATION-LOCAL by
+ *     contract; cross-generation stable remap is a later slice (S2).
+ *
+ * Determinism: for a fixed node/edge set the output is byte-identical regardless
+ * of the order edges are presented in. */
+int kb_graph_communities(const kb_graph_edge_t *edges, int n_edges, kb_graph_community_t *out,
+                         int max);
+
 #endif /* KB_GRAPH_ANALYTICS_H */
