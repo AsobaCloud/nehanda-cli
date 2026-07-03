@@ -85,7 +85,6 @@ void kb_doc_content_hash_md(const char *bytes, int nbytes, char out[KB_DOC_HASH_
       while (clen && (line[clen - 1] == '\n' || line[clen - 1] == '\r'))
          clen--;
 
-      int is_delim = (clen == 3 && line[0] == '-' && line[1] == '-' && line[2] == '-');
       if (in_fm == 0)
       {
          in_fm = 1; /* the opening --- */
@@ -95,6 +94,7 @@ void kb_doc_content_hash_md(const char *bytes, int nbytes, char out[KB_DOC_HASH_
       }
       if (in_fm == 1)
       {
+         int is_delim = (clen == 3 && line[0] == '-' && line[1] == '-' && line[2] == '-');
          if (is_delim)
          {
             in_fm = 2; /* closing --- */
