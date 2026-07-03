@@ -1313,7 +1313,13 @@ CREATE TABLE IF NOT EXISTS code_projection_generations (
     started_at  TEXT NOT NULL DEFAULT (to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS')),
     visible_at  TEXT NOT NULL DEFAULT '',
     aborted_at  TEXT NOT NULL DEFAULT '',
-    error       TEXT NOT NULL DEFAULT ''
+    error       TEXT NOT NULL DEFAULT '',
+    -- graph-feedback S2: the aimee build that produced this generation, so the
+    -- snapshot-diff route can refuse to compare two generations whose extractor
+    -- differs (a parser change would read as a structural change). Empty on
+    -- generations created before this column existed.
+    extractor_version TEXT NOT NULL DEFAULT '',
+    pipeline_version  TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_cpg_project_state
     ON code_projection_generations(project, state);

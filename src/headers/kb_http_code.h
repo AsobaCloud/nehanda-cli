@@ -1,6 +1,14 @@
 #ifndef DEC_KB_HTTP_CODE_H
 #define DEC_KB_HTTP_CODE_H 1
 
+#include <stddef.h>
+
+/* Shared route helpers (defined in kb_http_code.c), used by the graph-feedback
+ * route handlers split into kb_http_code_graphfb.c. */
+int code_scan_write_error(char *out_buf, int out_cap, const char *message);
+int code_method_not_allowed(char *out_buf, int out_cap);
+int code_qparam(const char *qs, const char *key, char *out, int outsz);
+
 int handle_post_code_scan(const char *body, char *out_buf, int out_cap);
 int handle_post_code_scan_route(const char *method, const char *body, char *out_buf, int out_cap);
 int handle_post_code_repo_trust(const char *body, char *out_buf, int out_cap, int owner);
@@ -45,5 +53,8 @@ int handle_get_code_graph_surprising_route(const char *method, const char *query
 int handle_get_code_graph_audit(const char *query_string, char *out_buf, int out_cap);
 int handle_get_code_graph_audit_route(const char *method, const char *query_string, char *out_buf,
                                       int out_cap);
+int handle_get_code_graph_diff(const char *query_string, char *out_buf, int out_cap);
+int handle_get_code_graph_diff_route(const char *method, const char *query_string, char *out_buf,
+                                     int out_cap);
 
 #endif
