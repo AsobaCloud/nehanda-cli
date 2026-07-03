@@ -34,6 +34,13 @@ int lessons_cite_observe(lessons_cite_tracker_t *t, const char *node, int turn, 
 {
    if (!t || !node || !node[0])
       return 0;
+   /* A node that wouldn't fit the entry buffer would be stored truncated, and a
+    * truncated store can't reliably match its full-length re-citation — a silent
+    * false negative. Skip it (conservative: no auto-useful for an over-long key).
+    * Projection node keys are hash-compacted well under this, so it never fires in
+    * practice; it's a correctness backstop. */
+   if (strlen(node) >= LESSONS_NODE_MAX)
+      return 0;
    if (within_turns < 1)
       within_turns = LESSONS_AUTO_USEFUL_TURNS;
 

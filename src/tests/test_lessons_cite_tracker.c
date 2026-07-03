@@ -93,6 +93,12 @@ static void test_bad_args(void)
    /* within_turns <= 0 falls back to the default window */
    assert(lessons_cite_observe(&t, "z", 1, 0) == 0);
    assert(lessons_cite_observe(&t, "z", 2, 0) == 1);
+   /* an over-long node (>= buffer) is skipped, never tracked or triggered */
+   char big[LESSONS_NODE_MAX + 8];
+   memset(big, 'x', sizeof(big) - 1);
+   big[sizeof(big) - 1] = '\0';
+   assert(lessons_cite_observe(&t, big, 3, 3) == 0);
+   assert(lessons_cite_observe(&t, big, 4, 3) == 0); /* still not tracked → no trigger */
    printf("  test_bad_args: ok\n");
 }
 
