@@ -18,6 +18,9 @@
 #include "db2/kb_runtime_state.h" /* stored last-indexed default-branch SHA */
 #include "memory.h"
 #include "kb/kb_rrf.h"
+#include "db2/lessons.h"        /* §3 actuation: earned-trust tie-break */
+#include "kb/lessons_reflect.h" /* reflect the ledger into per-node trust */
+#include <time.h>
 #include "kb/kb_graph_analytics.h"
 #include "kb/kb_service_graph.h"
 #include "kb/kb_surprising_judge.h"
@@ -773,6 +776,52 @@ int handle_get_code_cross_repo_deps_route(const char *method, const char *query_
  * third fused leg once the query embedder is wired (integration-tier). */
 #define HYBRID_PER_SIGNAL 25
 #define HYBRID_WHY_MAX    5
+#define HYBRID_TRUST_MAX  2000
+
+/* §3 actuation: reflect the project's retrieval-outcome ledger into an RRF trust
+ * table keyed by node id (the same file-path id space the hybrid signals use).
+ * Returns the number of trust entries (<= max), 0 if none/unavailable. Best-effort:
+ * any allocation or DB failure yields 0 trust (the fusion then behaves as untrusted). */
+static int hybrid_fetch_trust(const char *project, kb_rrf_trust_t *out, int max)
+{
+   if (!project || !project[0] || !out || max <= 0)
+      return 0;
+   int64_t gen = db2_code_projection_visible_id(project);
+   db2_lessons_outcome_row_t *rows = calloc((size_t)max, sizeof(*rows));
+   lessons_reflect_input_t *inp = calloc((size_t)max, sizeof(*inp));
+   lessons_reflect_entry_t *ent = calloc((size_t)max, sizeof(*ent));
+   int nt = 0;
+   if (rows && inp && ent)
+   {
+      int nr = db2_lessons_list_outcomes(project, gen > 0 ? gen : 0, rows, max);
+      if (nr < 0)
+         nr = 0;
+      for (int i = 0; i < nr; i++)
+      {
+         snprintf(inp[i].node, sizeof(inp[i].node), "%s", rows[i].node_id);
+         snprintf(inp[i].community, sizeof(inp[i].community), "%s", rows[i].community);
+         snprintf(inp[i].answer_outcome, sizeof(inp[i].answer_outcome), "%s",
+                  rows[i].answer_outcome);
+         snprintf(inp[i].actor_source, sizeof(inp[i].actor_source), "%s", rows[i].actor_source);
+         inp[i].ts_days = rows[i].ts_days;
+         inp[i].confirmed = rows[i].confirmed;
+      }
+      long now_days = (long)(time(NULL) / 86400);
+      int ne = lessons_reflect(inp, nr, now_days, NULL, ent, max);
+      if (ne < 0)
+         ne = 0;
+      for (int i = 0; i < ne && nt < max; i++)
+      {
+         snprintf(out[nt].id, sizeof(out[nt].id), "%s", ent[i].node);
+         out[nt].trust = ent[i].score;
+         nt++;
+      }
+   }
+   free(rows);
+   free(inp);
+   free(ent);
+   return nt;
+}
 
 int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
 {
@@ -859,6 +908,7 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
    /* Per-signal RRF weights + rank constant are config-tunable (§5). */
    config_t hcfg;
    double w_code = 1.0, w_graph = 1.0, w_vector = 1.0, w_memory = 1.0, rrf_k = KB_RRF_DEFAULT_K;
+   int trust_on = 0; /* §3 actuation gate (default off) */
    if (config_load(&hcfg) == 0)
    {
       w_code = hcfg.code_hybrid_weight_code;
@@ -867,6 +917,7 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
       w_memory = hcfg.code_hybrid_weight_memory;
       if (hcfg.code_hybrid_rrf_k > 0)
          rrf_k = hcfg.code_hybrid_rrf_k;
+      trust_on = hcfg.code_trust_actuation_enabled;
    }
 
    /* Signal C — vector similarity (key = file_path; §5). Embed the query and
@@ -941,7 +992,20 @@ int handle_get_code_hybrid(const char *query_string, char *out_buf, int out_cap)
        {vector_items, nv, w_vector, "vector"},
        {memory_items, nmem, w_memory, "memory"},
    };
-   int nf = kb_rrf_fuse(sigs, 4, rrf_k, fused, HYBRID_PER_SIGNAL * 4);
+   /* §3 actuation (default off): apply the project's earned-trust lessons as an RRF
+    * tie-break. The lessons node-id space is the same file-path space the signals use
+    * (the capture hook records cited file paths), so trust maps by id directly; when
+    * off, `trust`/`nt` are NULL/0 and this is byte-identical to kb_rrf_fuse. */
+   kb_rrf_trust_t *trust = NULL;
+   int nt = 0;
+   if (trust_on && project[0])
+   {
+      trust = calloc(HYBRID_TRUST_MAX, sizeof(*trust));
+      if (trust)
+         nt = hybrid_fetch_trust(project, trust, HYBRID_TRUST_MAX);
+   }
+   int nf = kb_rrf_fuse_trust(sigs, 4, rrf_k, trust, nt, fused, HYBRID_PER_SIGNAL * 4);
+   free(trust);
    if (nf < 0)
       nf = 0;
    if (nf > max_r)
