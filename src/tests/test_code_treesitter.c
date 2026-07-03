@@ -54,10 +54,11 @@ int main(void)
    printf("test_code_treesitter:\n");
 
    /* availability gates the dispatch (a representative extension per language). */
-   const char *avail[] = {".c",     ".h",   ".cpp",    ".cc",     ".hpp",   ".cs", ".py",   ".go",
-                          ".js",    ".mjs", ".jsx",    ".ts",     ".tsx",   ".rs", ".java", ".rb",
-                          ".php",   ".lua", ".sh",     ".bash",   ".swift", ".kt", ".dart", ".css",
-                          ".scala", ".sc",  ".groovy", ".gradle", ".m",     ".mm", ".kts"};
+   const char *avail[] = {".c",    ".h",    ".cpp", ".cc",    ".hpp", ".cs",     ".py",
+                          ".go",   ".js",   ".mjs", ".jsx",   ".ts",  ".tsx",    ".rs",
+                          ".java", ".rb",   ".php", ".lua",   ".sh",  ".bash",   ".swift",
+                          ".kt",   ".dart", ".css", ".scala", ".sc",  ".groovy", ".gradle",
+                          ".m",    ".mm",   ".kts", ".ex",    ".exs"};
    for (size_t i = 0; i < sizeof(avail) / sizeof(avail[0]); i++)
       assert(code_treesitter_available(avail[i]));
    assert(!code_treesitter_available(".txt"));
@@ -267,6 +268,17 @@ int main(void)
    want(".m", objc, "helper", "function");  /* plain C function */
    want(".mm", "@protocol Drawable\n@end\n", "Drawable", "type");
 
+   /* --- Elixir (def/defmodule are MACRO CALLS): defmodule → type; def/defp →
+    * function; members live in the module's do_block. --- */
+   const char *elixir = "defmodule Foo do\n"
+                        "  def greet(x) do\n    IO.puts(x)\n  end\n"
+                        "  defp helper do\n    :ok\n  end\n"
+                        "end\n";
+   want(".ex", elixir, "Foo", "type");
+   want(".ex", elixir, "greet", "function");  /* def foo(x) — name from nested call */
+   want(".ex", elixir, "helper", "function"); /* defp foo — name is a bare identifier */
+   want(".exs", "defmodule S do\n  def run, do: :ok\nend\n", "run", "function");
+
    /* --- nested members: methods inside a type body are surfaced (the walk descends type
     * bodies but never function bodies), across the OO languages. --- */
    want(".cpp", "class C { void m(){} };\n", "m", "function");
@@ -308,6 +320,9 @@ int main(void)
    wantcall(".m", "@implementation W\n- (void)refresh { redraw(); }\n@end\n", "refresh", "redraw");
    wantcall(".m", "@implementation W\n- (void)refresh { [self redraw]; }\n@end\n", "refresh",
             "redraw");
+   /* Elixir: a body call attributes to the enclosing def; the `def` macro-call itself
+    * is NOT emitted as a call (the !is_def guard). */
+   wantcall(".ex", "defmodule M do\n  def run do\n    work()\n  end\nend\n", "run", "work");
    wantcall(".py", "def f():\n    obj.m()\n", "f", "m");
    wantcall(".js", "function f(){ g(); a.b.c(); }\n", "f", "g");
    wantcall(".js", "function f(){ a.b.c(); }\n", "f", "c"); /* chained -> last id */
