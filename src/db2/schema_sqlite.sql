@@ -324,6 +324,8 @@ CREATE TABLE IF NOT EXISTS code_projection_generations (  id INTEGER PRIMARY KEY
 CREATE INDEX IF NOT EXISTS idx_cpg_project_state ON code_projection_generations(project, state);
 CREATE TABLE IF NOT EXISTS code_projection_edges (  generation_id INTEGER NOT NULL REFERENCES code_projection_generations(id) ON DELETE CASCADE,  project TEXT NOT NULL,  source TEXT NOT NULL,  relation TEXT NOT NULL,  target TEXT NOT NULL,  source_hash TEXT NOT NULL DEFAULT '',  PRIMARY KEY (generation_id, source, relation, target));
 CREATE INDEX IF NOT EXISTS idx_cpe_project_triple ON code_projection_edges(project, source, relation, target);
+CREATE TABLE IF NOT EXISTS code_projection_communities (  generation_id INTEGER NOT NULL REFERENCES code_projection_generations(id) ON DELETE CASCADE,  project TEXT NOT NULL,  node_id TEXT NOT NULL,  community_id TEXT NOT NULL,  PRIMARY KEY (generation_id, node_id));
+CREATE INDEX IF NOT EXISTS idx_cpc_gen_community ON code_projection_communities(generation_id, community_id);
 CREATE INDEX IF NOT EXISTS idx_ee_source_relation ON entity_edges(source, relation);
 CREATE INDEX IF NOT EXISTS idx_ee_target_relation ON entity_edges(target, relation);
 CREATE INDEX IF NOT EXISTS idx_ee_origin_source ON entity_edges(edge_origin, source);

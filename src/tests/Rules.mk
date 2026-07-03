@@ -1716,7 +1716,8 @@ $(OBJDIR)/tests/test_kb_graph_analytics.o: C_FLAGS += -Ikb
 $(OBJDIR)/tests/test_prompt_sanitizer.o: C_FLAGS += -Ikb
 
 $(TESTPREFIX)/unit-test-kb-graph: $(OBJDIR)/tests/test_kb_graph.o \
-                                  $(OBJDIR)/kb/kb_service_graph.o $(OBJDIR)/cJSON.o
+                                  $(OBJDIR)/kb/kb_service_graph.o \
+                                  $(OBJDIR)/kb/kb_graph_analytics.o $(OBJDIR)/cJSON.o
 	$(TESTLINK) -o $@ $^ $(L_CORE)
 
 # Reciprocal Rank Fusion core (§5 hybrid retrieval scoring model). Pure: no DB.

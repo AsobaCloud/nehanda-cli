@@ -195,6 +195,141 @@ int db2_code_projection_list_edges(const char *project, code_projection_edge_t *
    return n;
 }
 
+int db2_code_projection_list_edges_for_gen(int64_t gen_id, code_projection_edge_t *out, int max)
+{
+   if (gen_id <= 0 || !out || max <= 0)
+      return -1;
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+   /* Total order (source, target, relation) so that if the LIMIT boundary cuts
+    * through same-(source,target) edges the truncation is deterministic — the
+    * derived community partition can't depend on DB row ordering. */
+   static const char *sql = "SELECT source, relation, target"
+                            " FROM code_projection_edges"
+                            " WHERE generation_id = ?1"
+                            " ORDER BY source, target, relation"
+                            " LIMIT ?2";
+   char err[CP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_int64(st, "?1", gen_id);
+   aimee_pg_bind_int64(st, "?2", max);
+   int n = 0;
+   while (n < max && aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+   {
+      const char *src = aimee_pg_column_text(st, 0);
+      const char *rel = aimee_pg_column_text(st, 1);
+      const char *tgt = aimee_pg_column_text(st, 2);
+      snprintf(out[n].source, sizeof(out[n].source), "%s", src ? src : "");
+      snprintf(out[n].relation, sizeof(out[n].relation), "%s", rel ? rel : "");
+      snprintf(out[n].target, sizeof(out[n].target), "%s", tgt ? tgt : "");
+      out[n].structural_weight = structural_weight_for_relation(rel);
+      n++;
+   }
+   aimee_pg_finalize(st);
+   return n;
+}
+
+/* --- Community membership (graph-feedback S-community) --- */
+
+int db2_code_projection_communities_replace(int64_t gen_id, const char *project,
+                                            const code_projection_community_t *rows, int n)
+{
+   if (gen_id <= 0 || n < 0 || (n > 0 && !rows))
+      return -1;
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+
+   char err[CP_ERRBUF] = "";
+   if (aimee_pg_exec(conn, "BEGIN", err, sizeof(err)) != 0)
+      return -1;
+
+   /* Clear any prior partition for this generation (recompute is idempotent). */
+   static const char *del_sql = "DELETE FROM code_projection_communities WHERE generation_id = ?1";
+   aimee_pg_stmt_t *del = aimee_pg_prepare(conn, del_sql, err, sizeof(err));
+   if (!del)
+      goto rollback;
+   aimee_pg_bind_int64(del, "?1", gen_id);
+   if (aimee_pg_step(del, err, sizeof(err)) != AIMEE_PG_DONE)
+   {
+      aimee_pg_finalize(del);
+      goto rollback;
+   }
+   aimee_pg_finalize(del);
+
+   if (n > 0)
+   {
+      static const char *ins_sql =
+          "INSERT INTO code_projection_communities"
+          " (generation_id, project, node_id, community_id) VALUES (?1, ?2, ?3, ?4)";
+      aimee_pg_stmt_t *ins = aimee_pg_prepare(conn, ins_sql, err, sizeof(err));
+      if (!ins)
+         goto rollback;
+      for (int i = 0; i < n; i++)
+      {
+         aimee_pg_reset(ins);
+         aimee_pg_bind_int64(ins, "?1", gen_id);
+         aimee_pg_bind_text(ins, "?2", project ? project : "");
+         aimee_pg_bind_text(ins, "?3", rows[i].node_id);
+         aimee_pg_bind_text(ins, "?4", rows[i].community_id);
+         if (aimee_pg_step(ins, err, sizeof(err)) != AIMEE_PG_DONE)
+         {
+            aimee_pg_finalize(ins);
+            goto rollback;
+         }
+      }
+      aimee_pg_finalize(ins);
+   }
+
+   if (aimee_pg_exec(conn, "COMMIT", err, sizeof(err)) != 0)
+      goto rollback;
+   return 0;
+
+rollback:
+   /* Best-effort: if COMMIT itself failed after the server already committed, this
+    * ROLLBACK is a no-op and the rows persist. Acceptable here — the caller treats
+    * community membership as a derived analytic and recomputes it idempotently on
+    * the next publish; a later slice needing atomic cross-generation swaps would
+    * revisit this. aimee_pg_in_transaction avoids a spurious "no transaction". */
+   if (aimee_pg_in_transaction(conn))
+      aimee_pg_exec(conn, "ROLLBACK", err, sizeof(err));
+   return -1;
+}
+
+int db2_code_projection_communities_list(int64_t gen_id, code_projection_community_t *out, int max)
+{
+   if (gen_id <= 0 || !out || max <= 0)
+      return -1;
+   void *conn = db2_conn();
+   if (!conn)
+      return -1;
+   static const char *sql = "SELECT node_id, community_id"
+                            " FROM code_projection_communities"
+                            " WHERE generation_id = ?1"
+                            " ORDER BY node_id"
+                            " LIMIT ?2";
+   char err[CP_ERRBUF] = "";
+   aimee_pg_stmt_t *st = aimee_pg_prepare(conn, sql, err, sizeof(err));
+   if (!st)
+      return -1;
+   aimee_pg_bind_int64(st, "?1", gen_id);
+   aimee_pg_bind_int64(st, "?2", max);
+   int n = 0;
+   while (n < max && aimee_pg_step(st, err, sizeof(err)) == AIMEE_PG_ROW)
+   {
+      const char *node = aimee_pg_column_text(st, 0);
+      const char *comm = aimee_pg_column_text(st, 1);
+      snprintf(out[n].node_id, sizeof(out[n].node_id), "%s", node ? node : "");
+      snprintf(out[n].community_id, sizeof(out[n].community_id), "%s", comm ? comm : "");
+      n++;
+   }
+   aimee_pg_finalize(st);
+   return n;
+}
+
 int db2_code_projection_project_fingerprint(const char *project, char *out, size_t out_len)
 {
    if (!project || !*project || !out || out_len == 0)
