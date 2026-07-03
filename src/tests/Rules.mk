@@ -3537,6 +3537,7 @@ $(TESTPREFIX)/unit-test-kb-http-routes: $(OBJDIR)/tests/test_kb_http_routes.o \
                      $(OBJDIR)/kb/http/kb_http_code.o \
                      $(OBJDIR)/kb/kb_rrf.o \
                      $(OBJDIR)/kb/kb_graph_analytics.o \
+                     $(OBJDIR)/kb/prompt_sanitizer.o \
                      $(OBJDIR)/kb/http/kb_http_pdf.o \
                      $(OBJDIR)/kb/http/kb_http_jobs.o \
                      $(OBJDIR)/cJSON.o \
