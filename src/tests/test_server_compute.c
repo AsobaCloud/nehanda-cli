@@ -30,6 +30,12 @@ int server_session_pool_submit(server_ctx_t *ctx, const char *session_id, void (
    return 0;
 }
 #include "../server/server_compute.c"
+/* server_compute.c's former .inc fragments are now sibling TUs; the white-box
+ * test pulls them into this TU the same way it used to get them via the .inc. */
+#include "../server/server_compute_mailbox.c"
+#include "../server_compute_concurrency.c"
+#include "../server_compute_episodes.c"
+#include "../server/server_compute_roundtable.c"
 #include "../server/server_compute_async.c"
 static cJSON *g_last_response = NULL;
 static char g_last_error[256];
@@ -491,7 +497,160 @@ const char *server_http_delegate_block(const char *session_id, const char *role,
    return NULL;
 }
 
-#include "test_server_compute_workspace_stubs.inc"
+int git_repo_root(const char *dir, char *out_root, size_t out_len)
+{
+   (void)dir;
+   if (g_git_repo_root_rc == 0 && out_root && out_len > 0)
+   {
+      snprintf(out_root, out_len, "%s", g_git_repo_root_value);
+      return 0;
+   }
+   if (out_root && out_len > 0)
+      out_root[0] = '\0';
+   return -1;
+}
+int worktree_sibling_path(const char *git_root, const char *sid, const char *work_name, char *out,
+                          size_t out_len)
+{
+   (void)git_root;
+   (void)sid;
+   (void)work_name;
+   if (g_worktree_sibling_path_rc == 0 && out && out_len > 0)
+   {
+      snprintf(out, out_len, "%s", g_worktree_sibling_path_value);
+      return 0;
+   }
+   if (out && out_len > 0)
+      out[0] = '\0';
+   return -1;
+}
+int worktree_delegate_work_name(const char *sid, char *out, size_t cap)
+{
+   if (!sid || !out || cap < 9)
+      return -1;
+   snprintf(out, cap, "deadbeef"); /* stub: deterministic fixed name */
+   return 0;
+}
+int is_aimee_worktree_path(const char *path)
+{
+   (void)path;
+   return 0;
+}
+int worktree_managed_git_root(const char *path, char *out, size_t out_len)
+{
+   (void)path;
+   if (out && out_len > 0)
+      out[0] = '\0';
+   return -1;
+}
+int kb_client_index_code_search(const char *query, const char *project, code_search_hit_t *out,
+                                int max)
+{
+   (void)query;
+   (void)project;
+   (void)out;
+   (void)max;
+   return 0;
+}
+
+/* §7 graph-informed delegation pulls the structural blast radius of referenced
+ * files into the delegate prompt; with no indexed project these no-op (the
+ * injector then fails open and adds no block). */
+int kb_client_index_list(project_info_t *out, int max)
+{
+   (void)out;
+   (void)max;
+   return 0;
+}
+
+int kb_client_index_blast_radius(const char *project, const char *file_path, blast_radius_t *out)
+{
+   (void)project;
+   (void)file_path;
+   (void)out;
+   return -1;
+}
+
+int kb_client_index_find(const char *identifier, term_hit_t *out, int max)
+{
+   (void)identifier;
+   (void)out;
+   (void)max;
+   return 0;
+}
+int worktree_create_sibling(const char *git_root, const char *sid, const char *work_name)
+{
+   (void)git_root;
+   (void)sid;
+   (void)work_name;
+   g_worktree_create_calls++;
+   return g_worktree_create_rc;
+}
+
+int worktree_create_sibling_from_anchor(const char *git_root, const char *sid,
+                                        const char *work_name, const char *anchor_dir)
+{
+   (void)git_root;
+   (void)sid;
+   (void)work_name;
+   (void)anchor_dir;
+   g_worktree_create_calls++;
+   return g_worktree_create_rc;
+}
+
+int worktree_create_sibling_on_branch(const char *git_root, const char *sid, const char *work_name,
+                                      const char *branch, const char *anchor_dir)
+{
+   (void)git_root;
+   (void)sid;
+   (void)work_name;
+   (void)branch;
+   (void)anchor_dir;
+   g_worktree_create_calls++;
+   return g_worktree_create_rc;
+}
+
+void worktree_cleanup(const char *git_root, const char *sid, const char *work_name)
+{
+   (void)git_root;
+   (void)sid;
+   (void)work_name;
+}
+
+int worktree_apply_changes_to_parent(const char *src_wt, const char *dst_wt)
+{
+   g_worktree_apply_calls++;
+   snprintf(g_last_apply_src, sizeof(g_last_apply_src), "%s", src_wt ? src_wt : "");
+   snprintf(g_last_apply_dst, sizeof(g_last_apply_dst), "%s", dst_wt ? dst_wt : "");
+   return 1;
+}
+
+int worktree_apply_delegate_changes_to_parent(const char *delegate_wt, const char *parent_wt,
+                                              char *err, size_t err_len)
+{
+   g_delegate_apply_calls++;
+   snprintf(g_last_apply_src, sizeof(g_last_apply_src), "%s", delegate_wt ? delegate_wt : "");
+   snprintf(g_last_apply_dst, sizeof(g_last_apply_dst), "%s", parent_wt ? parent_wt : "");
+   if (g_delegate_apply_rc < 0 && err && err_len > 0)
+      snprintf(err, err_len, "stub delegate apply failed");
+   return g_delegate_apply_rc;
+}
+int worktree_apply_delegate_changes_checked(const char *delegate_wt, const char *parent_hint,
+                                            const char *launch_head, int *applied,
+                                            char *parent_root, size_t parent_root_len, char *err,
+                                            size_t err_len)
+{
+   (void)launch_head;
+   char parent[MAX_PATH_LEN] = "";
+   if (parent_hint && git_repo_root(parent_hint, parent, sizeof(parent)) != 0)
+      snprintf(parent, sizeof(parent), "%s", parent_hint);
+   int n = worktree_apply_delegate_changes_to_parent(delegate_wt, parent, err, err_len);
+   if (applied)
+      *applied = n;
+   if (parent_root && parent_root_len > 0)
+      snprintf(parent_root, parent_root_len, "%s", parent);
+   return n < 0 ? -1 : 0;
+}
 
 /* delegate_routing reaches the kb DB2 bandit over kb_client, which this unit test
  * does not link. Stub it as "sampling disabled" so delegate_worker falls back to
@@ -1747,11 +1906,1084 @@ static int delegate_current_job(db1_agent_job_t *out_job)
    return db1_agent_job_get(jid->valueint, out_job);
 }
 
-#include "test_server_compute_handoff.inc"
-#include "test_server_compute_delegate_write.inc"
-#include "test_server_compute_liveness.inc"
-#include "test_server_compute_state_invariants.inc"
-#include "test_server_compute_child_env.inc"
+/* test_server_compute_handoff.inc: direct-delegate handoff / tools / max-turns
+ * tests split out of test_server_compute.c to keep that .c under the 2000-line
+ * hard limit. Included (same translation unit) after the impl includes so the
+ * white-box statics and stubs above stay in scope. */
+static void test_direct_delegate_handoff_json_response(void)
+{
+   reset_last_response();
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "{"
+                      "\"schema_version\":\"delegate_result_v1\","
+                      "\"status\":\"done\","
+                      "\"changed_files\":[],"
+                      "\"tests\":[{\"name\":\"unit-test-server-compute\",\"status\":\"passed\"}],"
+                      "\"supervisor_actions\":[],"
+                      "\"summary\":\"server handoff ok\""
+                      "}";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "code");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "run the direct delegate handoff json test prompt");
+   cJSON_AddTrueToObject(req, "handoff_json");
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   assert(g_submitted_arg != NULL);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+   char buf[8192];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+   /* (WP-B) async-only: status+result persist to the job row; the rich handoff_*
+    * sync-response metadata is no longer delivered. Handoff-contract injection +
+    * agent-call count prove the path ran; success via the persisted job status. */
+   assert(strstr(g_last_agent_prompt, "delegate_result_v1") != NULL);
+   assert(g_agent_calls == 1);
+   db1_agent_job_t job;
+   assert(delegate_current_job(&job) == 0);
+   assert(strcmp(job.status, "done") == 0);
+   db1_agent_job_free(&job);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+   printf("  PASS: test_direct_delegate_handoff_json_response\n");
+}
+static void test_direct_delegate_handoff_repair_attempt(void)
+{
+   reset_last_response();
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "not json";
+   g_agent_repair_response =
+       "{"
+       "\"schema_version\":\"delegate_result_v1\","
+       "\"status\":\"done\","
+       "\"changed_files\":[],"
+       "\"tests\":[{\"name\":\"unit-test-server-compute\",\"status\":\"passed\"}],"
+       "\"supervisor_actions\":[],"
+       "\"summary\":\"repair handoff ok\""
+       "}";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "code");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "run the delegate malformed handoff repair test prompt");
+   cJSON_AddTrueToObject(req, "handoff_json");
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   assert(g_submitted_arg != NULL);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+   char buf[8192];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+   /* (WP-B) async-only: handoff_* sync metadata gone; prompt + agent-call count
+    * prove the malformed-handoff repair path ran; success via job status. */
+   assert(strstr(g_last_agent_prompt, "Repair it now") != NULL);
+   assert(g_agent_calls == 2);
+   db1_agent_job_t job;
+   assert(delegate_current_job(&job) == 0);
+   assert(strcmp(job.status, "done") == 0);
+   db1_agent_job_free(&job);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+   printf("  PASS: test_direct_delegate_handoff_repair_attempt\n");
+}
+
+static void test_direct_delegate_handoff_repair_failure_is_error(void)
+{
+   reset_last_response();
+   /* Invalid delegate handoffs must stay errors after a failed repair attempt. */
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "not json";
+   g_agent_repair_response = "still not json";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "code");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "run the delegate failed handoff repair test prompt");
+   cJSON_AddTrueToObject(req, "handoff_json");
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   assert(g_submitted_arg != NULL);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+   char buf[8192];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+   /* (WP-B) async-only: the invalid-handoff error is persisted to the job row. */
+   assert(g_agent_calls == 2);
+   db1_agent_job_t job;
+   assert(delegate_current_job(&job) == 0);
+   assert(strstr(job.result, "invalid delegate handoff") != NULL);
+   db1_agent_job_free(&job);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+   printf("  PASS: test_direct_delegate_handoff_repair_failure_is_error\n");
+}
+
+static void test_direct_delegate_review_auto_tools_uses_tools(void)
+{
+   reset_last_response();
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "review completed with default tool execution";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "review");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "run the direct delegate review tool policy test prompt");
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   assert(g_submitted_arg != NULL);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+   char buf[2048];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+   /* (WP-B) async-only: read the persisted job, not the connection. */
+   db1_agent_job_t job;
+   assert(delegate_current_job(&job) == 0);
+   assert(strcmp(job.status, "done") == 0);
+   db1_agent_job_free(&job);
+   assert(g_agent_run_calls == 0);
+   assert(g_agent_tool_run_calls == 1);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+   printf("  PASS: test_direct_delegate_review_auto_tools_uses_tools\n");
+}
+
+static void test_direct_delegate_reviewer_alias_auto_tools_uses_tools(void)
+{
+   reset_last_response();
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "review alias completed with default tool execution";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "reviewer");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "run the direct delegate reviewer alias policy test");
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   assert(g_submitted_arg != NULL);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+   char buf[2048];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+   /* (WP-B) async-only: read the persisted job, not the connection. */
+   db1_agent_job_t job;
+   assert(delegate_current_job(&job) == 0);
+   assert(strcmp(job.status, "done") == 0);
+   db1_agent_job_free(&job);
+   assert(g_agent_run_calls == 0);
+   assert(g_agent_tool_run_calls == 1);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+   printf("  PASS: test_direct_delegate_reviewer_alias_auto_tools_uses_tools\n");
+}
+
+static void test_direct_delegate_explicit_tools_forces_tools(void)
+{
+   reset_last_response();
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "review completed with tool execution";
+   g_budget_release_calls = 0;
+   g_budget_last_grant = 0;
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "review");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt",
+                           "run the direct delegate explicit tools policy test prompt");
+   cJSON_AddTrueToObject(req, "tools");
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   assert(g_submitted_arg != NULL);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+   char buf[2048];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+   /* (WP-B) async-only: read the persisted job, not the connection. */
+   db1_agent_job_t job;
+   assert(delegate_current_job(&job) == 0);
+   assert(strcmp(job.status, "done") == 0);
+   db1_agent_job_free(&job);
+   assert(g_agent_run_calls == 0);
+   assert(g_agent_tool_run_calls == 1);
+   assert(g_budget_release_calls == 1);
+   assert(g_budget_last_grant == 1);
+   assert(g_agent_seen_compute_override == 0);
+   assert(g_agent_seen_budget_release_calls == 1);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+   printf("  PASS: test_direct_delegate_explicit_tools_forces_tools\n");
+}
+
+static void test_direct_delegate_one_turn_diagnose_suppresses_default_tools(void)
+{
+   reset_last_response();
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   int fds[2];
+   assert(ctx != NULL && conn != NULL);
+   assert(pipe(fds) == 0);
+   conn->fd = fds[1];
+   g_agent_response = "diagnose completed without implicit tools";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "diagnose");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "run the one turn diagnose final answer smoke test");
+   cJSON_AddNumberToObject(req, "max_turns", 1);
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker && g_submitted_arg != NULL);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+   char buf[2048];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   close(fds[0]);
+   assert(g_agent_run_calls == 1 && g_agent_tool_run_calls == 0);
+   assert(g_last_agent_max_turns == 1);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+}
+
+static void test_readonly_code_delegate_disables_write_enforce(void)
+{
+   reset_last_response();
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "readonly inspection complete";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "code");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt",
+                           "Read-only inspection only. Do not edit files or make changes.");
+   cJSON_AddTrueToObject(req, "tools");
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   assert(g_submitted_arg != NULL);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+   char buf[2048];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+   /* (WP-B) async-only: read the persisted job, not the connection. */
+   db1_agent_job_t job;
+   assert(delegate_current_job(&job) == 0);
+   assert(strcmp(job.status, "done") == 0);
+   db1_agent_job_free(&job);
+   assert(g_agent_tool_run_calls == 1);
+   assert(g_last_write_enforce == 0);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+   printf("  PASS: test_readonly_code_delegate_disables_write_enforce\n");
+}
+static void test_readonly_refactor_delegate_disables_write_enforce(void)
+{
+   reset_last_response();
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "readonly refactor inspection complete";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "refactor");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt",
+                           "Ownership: inspect only for now. Identify the safest split.");
+   cJSON_AddTrueToObject(req, "tools");
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   assert(g_submitted_arg != NULL);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+   char buf[2048];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+   /* (WP-B) async-only: read the persisted job, not the connection. */
+   db1_agent_job_t job;
+   assert(delegate_current_job(&job) == 0);
+   assert(strcmp(job.status, "done") == 0);
+   db1_agent_job_free(&job);
+   assert(g_agent_tool_run_calls == 1);
+   assert(g_last_write_enforce == 0);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+   printf("  PASS: test_readonly_refactor_delegate_disables_write_enforce\n");
+}
+static void test_direct_delegate_max_turns_override(void)
+{
+   reset_last_response();
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "delegate max turns override ok";
+   g_last_agent_max_turns = -999;
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "code");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "run the direct delegate max turns override test");
+   cJSON_AddNumberToObject(req, "max_turns", 40);
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   assert(g_submitted_arg != NULL);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+   char buf[2048];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+   assert(g_last_agent_max_turns == 40);
+   /* (WP-B) async-only: the {job_id,"pending"} envelope is captured in
+    * g_last_response; the override is asserted above via g_last_agent_max_turns. */
+   assert(cJSON_IsObject(g_last_response));
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+   printf("  PASS: test_direct_delegate_max_turns_override\n");
+}
+static void test_delegate_launch_repairs_paths_from_request_cwd(void)
+{
+   reset_last_response();
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+
+   char cwd[MAX_PATH_LEN];
+   assert(getcwd(cwd, sizeof(cwd)) != NULL);
+
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "cwd", cwd);
+   cJSON *plan = cJSON_AddObjectToObject(req, "plan");
+   cJSON_AddStringToObject(plan, "schema", "delegate_plan_v1");
+   cJSON_AddStringToObject(plan, "title", "Repair Launch Plan");
+   cJSON *packets = cJSON_AddArrayToObject(plan, "packets");
+   add_launch_packet(packets, "packet-repair", "Repair path", "test_server_compute.c");
+
+   assert(handle_delegate_launch(ctx, conn, req) == 0);
+   assert(g_last_response != NULL);
+   int job_id = cJSON_GetObjectItem(g_last_response, "job_id")->valueint;
+   assert(job_id > 0);
+
+   db1_coord_task_t tasks[2];
+   int count = db1_coord_job_list_tasks(job_id, tasks, 2);
+   assert(count == 1);
+   assert(strstr(tasks[0].files, "src/tests/test_server_compute.c") != NULL);
+
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+   printf("  PASS: test_delegate_launch_repairs_paths_from_request_cwd\n");
+}
+
+/* (WP-B) test_noop_write_delegate_fires deleted: it asserted foreground
+ * write-delegate semantics (no worktree, no-op detection on the parent tree).
+ * Async-only delegates always isolate; this foreground-shaped case is obsolete.
+ * No-op detection itself is exercised via delegate_run_phases unit coverage. */
+
+/* Diff grounding: inspection delegates must receive the evidence bundle in
+ * their task prompt while reading from the parent workspace by default. */
+static void assert_role_gets_evidence_bundle_with_cwd(const char *role, const char *cwd)
+{
+   reset_last_response();
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "Validation complete — no findings";
+   g_git_repo_root_rc = 0;
+   snprintf(g_git_repo_root_value, sizeof(g_git_repo_root_value), "%s", "/tmp/aimee-parent-repo");
+   g_worktree_create_rc = 0;
+   g_worktree_sibling_path_rc = 0;
+   snprintf(g_worktree_sibling_path_value, sizeof(g_worktree_sibling_path_value), "%s",
+            "/tmp/aimee-delegate-wt");
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", role);
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt",
+                           "validate the changes in the current diff for correctness and coverage");
+   if (cwd)
+      cJSON_AddStringToObject(req, "cwd", cwd);
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+   char buf[4096];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+   assert(strstr(g_last_agent_prompt, "Parent Worktree Diff Evidence") != NULL);
+   assert(strstr(g_last_agent_prompt, "Validation Evidence Bundle") != NULL);
+   assert(g_worktree_create_calls == 0);
+   assert(g_worktree_apply_calls == 0);
+   /* (WP-B) async-only: the worker's status/launch_worktree_path are persisted to
+    * the job row, not delivered over the connection (the pipe carries the
+    * {job_id,pending} envelope). The read-only delegate ran in the parent
+    * workspace (asserted above via the evidence bundle + zero worktree calls). */
+   db1_agent_job_t job;
+   assert(delegate_current_job(&job) == 0);
+   assert(strcmp(job.status, "done") == 0);
+   db1_agent_job_free(&job);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+}
+
+static void assert_role_gets_evidence_bundle(const char *role)
+{
+   assert_role_gets_evidence_bundle_with_cwd(role, "/tmp");
+}
+
+static void test_read_only_delegate_uses_parent_workspace(void)
+{
+   reset_last_response();
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "Read-only validation complete";
+   g_git_repo_root_rc = 0;
+   snprintf(g_git_repo_root_value, sizeof(g_git_repo_root_value), "%s", "/tmp/aimee-parent-repo");
+   g_worktree_create_rc = 0;
+   g_worktree_sibling_path_rc = 0;
+   snprintf(g_worktree_sibling_path_value, sizeof(g_worktree_sibling_path_value), "%s",
+            "/tmp/aimee-delegate-wt");
+
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "validate");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt",
+                           "Read-only. Validate the changes in the current diff for correctness.");
+   cJSON_AddStringToObject(req, "cwd", "/tmp/aimee-parent-repo");
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+
+   char buf[4096];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+
+   assert(g_worktree_create_calls == 0); /* read-only: no sibling worktree */
+   assert(g_worktree_apply_calls == 0);
+   assert(strstr(g_last_agent_prompt, "Validation Evidence Bundle") != NULL);
+   /* (WP-B) async-only: read the persisted job rather than the connection. */
+   db1_agent_job_t job;
+   assert(delegate_current_job(&job) == 0);
+   assert(strcmp(job.status, "done") == 0);
+   db1_agent_job_free(&job);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+   printf("  PASS: test_read_only_delegate_uses_parent_workspace\n");
+}
+
+static void test_read_only_branch_delegate_rejected(void)
+{
+   reset_last_response();
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "should not run";
+   g_git_repo_root_rc = 0;
+   snprintf(g_git_repo_root_value, sizeof(g_git_repo_root_value), "%s", "/tmp/aimee-parent-repo");
+   g_worktree_create_rc = 0;
+   g_worktree_sibling_path_rc = 0;
+   snprintf(g_worktree_sibling_path_value, sizeof(g_worktree_sibling_path_value), "%s",
+            "/tmp/aimee-delegate-wt");
+
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "validate");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt",
+                           "Read-only. Validate the changes in the current diff for correctness.");
+   cJSON_AddStringToObject(req, "cwd", "/tmp/aimee-parent-repo");
+   cJSON_AddStringToObject(req, "branch", "feature/read-only-review");
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+
+   char buf[4096];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+
+   assert(g_worktree_create_calls == 0);
+   assert(g_agent_run_calls == 0); /* rejected before the agent ran */
+   assert(g_agent_tool_run_calls == 0);
+   /* (WP-B) async-only: the rejection error is persisted to the job row. */
+   db1_agent_job_t job;
+   assert(delegate_current_job(&job) == 0);
+   assert(strstr(job.result, "read-only delegates must use the parent worktree") != NULL);
+   db1_agent_job_free(&job);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+   printf("  PASS: test_read_only_branch_delegate_rejected\n");
+}
+
+/* (WP-B) test_write_delegate_without_named_paths_noops deleted: foreground
+ * write-delegate no-op semantics, obsolete under always-isolate async. */
+
+static void test_inspection_roles_get_evidence_bundle(void)
+{
+   assert_role_gets_evidence_bundle("validate");
+   assert_role_gets_evidence_bundle("review");
+   assert_role_gets_evidence_bundle("diagnose");
+   assert_role_gets_evidence_bundle_with_cwd("review", NULL);
+   printf("  PASS: test_inspection_roles_get_evidence_bundle\n");
+}
+static void test_background_ok_rejects_raw_tool_call_markup(void)
+{
+   int job_id =
+       db1_agent_job_create("explain", "run raw tool-call regression", "minimax", "unit-test");
+   assert(job_id > 0);
+
+   pthread_mutex_t mu;
+   pthread_mutex_init(&mu, NULL);
+   compute_ctx_t done_ctx = {.conn_fd = -1, .background_job_id = job_id, .write_mutex = &mu};
+   cJSON *done = cJSON_CreateObject();
+   cJSON_AddStringToObject(done, "status", "ok");
+   cJSON_AddStringToObject(done, "response",
+                           "I will inspect it.\n[TOOL_CALL]\n{\"tool\":\"bash\"}\n[/TOOL_CALL]");
+   cJSON_AddNumberToObject(done, "turns", 0);
+   compute_respond(&done_ctx, done);
+
+   db1_agent_job_t job;
+   assert(db1_agent_job_get(job_id, &job) == 0);
+   assert(strcmp(job.status, "failed") == 0);
+   assert(strstr(job.result, "degenerate response") != NULL);
+   pthread_mutex_destroy(&mu);
+
+   printf("  PASS: test_background_ok_rejects_raw_tool_call_markup\n");
+}
+
+static void test_background_ok_rejects_unexecuted_tool_plan(void)
+{
+   int job_id = db1_agent_job_create("explain", "run unexecuted command plan regression", "minimax",
+                                     "unit-test");
+   assert(job_id > 0);
+
+   pthread_mutex_t mu;
+   pthread_mutex_init(&mu, NULL);
+   compute_ctx_t done_ctx = {.conn_fd = -1, .background_job_id = job_id, .write_mutex = &mu};
+   cJSON *done = cJSON_CreateObject();
+   cJSON_AddStringToObject(done, "status", "ok");
+   cJSON_AddStringToObject(done, "response",
+                           "I'll read the proposal first, then inspect the code.\n"
+                           "```\n"
+                           "sed -n '1,220p' docs/proposals/accepted/example.md\n"
+                           "```\n"
+                           "```\n"
+                           "rg -n \"calibration\" src tests\n"
+                           "```\n");
+   cJSON_AddNumberToObject(done, "turns", 0);
+   cJSON_AddNumberToObject(done, "tool_calls", 0);
+   compute_respond(&done_ctx, done);
+
+   db1_agent_job_t job;
+   assert(db1_agent_job_get(job_id, &job) == 0);
+   assert(strcmp(job.status, "failed") == 0);
+   assert(strstr(job.result, "unexecuted tool-use plan") != NULL);
+   pthread_mutex_destroy(&mu);
+
+   printf("  PASS: test_background_ok_rejects_unexecuted_tool_plan\n");
+}
+
+static void test_direct_delegate_rejects_raw_tool_call_markup(void)
+{
+   reset_last_response();
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   g_agent_response = "I will inspect it.\n[TOOL_CALL]\n{\"tool\":\"bash\"}\n[/TOOL_CALL]";
+
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "explain");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "run raw tool-call regression");
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   assert(g_submitted_arg != NULL);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+
+   close(fds[1]);
+   char buf[8192];
+   ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+   assert(n >= 0); /* (WP-B) async: response in g_last_response, pipe empty */
+   buf[n] = '\0';
+   close(fds[0]);
+   /* (WP-B) async-only: the degenerate-response rejection is persisted to the
+    * job row (status failed; message in result). */
+   db1_agent_job_t job;
+   assert(delegate_current_job(&job) == 0);
+   assert(strstr(job.result, "degenerate response") != NULL);
+   db1_agent_job_free(&job);
+   cJSON_Delete(req);
+   reset_last_response();
+   free(conn);
+   free(ctx);
+
+   printf("  PASS: test_direct_delegate_rejects_raw_tool_call_markup\n");
+}
+/* test_server_compute_state_invariants.inc: characterization net for the
+ * delegate_worker run state machine — the env / thread-local / mailbox /
+ * concurrency / cwd save-restore that wraps the provider run, plus the response
+ * envelope shape. Split out of test_server_compute.c (same TU, after the impl
+ * #includes and stubs) to keep that file under the 2000-line cap.
+ *
+ * These pin the *observable* behaviour the upcoming state-machine decomposition
+ * must preserve: a delegate run must leave the caller's delegation context
+ * (tl_delegation_depth / tl_parent_delegation_id, the AIMEE_DELEGATE_DEPTH /
+ * AIMEE_PARENT_DELEGATION_ID / AIMEE_ACTIVE_TOOLSET env mirror), the mailbox,
+ * the run cwd, the session override, and the concurrency slot exactly as it
+ * found them — on both the success and failure paths. */
+
+static const char *sci_getenv(const char *key)
+{
+   const char *v = getenv(key);
+   return v ? v : "";
+}
+
+/* Drive one delegate end to end: handle_delegate captures the worker, we run it
+ * synchronously, then map the persisted job row back to the old {status,message}
+ * vocabulary. Returns the synthetic response (caller frees) or NULL.
+ *
+ * (WP-B) async-only: handle_delegate returns the {job_id,"pending"} envelope via
+ * the stubbed server_send_ok (captured in g_last_response, NOT written to the
+ * connection — the pipe stays empty). The worker persists the real status/result
+ * to the job row. We map done->ok, cancelled->cancelled, else->error so the
+ * invariant cases (which mainly assert thread-local context restoration) still
+ * read a status. */
+static cJSON *sci_drive_delegate(cJSON *req)
+{
+   int fds[2];
+   assert(pipe(fds) == 0);
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   conn->fd = fds[1];
+   assert(handle_delegate(ctx, conn, req) == 0);
+   assert(g_submitted_fn == delegate_worker);
+   assert(g_submitted_arg != NULL);
+   g_submitted_fn(g_submitted_arg);
+   g_submitted_arg = NULL;
+   close(fds[1]);
+   close(fds[0]);
+   free(conn);
+   free(ctx);
+   cJSON *jid =
+       g_last_response ? cJSON_GetObjectItemCaseSensitive(g_last_response, "job_id") : NULL;
+   if (!cJSON_IsNumber(jid))
+      return NULL;
+   cJSON *out = cJSON_CreateObject();
+   db1_agent_job_t job;
+   if (db1_agent_job_get(jid->valueint, &job) == 0)
+   {
+      const char *st = strcmp(job.status, "done") == 0        ? "ok"
+                       : strcmp(job.status, "cancelled") == 0 ? "cancelled"
+                                                              : "error";
+      cJSON_AddStringToObject(out, "status", st);
+      if (job.result && job.result[0])
+         cJSON_AddStringToObject(out, "message", job.result);
+      db1_agent_job_free(&job);
+   }
+   return out;
+}
+
+/* Establish a sentinel "outer delegate" context; assert the worker restores it. */
+static void test_delegate_worker_restores_caller_context(void)
+{
+   reset_last_response();
+
+   tl_delegation_depth = 1;
+   snprintf(tl_parent_delegation_id, sizeof(tl_parent_delegation_id), "outer-parent");
+   platform_setenv("AIMEE_DELEGATE_DEPTH", "1");
+   platform_setenv("AIMEE_PARENT_DELEGATION_ID", "outer-parent");
+   platform_setenv("AIMEE_ACTIVE_TOOLSET", "outer-toolset");
+   run_cmd_set_cwd(NULL);
+   tl_mailbox = NULL;
+
+   g_agent_response = "did the thing";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "execute"); /* read-only: no worktree path */
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "characterize state restore");
+   cJSON_AddStringToObject(req, "session_id", "inner-session");
+   cJSON_AddStringToObject(req, "toolset", "inner-toolset");
+   cJSON *resp = sci_drive_delegate(req);
+   cJSON_Delete(req);
+
+   assert(resp != NULL);
+   assert(strcmp(cJSON_GetObjectItem(resp, "status")->valuestring, "ok") == 0);
+   cJSON_Delete(resp);
+
+   /* Thread-local delegation context restored to the outer sentinels. */
+   assert(tl_delegation_depth == 1);
+   assert(strcmp(tl_parent_delegation_id, "outer-parent") == 0);
+   /* Cross-process env mirror restored. */
+   assert(strcmp(sci_getenv("AIMEE_DELEGATE_DEPTH"), "1") == 0);
+   assert(strcmp(sci_getenv("AIMEE_PARENT_DELEGATION_ID"), "outer-parent") == 0);
+   assert(strcmp(sci_getenv("AIMEE_ACTIVE_TOOLSET"), "outer-toolset") == 0);
+   /* Mailbox released, run cwd cleared, session override cleared. */
+   assert(tl_mailbox == NULL);
+   assert(run_cmd_get_cwd() == NULL || run_cmd_get_cwd()[0] == '\0');
+   {
+      const char *s = session_id();
+      assert(s == NULL || strcmp(s, "inner-session") != 0);
+   }
+
+   tl_delegation_depth = 0;
+   tl_parent_delegation_id[0] = '\0';
+   reset_last_response();
+   printf("  PASS: test_delegate_worker_restores_caller_context\n");
+}
+
+/* The per-model concurrency slot acquired for the run must be released exactly once. */
+static void test_delegate_worker_balances_concurrency_slot(void)
+{
+   reset_last_response();
+   tl_delegation_depth = 0;
+   tl_parent_delegation_id[0] = '\0';
+
+   g_agent_response = "ok";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "execute");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "concurrency balance characterization");
+   cJSON *resp = sci_drive_delegate(req);
+   cJSON_Delete(req);
+
+   assert(resp != NULL);
+   assert(strcmp(cJSON_GetObjectItem(resp, "status")->valuestring, "ok") == 0);
+   cJSON_Delete(resp);
+
+   assert(g_concurrency_acquire_calls == 1);
+   assert(g_concurrency_release_calls == g_concurrency_acquire_calls);
+
+   reset_last_response();
+   printf("  PASS: test_delegate_worker_balances_concurrency_slot\n");
+}
+
+/* (WP-B) async-only: a successful delegate persists to a durable, pollable job
+ * row — status "done" with the provider's response text in job.result. The rich
+ * synchronous envelope (delegation_id / turns / tool_calls / agent / token
+ * counts) the worker once wrote over the connection is no longer delivered here;
+ * `delegate.status` polling surfaces what the job row preserves. sci_drive_delegate
+ * maps the row back to {status:"ok", message:<result>}. */
+static void test_delegate_worker_ok_response_shape(void)
+{
+   reset_last_response();
+   tl_delegation_depth = 0;
+   tl_parent_delegation_id[0] = '\0';
+
+   g_agent_response = "the delegate result text";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "execute");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "response shape characterization");
+   cJSON *resp = sci_drive_delegate(req);
+   cJSON_Delete(req);
+
+   assert(resp != NULL);
+   assert(strcmp(cJSON_GetObjectItem(resp, "status")->valuestring, "ok") == 0);
+   assert(strcmp(cJSON_GetObjectItem(resp, "message")->valuestring, "the delegate result text") ==
+          0);
+   cJSON_Delete(resp);
+
+   reset_last_response();
+   printf("  PASS: test_delegate_worker_ok_response_shape\n");
+}
+
+/* The same context-restore invariants must hold when the run fails (rc != 0). */
+static void test_delegate_worker_restores_state_on_error(void)
+{
+   reset_last_response();
+
+   tl_delegation_depth = 1;
+   snprintf(tl_parent_delegation_id, sizeof(tl_parent_delegation_id), "err-parent");
+   platform_setenv("AIMEE_DELEGATE_DEPTH", "1");
+   platform_setenv("AIMEE_PARENT_DELEGATION_ID", "err-parent");
+   platform_setenv("AIMEE_ACTIVE_TOOLSET", "err-toolset");
+   run_cmd_set_cwd(NULL);
+   tl_mailbox = NULL;
+
+   g_agent_run_rc = -1; /* force the provider run to fail */
+   g_agent_response = NULL;
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "execute");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "error-path restore characterization");
+   cJSON *resp = sci_drive_delegate(req);
+   cJSON_Delete(req);
+
+   assert(resp != NULL);
+   assert(strcmp(cJSON_GetObjectItem(resp, "status")->valuestring, "error") == 0);
+   cJSON_Delete(resp);
+
+   /* Restore invariants must hold on the failure path too. */
+   assert(tl_delegation_depth == 1);
+   assert(strcmp(tl_parent_delegation_id, "err-parent") == 0);
+   assert(strcmp(sci_getenv("AIMEE_DELEGATE_DEPTH"), "1") == 0);
+   assert(strcmp(sci_getenv("AIMEE_PARENT_DELEGATION_ID"), "err-parent") == 0);
+   assert(strcmp(sci_getenv("AIMEE_ACTIVE_TOOLSET"), "err-toolset") == 0);
+   assert(tl_mailbox == NULL);
+   assert(run_cmd_get_cwd() == NULL || run_cmd_get_cwd()[0] == '\0');
+   assert(g_concurrency_release_calls == g_concurrency_acquire_calls);
+
+   tl_delegation_depth = 0;
+   tl_parent_delegation_id[0] = '\0';
+   reset_last_response();
+   printf("  PASS: test_delegate_worker_restores_state_on_error\n");
+}
+
+/* The session override must be active *during* the provider run so the agent's
+ * tool calls resolve to the delegating session. */
+static void test_delegate_worker_sets_session_override_during_run(void)
+{
+   reset_last_response();
+   tl_delegation_depth = 0;
+   tl_parent_delegation_id[0] = '\0';
+
+   g_agent_response = "ok";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "execute");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "session-during-run characterization");
+   cJSON_AddStringToObject(req, "session_id", "run-session");
+   cJSON *resp = sci_drive_delegate(req);
+   cJSON_Delete(req);
+
+   assert(resp != NULL);
+   assert(strcmp(cJSON_GetObjectItem(resp, "status")->valuestring, "ok") == 0);
+   cJSON_Delete(resp);
+
+   assert(g_agent_calls == 1);
+   assert(strcmp(g_session_during_run, "run-session") == 0);
+
+   reset_last_response();
+   printf("  PASS: test_delegate_worker_sets_session_override_during_run\n");
+}
+
+/* Concurrency cancelled before a slot is granted: the worker must respond
+ * "cancelled", never run the provider, and unwind the caller context — the
+ * early-return path that duplicates the normal teardown. */
+static void test_delegate_worker_concurrency_cancelled_restores(void)
+{
+   reset_last_response();
+   tl_delegation_depth = 1;
+   snprintf(tl_parent_delegation_id, sizeof(tl_parent_delegation_id), "cx-parent");
+   platform_setenv("AIMEE_DELEGATE_DEPTH", "1");
+   platform_setenv("AIMEE_PARENT_DELEGATION_ID", "cx-parent");
+   run_cmd_set_cwd(NULL);
+   tl_mailbox = NULL;
+
+   g_concurrency_force_status = CONCURRENCY_ACQUIRE_CANCELLED;
+   g_agent_response = "should not run";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "execute");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "concurrency cancelled");
+   cJSON *resp = sci_drive_delegate(req);
+   cJSON_Delete(req);
+
+   assert(resp != NULL);
+   assert(strcmp(cJSON_GetObjectItem(resp, "status")->valuestring, "cancelled") == 0);
+   cJSON_Delete(resp);
+
+   /* The provider must never have run, and no slot was held. */
+   assert(g_agent_calls == 0);
+   assert(g_concurrency_acquire_calls == 0);
+   assert(g_concurrency_release_calls == 0);
+   /* Caller context unwound on the cancelled path. */
+   assert(tl_delegation_depth == 1);
+   assert(strcmp(tl_parent_delegation_id, "cx-parent") == 0);
+   assert(strcmp(sci_getenv("AIMEE_DELEGATE_DEPTH"), "1") == 0);
+   assert(strcmp(sci_getenv("AIMEE_PARENT_DELEGATION_ID"), "cx-parent") == 0);
+   assert(tl_mailbox == NULL);
+   assert(run_cmd_get_cwd() == NULL || run_cmd_get_cwd()[0] == '\0');
+
+   tl_delegation_depth = 0;
+   tl_parent_delegation_id[0] = '\0';
+   reset_last_response();
+   printf("  PASS: test_delegate_worker_concurrency_cancelled_restores\n");
+}
+
+/* Concurrency queue full: same early-return teardown, but the response is an
+ * error (queue full is a rejection, not a cancellation). */
+static void test_delegate_worker_concurrency_queue_full_errors(void)
+{
+   reset_last_response();
+   tl_delegation_depth = 1;
+   snprintf(tl_parent_delegation_id, sizeof(tl_parent_delegation_id), "qf-parent");
+   platform_setenv("AIMEE_DELEGATE_DEPTH", "1");
+   platform_setenv("AIMEE_PARENT_DELEGATION_ID", "qf-parent");
+   tl_mailbox = NULL;
+
+   g_concurrency_force_status = CONCURRENCY_ACQUIRE_QUEUE_FULL;
+   g_agent_response = "should not run";
+   cJSON *req = cJSON_CreateObject();
+   cJSON_AddStringToObject(req, "role", "execute");
+   cJSON_AddStringToObject(req, "persona", "engineer");
+   cJSON_AddStringToObject(req, "prompt", "concurrency queue full");
+   cJSON *resp = sci_drive_delegate(req);
+   cJSON_Delete(req);
+
+   assert(resp != NULL);
+   assert(strcmp(cJSON_GetObjectItem(resp, "status")->valuestring, "error") == 0);
+   assert(strstr(cJSON_GetObjectItem(resp, "message")->valuestring, "queue full") != NULL);
+   cJSON_Delete(resp);
+
+   assert(g_agent_calls == 0);
+   assert(g_concurrency_release_calls == g_concurrency_acquire_calls);
+   assert(tl_delegation_depth == 1);
+   assert(strcmp(tl_parent_delegation_id, "qf-parent") == 0);
+   assert(strcmp(sci_getenv("AIMEE_DELEGATE_DEPTH"), "1") == 0);
+   assert(tl_mailbox == NULL);
+
+   tl_delegation_depth = 0;
+   tl_parent_delegation_id[0] = '\0';
+   reset_last_response();
+   printf("  PASS: test_delegate_worker_concurrency_queue_full_errors\n");
+}
+/* test_server_compute_child_env.inc: delegate_child_export_context_env coverage.
+ * Split out of test_server_compute.c to keep it under the 2000-line hard limit.
+ * Included into test_server_compute.c so it shares the server_compute.c
+ * translation unit (reaches tl_delegation_depth / tl_parent_delegation_id). */
+
+/* delegate_child_export_context_env mirrors the forking thread's TLS depth/parent
+ * into the env for a post-fork child. It must export the THREAD's values (not a
+ * concurrently-clobbered global) when inside a delegate, and leave the env alone
+ * for a primary agent (depth 0, no parent). */
+static void test_child_export_context_env(void)
+{
+   /* Pre-seed the env with a stale value as if a concurrent delegate had written
+    * it; inside a delegate the export must override with this thread's TLS. */
+   platform_setenv("AIMEE_DELEGATE_DEPTH", "9");
+   platform_setenv("AIMEE_PARENT_DELEGATION_ID", "stale-parent");
+
+   tl_delegation_depth = 3;
+   snprintf(tl_parent_delegation_id, sizeof(tl_parent_delegation_id), "deleg-self");
+   delegate_child_export_context_env();
+   assert(strcmp(getenv("AIMEE_DELEGATE_DEPTH"), "3") == 0);
+   assert(strcmp(getenv("AIMEE_PARENT_DELEGATION_ID"), "deleg-self") == 0);
+
+   /* Primary agent: depth 0, no parent -> no override (inherited env preserved). */
+   platform_setenv("AIMEE_DELEGATE_DEPTH", "7");
+   platform_setenv("AIMEE_PARENT_DELEGATION_ID", "inherited");
+   tl_delegation_depth = 0;
+   tl_parent_delegation_id[0] = '\0';
+   delegate_child_export_context_env();
+   assert(strcmp(getenv("AIMEE_DELEGATE_DEPTH"), "7") == 0);
+   assert(strcmp(getenv("AIMEE_PARENT_DELEGATION_ID"), "inherited") == 0);
+
+   platform_setenv("AIMEE_DELEGATE_DEPTH", "");
+   platform_setenv("AIMEE_PARENT_DELEGATION_ID", "");
+}
 
 /* Pure prompt helpers extracted from delegate_worker (server/delegate_prompt.c). */
 char *delegate_rewrite_prompt_cwd(const char *prompt, const char *cwd, const char *worktree_path,
