@@ -1924,6 +1924,11 @@ paths:
       summary: Disable an agent
       requestBody: { content: { application/json: { schema: { type: object } } } }
       responses: { "200": { description: Agent disabled, content: { application/json: { schema: { type: object } } } } }
+  /agent/roles:
+    post:
+      summary: Set an agent's roles
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Agent roles updated, content: { application/json: { schema: { type: object } } } } }
   /agent/probe:
     post:
       summary: Probe an agent/provider
