@@ -91,6 +91,29 @@ char *kb_client_code_graph_hubs(const char *project, int max_results, int *statu
    return json;
 }
 
+char *kb_client_code_lessons(const char *project, int *status_out)
+{
+   if (status_out)
+      *status_out = -1;
+   if (!project || !project[0])
+      return NULL;
+   char *project_q = kb_client_query_escape(project);
+   if (!project_q)
+      return NULL;
+   size_t cap = strlen("/v1/code/lessons?project=") + strlen(project_q) + 8;
+   char *path = malloc(cap);
+   if (!path)
+   {
+      free(project_q);
+      return NULL;
+   }
+   snprintf(path, cap, "/v1/code/lessons?project=%s", project_q);
+   free(project_q);
+   char *json = kb_client_v1_get_json(path, KB_CLIENT_CODE_GRAPH_READ_TIMEOUT_MS, status_out);
+   free(path);
+   return json;
+}
+
 char *kb_client_code_graph_audit(const char *project, int max_findings, int *status_out)
 {
    if (status_out)
