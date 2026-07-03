@@ -5,6 +5,7 @@
  * agent_vote() (same model N times, majority) -- MoA uses diverse models
  * and synthesizes via an aggregator.
  */
+#include "delegate_ensemble_internal.h"
 #include "aimee.h"
 #include "delegate_ensemble.h"
 #include "agent_exec.h"
@@ -76,7 +77,7 @@ static int count_successful(const agent_result_t *results, int count)
  * — leaving the review with zero items and an empty artifact. Try a strict parse
  * first (bare JSON), then fall back to the substring from the first '{' to the
  * last '}'. Returns NULL if neither yields valid JSON; caller owns the result. */
-static cJSON *parse_model_json_lenient(const char *text)
+cJSON *parse_model_json_lenient(const char *text)
 {
    if (!text || !text[0])
       return NULL;
@@ -296,7 +297,7 @@ static int token_seen(char tokens[][64], int count, const char *tok)
    return 0;
 }
 
-static int key_seen128(char keys[][128], int count, const char *key)
+int key_seen128(char keys[][128], int count, const char *key)
 {
    for (int i = 0; i < count; i++)
       if (strcmp(keys[i], key) == 0)
@@ -781,8 +782,6 @@ static int summarize_forward(agent_config_t *acfg, const config_t *cfg, const ch
    free(res.response);
    return (*artifact && *peer_notes) ? 0 : -1;
 }
-
-#include "delegate_ensemble_review.inc"
 
 static void mark_question_gaps(const roundtable_opts_t *opts, roundtable_result_t *out)
 {

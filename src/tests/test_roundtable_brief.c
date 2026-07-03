@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "server/server_compute_roundtable.inc" /* unit under test (static fns) */
+#include "server_compute_internal.h" /* white-box: statics promoted to extern */
 
 static cJSON *req_with_brief(const char *s)
 {
