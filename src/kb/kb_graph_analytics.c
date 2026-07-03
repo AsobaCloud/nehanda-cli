@@ -1745,6 +1745,20 @@ int kb_graph_diff(const kb_graph_reledge_t *old_edges, int n_old_edges,
       }
    }
 
+   /* If an edge-buffer allocation failed while its generation has edges, the loops
+    * below would dereference NULL (oe[i]/nedg[i]) — an OOM-only crash the reviewers
+    * flagged. Fail closed. (olds/news are optional; comm_lookup is guarded on them.) */
+   if ((n_old_edges > 0 && !oe) || (n_new_edges > 0 && !nedg))
+   {
+      free(oldn);
+      free(newn);
+      free(oe);
+      free(nedg);
+      free(olds);
+      free(news);
+      return -1;
+   }
+
    for (int i = 0; i < n_new_edges; i++)
    {
       int found =
@@ -1796,7 +1810,12 @@ int kb_graph_diff(const kb_graph_reledge_t *old_edges, int n_old_edges,
    /* 4. New cycle members: files in a NEW dependency cycle but no OLD one. */
    kb_graph_cycle_t *ocyc = calloc((size_t)max, sizeof(*ocyc));
    kb_graph_cycle_t *ncyc = calloc((size_t)max, sizeof(*ncyc));
-   if (ocyc && ncyc)
+   if (!ocyc || !ncyc)
+   {
+      if (truncated)
+         *truncated = 1; /* cycle-diff pass incomplete — don't imply a clean diff */
+   }
+   else
    {
       int oc_n = kb_graph_cycles(old_edges, n_old_edges, ocyc, max, NULL);
       int nc_n = kb_graph_cycles(new_edges, n_new_edges, ncyc, max, NULL);

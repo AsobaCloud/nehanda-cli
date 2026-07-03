@@ -533,6 +533,23 @@ static void test_community_remap_split(void)
    printf("  test_community_remap_split: ok\n");
 }
 
+/* A merge: two old communities collapse into one new. The new inherits the
+ * best-OVERLAP old id (not its own fresh min-member). Fixture is built so the
+ * inherited id ("x", the 3-node old) differs from the new community's own
+ * min-member ("a"), making it a real discriminator, not a coincidence. */
+static void test_community_remap_merge(void)
+{
+   kb_graph_community_t old[] = {{"x", "x"}, {"y", "x"}, {"z", "x"}, {"a", "a"}};
+   kb_graph_community_t nw[] = {{"a", "a"}, {"x", "a"}, {"y", "a"}, {"z", "a"}};
+   kb_graph_community_t out[8];
+   int n = kb_graph_community_remap(old, 4, nw, 4, out, 8);
+   assert(n == 4);
+   assert(strcmp(commof(out, n, "a"), "x") == 0); /* inherited best-overlap, not "a" */
+   assert(strcmp(commof(out, n, "x"), "x") == 0);
+   assert(strcmp(commof(out, n, "z"), "x") == 0);
+   printf("  test_community_remap_merge: ok\n");
+}
+
 static int diff_has(const kb_graph_diff_entry_t *d, int n, kb_graph_diff_kind_t k, const char *a,
                     const char *b)
 {
@@ -607,6 +624,7 @@ int main(void)
    printf("test_kb_graph_analytics:\n");
    test_community_remap_stable();
    test_community_remap_split();
+   test_community_remap_merge();
    test_diff_addremove_cross();
    test_diff_new_cycle();
    test_diff_permutation_invariant();
