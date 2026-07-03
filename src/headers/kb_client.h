@@ -1126,6 +1126,8 @@ char *kb_client_code_hybrid(const char *query, const char *symbol, const char *p
 char *kb_client_code_graph_hubs(const char *project, int max_results, int *status_out);
 char *kb_client_code_graph_audit(const char *project, int max_findings, int *status_out);
 char *kb_client_code_lessons(const char *project, int *status_out);
+int kb_client_code_lessons_observe(const char *project, const char *session_id,
+                                   const char *const *node_ids, int n_nodes);
 char *kb_client_code_graph_diff(const char *project, const char *from_gen, const char *to_gen,
                                 int force, int *status_out);
 /* /v1/code/graph/surprising: file pairs that are semantically close yet
