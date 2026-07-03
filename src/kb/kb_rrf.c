@@ -37,9 +37,13 @@ static int rrf_cmp(const void *a, const void *b)
              (x->structural_weight > y->structural_weight);
    /* §3 earned-trust tie-break: only reached when score AND structural_weight are
     * exactly equal, so it can never move a candidate across a real score gap.
-    * Higher trust first. Exact double compare keeps qsort's strict-weak ordering. */
-   if (x->trust != y->trust)
-      return x->trust < y->trust ? 1 : -1;
+    * Higher trust first. The branchless form (matching the score/structural idioms)
+    * returns 0 when either side is NaN — so a NaN trust degrades to the id tie-break
+    * instead of violating qsort's strict-weak-ordering. */
+   if (x->trust < y->trust)
+      return 1;
+   if (x->trust > y->trust)
+      return -1;
    return strcmp(x->id, y->id);
 }
 
