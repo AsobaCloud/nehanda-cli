@@ -157,3 +157,46 @@ gw_post_action_t gw_buffered_after_status(cJSON *container, const char *key, int
    }
    return GW_POST_NONE;
 }
+
+void gw_stream_disable(gw_mutate_ctx_t *ctx, const char *reason)
+{
+   if (!ctx || !ctx->mutated || !ctx->have_key)
+      return;
+   msg_session_disable(ctx->skey, ctx->ttl_ms, reason ? reason : "stream");
+   gw_provenance_clear(&ctx->st);
+   gw_stat_inc(GW_STAT_STREAM_ERROR_DISABLE);
+   ctx->mutated = 0; /* one disable per turn; a later frame no-ops */
+}
+
+int gw_stream_anthropic_error_is_invalid_request(const char *data)
+{
+   if (!data || !data[0])
+      return 0;
+   cJSON *root = cJSON_Parse(data);
+   if (!root)
+      return 0;
+   int invalid = 0;
+   cJSON *err = cJSON_GetObjectItemCaseSensitive(root, "error");
+   cJSON *type = err ? cJSON_GetObjectItemCaseSensitive(err, "type") : NULL;
+   if (cJSON_IsString(type) && type->valuestring)
+   {
+      const char *t = type->valuestring;
+      /* Anthropic invalid-request class (error taxonomy as of 2024-2026):
+       * invalid_request_error + request_too_large (the 413-equivalent a bad reduced
+       * serialization can produce). EXACT match — not substring — so a future type
+       * that merely contains these words does not false-trip. rate_limit_error /
+       * overloaded_error / api_error / authentication_error are NOT reduction bugs. */
+      if (strcmp(t, "invalid_request_error") == 0 || strcmp(t, "request_too_large") == 0)
+         invalid = 1;
+   }
+   cJSON_Delete(root);
+   return invalid;
+}
+
+int gw_status_is_invalid_request(int http_status)
+{
+   /* The 4xx codes a bad reduced serialization can produce: 400 invalid_request,
+    * 413 request_too_large, 422 unprocessable. 401/403/404/429 are auth / rate-limit
+    * / not-found — NOT reduction bugs, so a streaming path must not disable on them. */
+   return http_status == 400 || http_status == 413 || http_status == 422;
+}
