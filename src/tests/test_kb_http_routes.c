@@ -2401,6 +2401,27 @@ static void test_code_graph_hubs_missing_project(void)
    assert(strstr(buf, "missing project") != NULL);
 }
 
+/* §3b lessons route: an empty ledger (the stub returns no rows) renders the
+ * honesty gate, not invented lessons; a missing project 400s. */
+static void test_code_lessons_empty(void)
+{
+   char buf[1024];
+   int s = kb_http_route_ex("GET", "/v1/code/lessons", "project=proj-alpha", NULL, NULL, NULL, 0,
+                            buf, sizeof(buf));
+   assert(s == 200);
+   assert(strstr(buf, "\"status\":\"ok\"") != NULL);
+   assert(strstr(buf, "\"clean\":true") != NULL);
+   assert(strstr(buf, "no lessons yet") != NULL);
+}
+
+static void test_code_lessons_missing_project(void)
+{
+   char buf[256];
+   int s = kb_http_route_ex("GET", "/v1/code/lessons", "", NULL, NULL, NULL, 0, buf, sizeof(buf));
+   assert(s == 400);
+   assert(strstr(buf, "missing project") != NULL);
+}
+
 /* §6 memory-fusion leg stubs. The real db2_entity_edge_explain_t / db2_entity_node_t
  * (db2/entity_*.h) pull in memory.h's edge_t, which conflicts with this file's
  * simplified memory_t; so mirror the layouts and take void* (same pattern as the
@@ -3729,6 +3750,8 @@ int main(void)
    test_code_hybrid_vector_dim_mismatch_skips();
    test_code_graph_hubs_ok();
    test_code_graph_hubs_missing_project();
+   test_code_lessons_empty();
+   test_code_lessons_missing_project();
    test_code_graph_surprising_ok();
    test_code_graph_surprising_hub_excluded();
    test_code_graph_surprising_missing_project();
