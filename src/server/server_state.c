@@ -1,4 +1,5 @@
 /* server_state.c: server handlers for memory, index, rules, working memory, dashboard, workspace */
+#include "server_state_internal.h"
 #include "aimee.h"
 #include "server.h"
 #include "dashboard.h"
@@ -28,7 +29,7 @@
 #include <unistd.h>
 
 /* Send a response object and delete it. Returns send rc. */
-static int send_and_free(server_conn_t *conn, cJSON *resp)
+int send_and_free(server_conn_t *conn, cJSON *resp)
 {
    return server_send_ok(conn, resp);
 }
@@ -542,11 +543,9 @@ int handle_blast_radius_preview(server_ctx_t *ctx, server_conn_t *conn, cJSON *r
 
 /* Auditable-correctness /v1/audit/trace handler (kept in a textual include to
  * stay under the per-file line cap). */
-#include "server_state_audit.inc"
 
 /* CSS migration assistant /v1/css/signals handler — a thin forward to the KB
  * (textual include for the line cap). */
-#include "server_css_query.inc"
 
 int handle_kb_search(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
@@ -1383,7 +1382,7 @@ int handle_workspace_context(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
  * the workspace registry (config workspaces[]) and project indexing both stay
  * server-side, mirroring the legacy cmd_workspace implementation. */
 
-static int workspace_rpc_args(cJSON *req, char **argv, int max)
+int workspace_rpc_args(cJSON *req, char **argv, int max)
 {
    cJSON *args = cJSON_GetObjectItemCaseSensitive(req, "args");
    if (!cJSON_IsArray(args))
@@ -1445,7 +1444,7 @@ int handle_workspace_list(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 /* Capture the trimmed first line of a `git -C <root> ...` command through the
  * shared provider's exec primitive (empty when the command fails / root is not
  * a repo). The provider seam means a detached server runs this on its mirror. */
-static void ws_git_line(const char *const argv[], char *out, size_t outsz)
+void ws_git_line(const char *const argv[], char *out, size_t outsz)
 {
    out[0] = '\0';
    const workspace_provider_t *ws = workspace_provider_shared();
@@ -1465,7 +1464,6 @@ static void ws_git_line(const char *const argv[], char *out, size_t outsz)
  * sibling .inc (kept out of this file's line budget); included here so they
  * share workspace_rpc_args, ws_git_line, and the jo_ok/send_and_free helpers
  * defined above. */
-#include "server_runner_endpoints.inc"
 
 int handle_workspace_remove(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {

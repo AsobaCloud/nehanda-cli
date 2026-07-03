@@ -2,6 +2,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include "server_compute_internal.h"
 #include "aimee.h"
 #include "json_fluent.h" /* jo_ok */
 #include "db1.h"
@@ -63,21 +64,10 @@ int agent_execute_cli_session(const agent_t *agent, const agent_network_t *netwo
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-#define DELEGATION_INPUT_TIMEOUT 60 /* seconds */
-#define MAX_ACTIVE_DELEGATIONS   32
 /* Delegation mailbox: allows delegates to pause and receive parent replies */
-typedef struct
-{
-   char delegation_id[64];
-   pthread_mutex_t lock;
-   pthread_cond_t reply_ready;
-   char reply[4096];
-   int has_reply;
-   int active;
-} delegation_mailbox_t;
 
-static delegation_mailbox_t g_mailboxes[MAX_ACTIVE_DELEGATIONS];
-static pthread_mutex_t g_mailbox_lock = PTHREAD_MUTEX_INITIALIZER;
+delegation_mailbox_t g_mailboxes[MAX_ACTIVE_DELEGATIONS];
+pthread_mutex_t g_mailbox_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_delegate_id_lock = PTHREAD_MUTEX_INITIALIZER;
 static unsigned long g_delegate_id_seq = 0;
 static void delegate_generate_id(char *out, size_t cap)
@@ -98,9 +88,7 @@ static void delegate_generate_id(char *out, size_t cap)
             seq);
 }
 
-#include "server_compute_concurrency.inc"
 
-#include "server_compute_mailbox.inc"
 
 /* compute_ctx_t is defined in server_compute_impl.h */
 
@@ -1651,7 +1639,6 @@ static int roundtable_run_cancel_requested(void *ctx)
    return run_id && run_id[0] && openai_runs_store_cancel_requested(run_id);
 }
 
-#include "server_compute_roundtable.inc"
 
 int handle_tool_execute(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
@@ -1984,4 +1971,3 @@ int handle_delegate_reply(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    cJSON *resp = jo_ok();
    return server_send_ok(conn, resp);
 }
-#include "server_compute_episodes.inc"

@@ -16,4 +16,7 @@ char *cli_chat_stream(const char *sock, const char *session_id, const char *mess
                       void (*tool_cb)(const char *phase, const char *tool_name, void *ud),
                       void *ud);
 
+
+/* promoted from a former .inc (cross-TU) */
+char *join_message_args(int argc, char **argv);
 #endif /* DEC_CLI_TUI_H */

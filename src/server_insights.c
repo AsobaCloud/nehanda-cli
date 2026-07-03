@@ -1,0 +1,219 @@
+/* server_insights.c: split from server.c into a real translation unit
+ * (was server_insights.inc, textually included only to stay under the
+ * line-check ceiling). Cross-TU declarations live in the module header. */
+#include "server_internal.h"
+#include "aimee.h"
+#include "harness_memory.h"        /* hmem_upsert (server owns DB1) */
+#include "harness_memory_audit.h"  /* hmem_audit */
+#include "harness_memory_common.h" /* hmem_resolve_project / hmem_project_key_ok */
+#include "harness_memory_scope.h"  /* hmem_scope_for_client */
+#include "json_fluent.h"           /* jo_ok */
+#include "memory_redirect.h"       /* memory_redirect_classify / _bash_targets / _rematerialize */
+#include "server.h"
+#include "turn_registry.h"
+#include "server_http.h" /* server_http_api_status_report */
+#include "config.h"      /* config_t / config_load for api.status, api.enable */
+#include "delegate_backend_docker.h"
+#include "delegate_backend_local.h"
+#include "delegate_backend_ssh.h"
+#include "server_delegate_monitor.h"
+#include "server_coord_dispatcher.h"
+#include "server_skill.h"
+#include "server_compute_impl.h"
+#include "skill_review.h"
+#include "trigger_scheduler.h"
+#include "wfe_live_delegate.h"
+#include "wfe_scheduler.h"
+#include "server_trigger.h"
+#include "server_cron.h"
+#include "server_pipeline.h" /* roundtable authoring pipeline (pipeline.*) */
+#include "commands.h"
+#include "agent.h"
+#include "agent_exec.h"     /* agent_audit_async_flush — drain audit queue at shutdown */
+#include "webuser_editor.h" /* webuser_editor_shutdown — reap editors at shutdown (WP-I) */
+#include "agent_config.h"
+#include "provider_catalog.h"
+#include "delegate_credentials.h"
+#include "model_registry.h"
+#include "model_provider.h"
+#include "model_registry.h"
+#include "db1.h"
+#include "token_audit.h"
+#include "dashboard.h"
+#include "log.h"
+#include "hud.h"
+#include "platform_event.h"
+#include "platform_ipc.h"
+#include "platform_path.h"
+#include "platform_process.h"
+#include "util.h"
+#include "workspace.h"
+#include "worktree_gc.h"
+#include "git_verify.h"
+#include "toolset.h"
+#include "cJSON.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+#include <string.h>
+
+int handle_insights_overview(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
+{
+   (void)ctx;
+
+   cJSON *jdays = cJSON_GetObjectItemCaseSensitive(req, "days");
+   int days = cJSON_IsNumber(jdays) ? (int)jdays->valuedouble : 30;
+   if (days < 1)
+      days = 1;
+   if (days > 365)
+      days = 365;
+   int since_hours = days * 24;
+
+   db1_token_audit_totals_t totals;
+   memset(&totals, 0, sizeof(totals));
+   if (db1_token_audit_totals(since_hours, &totals) != 0)
+      return server_send_error(conn, "insights.overview: db1_token_audit_totals failed", NULL);
+
+   cJSON *resp = cJSON_CreateObject();
+   cJSON_AddStringToObject(resp, "status", "ok");
+   cJSON_AddNumberToObject(resp, "days", days);
+   cJSON_AddNumberToObject(resp, "total_calls", totals.total_calls);
+   cJSON_AddNumberToObject(resp, "prompt_tokens", (double)totals.prompt_tokens);
+   cJSON_AddNumberToObject(resp, "completion_tokens", (double)totals.completion_tokens);
+   cJSON_AddNumberToObject(resp, "cache_write_tokens", (double)totals.cache_write_tokens);
+   cJSON_AddNumberToObject(resp, "cache_read_tokens", (double)totals.cache_read_tokens);
+   cJSON_AddNumberToObject(resp, "estimated_cost_usd", totals.estimated_cost_usd);
+
+   /* Spend breakdown by usage_kind (§7): realized provider-reported spend is
+    * reported separately from estimated, avoided (dedup-skipped, not billable),
+    * and partial rows. The legacy estimated_cost_usd above stays for backwards
+    * compatibility; `spend.total` is the billable figure (excludes avoided). */
+   db1_token_audit_spend_t spend;
+   if (db1_token_audit_spend_breakdown(since_hours, &spend) == 0)
+   {
+      cJSON *jspend = cJSON_CreateObject();
+      cJSON_AddNumberToObject(jspend, "realized", spend.realized_cost_usd);
+      cJSON_AddNumberToObject(jspend, "estimated", spend.estimated_cost_usd);
+      cJSON_AddNumberToObject(jspend, "avoided", spend.avoided_cost_usd);
+      cJSON_AddNumberToObject(jspend, "partial", spend.partial_cost_usd);
+      cJSON_AddNumberToObject(jspend, "total", spend.spend_cost_usd);
+      cJSON_AddItemToObject(resp, "spend", jspend);
+   }
+
+   /* Models */
+   db1_token_audit_model_summary_t models[16];
+   int n_models = db1_token_audit_by_model(since_hours, models, 16);
+   cJSON *jmodels = cJSON_CreateArray();
+   for (int i = 0; i < n_models; i++)
+   {
+      cJSON *m = cJSON_CreateObject();
+      cJSON_AddStringToObject(m, "model", models[i].model);
+      cJSON_AddNumberToObject(m, "calls", models[i].calls);
+      cJSON_AddNumberToObject(m, "prompt_tokens", (double)models[i].prompt_tokens);
+      cJSON_AddNumberToObject(m, "completion_tokens", (double)models[i].completion_tokens);
+      cJSON_AddNumberToObject(m, "estimated_cost_usd", models[i].estimated_cost_usd);
+      cJSON_AddItemToArray(jmodels, m);
+   }
+   cJSON_AddItemToObject(resp, "models", jmodels);
+
+   /* Sources (turn origin: internal "agent" vs the ingress surfaces) */
+   db1_token_audit_source_summary_t sources[16];
+   int n_sources = db1_token_audit_by_source(since_hours, sources, 16);
+   cJSON *jsources = cJSON_CreateArray();
+   for (int i = 0; i < n_sources; i++)
+   {
+      cJSON *s = cJSON_CreateObject();
+      cJSON_AddStringToObject(s, "source", sources[i].source);
+      cJSON_AddNumberToObject(s, "calls", sources[i].calls);
+      cJSON_AddNumberToObject(s, "prompt_tokens", (double)sources[i].prompt_tokens);
+      cJSON_AddNumberToObject(s, "completion_tokens", (double)sources[i].completion_tokens);
+      cJSON_AddNumberToObject(s, "estimated_cost_usd", sources[i].estimated_cost_usd);
+      cJSON_AddItemToArray(jsources, s);
+   }
+   cJSON_AddItemToObject(resp, "sources", jsources);
+
+   /* Roles */
+   db1_token_audit_role_summary_t roles[16];
+   int n_roles = db1_token_audit_by_role(since_hours, roles, 16);
+   cJSON *jroles = cJSON_CreateArray();
+   for (int i = 0; i < n_roles; i++)
+   {
+      cJSON *r = cJSON_CreateObject();
+      cJSON_AddStringToObject(r, "role", roles[i].role);
+      cJSON_AddNumberToObject(r, "calls", roles[i].calls);
+      cJSON_AddNumberToObject(r, "prompt_tokens", (double)roles[i].prompt_tokens);
+      cJSON_AddNumberToObject(r, "completion_tokens", (double)roles[i].completion_tokens);
+      cJSON_AddNumberToObject(r, "estimated_cost_usd", roles[i].estimated_cost_usd);
+      cJSON_AddItemToArray(jroles, r);
+   }
+   cJSON_AddItemToObject(resp, "roles", jroles);
+
+   /* Tools */
+   db1_token_audit_tool_summary_t tools[16];
+   int n_tools = db1_token_audit_by_tool(since_hours, tools, 16);
+   cJSON *jtools = cJSON_CreateArray();
+   for (int i = 0; i < n_tools; i++)
+   {
+      cJSON *t = cJSON_CreateObject();
+      cJSON_AddStringToObject(t, "tool", tools[i].tool_name);
+      cJSON_AddNumberToObject(t, "calls", tools[i].calls);
+      cJSON_AddNumberToObject(t, "prompt_tokens", (double)tools[i].prompt_tokens);
+      cJSON_AddNumberToObject(t, "completion_tokens", (double)tools[i].completion_tokens);
+      cJSON_AddNumberToObject(t, "estimated_cost_usd", tools[i].estimated_cost_usd);
+      cJSON_AddItemToArray(jtools, t);
+   }
+   cJSON_AddItemToObject(resp, "tools", jtools);
+
+   /* Platforms */
+   db1_insights_platform_t platforms[8];
+   int n_platforms = db1_insights_by_platform(since_hours, platforms, 8);
+   cJSON *jplatforms = cJSON_CreateArray();
+   for (int i = 0; i < n_platforms; i++)
+   {
+      cJSON *p = cJSON_CreateObject();
+      cJSON_AddStringToObject(p, "platform", platforms[i].platform);
+      cJSON_AddNumberToObject(p, "session_count", platforms[i].session_count);
+      cJSON_AddItemToArray(jplatforms, p);
+   }
+   cJSON_AddItemToObject(resp, "platforms", jplatforms);
+
+   /* Top sessions */
+   db1_insights_top_session_t top_sess[10];
+   int n_top = db1_insights_top_sessions(since_hours, top_sess, 10);
+   cJSON *jtop = cJSON_CreateArray();
+   for (int i = 0; i < n_top; i++)
+   {
+      cJSON *s = cJSON_CreateObject();
+      cJSON_AddStringToObject(s, "session_id", top_sess[i].session_id);
+      cJSON_AddStringToObject(s, "title", top_sess[i].title);
+      cJSON_AddStringToObject(s, "model", top_sess[i].model);
+      cJSON_AddNumberToObject(s, "prompt_tokens", (double)top_sess[i].prompt_tokens);
+      cJSON_AddNumberToObject(s, "completion_tokens", (double)top_sess[i].completion_tokens);
+      cJSON_AddNumberToObject(s, "estimated_cost_usd", top_sess[i].estimated_cost_usd);
+      cJSON_AddStringToObject(s, "created_at", top_sess[i].created_at);
+      cJSON_AddItemToArray(jtop, s);
+   }
+   cJSON_AddItemToObject(resp, "top_sessions", jtop);
+
+   /* Delegates by role */
+   db1_insights_delegate_role_t deleg[16];
+   int n_deleg = db1_insights_delegates_by_role(since_hours, deleg, 16);
+   cJSON *jdeleg = cJSON_CreateArray();
+   for (int i = 0; i < n_deleg; i++)
+   {
+      cJSON *d = cJSON_CreateObject();
+      cJSON_AddStringToObject(d, "role", deleg[i].role);
+      cJSON_AddNumberToObject(d, "total", deleg[i].total);
+      cJSON_AddNumberToObject(d, "completed", deleg[i].completed);
+      cJSON_AddItemToArray(jdeleg, d);
+   }
+   cJSON_AddItemToObject(resp, "delegates", jdeleg);
+
+   int rc = server_send_response(conn, resp);
+   cJSON_Delete(resp);
+   return rc;
+}
