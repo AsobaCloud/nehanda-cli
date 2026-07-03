@@ -1,6 +1,9 @@
 /* server_insights.c: split from server.c into a real translation unit
  * (was server_insights.inc, textually included only to stay under the
  * line-check ceiling). Cross-TU declarations live in the module header. */
+#ifndef _GNU_SOURCE /* strcasestr/memmem are GNU extensions (container gcc) */
+#define _GNU_SOURCE
+#endif
 #include "server_internal.h"
 #include "aimee.h"
 #include "harness_memory.h"        /* hmem_upsert (server owns DB1) */
