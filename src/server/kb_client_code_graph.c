@@ -119,6 +119,45 @@ char *kb_client_code_graph_audit(const char *project, int max_findings, int *sta
    return json;
 }
 
+char *kb_client_code_graph_diff(const char *project, const char *from_gen, const char *to_gen,
+                                int force, int *status_out)
+{
+   if (status_out)
+      *status_out = -1;
+   if (!project || !project[0] || !from_gen || !from_gen[0] || !to_gen || !to_gen[0])
+      return NULL;
+
+   char *project_q = kb_client_query_escape(project);
+   char *from_q = kb_client_query_escape(from_gen);
+   char *to_q = kb_client_query_escape(to_gen);
+   if (!project_q || !from_q || !to_q)
+   {
+      free(project_q);
+      free(from_q);
+      free(to_q);
+      return NULL;
+   }
+   size_t cap = strlen("/v1/code/graph/diff?project=&from_gen=&to_gen=&force=1") +
+                strlen(project_q) + strlen(from_q) + strlen(to_q) + 8;
+   char *path = malloc(cap);
+   if (!path)
+   {
+      free(project_q);
+      free(from_q);
+      free(to_q);
+      return NULL;
+   }
+   snprintf(path, cap, "/v1/code/graph/diff?project=%s&from_gen=%s&to_gen=%s%s", project_q, from_q,
+            to_q, force ? "&force=1" : "");
+   free(project_q);
+   free(from_q);
+   free(to_q);
+
+   char *json = kb_client_v1_get_json(path, KB_CLIENT_CODE_GRAPH_READ_TIMEOUT_MS, status_out);
+   free(path);
+   return json;
+}
+
 char *kb_client_code_graph_surprising(const char *project, int max_results, int judge,
                                       int *status_out)
 {

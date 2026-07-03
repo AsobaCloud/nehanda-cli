@@ -1288,6 +1288,8 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
       return handle_get_code_graph_surprising_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/code/graph/audit") == 0)
       return handle_get_code_graph_audit_route(method, query_string, out_buf, out_cap);
+   if (strcmp(path, "/v1/code/graph/diff") == 0)
+      return handle_get_code_graph_diff_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/code/graph") == 0)
       return handle_get_code_graph_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/pdf/search") == 0)

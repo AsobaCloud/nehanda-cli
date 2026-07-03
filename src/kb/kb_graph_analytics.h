@@ -257,4 +257,66 @@ typedef struct
 int kb_graph_cohesion(const kb_graph_edge_t *edges, int n_edges, const kb_graph_community_t *comm,
                       int n_comm, int min_size, kb_graph_cohesion_t *out, int max);
 
+/* ── S2: cross-generation community remap + snapshot diff (proposal §2) ──────────
+ *
+ * A snapshot diff is only useful if it shows REAL change, so two determinism traps
+ * must close: community ids must be stable run-to-run (else every re-index looks
+ * like churn), and every ranked/diffed list must be total-ordered. */
+
+/* Remap the NEW generation's community ids so they are STABLE against the OLD
+ * generation: a new community that best-overlaps an old community inherits that
+ * old community's id, so "community X" denotes the same module across generations.
+ * Deterministic two-pass (proposal §2):
+ *   Pass 1 — each old community is claimed by the new community with the largest
+ *            member intersection; ties broken by lex(min member id of the overlap).
+ *            The winning new community inherits the old id.
+ *   Pass 2 — every unclaimed new community keeps a fresh id = its own min-member
+ *            node id (lex), exactly as kb_graph_communities mints ids — so a split
+ *            (two new communities over one old) gives the best-overlap half the old
+ *            id and the other a fresh one, never a collision.
+ * old_comm/new_comm are (node,community) assignments from kb_graph_communities.
+ * Writes the remapped NEW assignment (one row per new_comm node, node order
+ * preserved) into out[] (up to max). Returns rows written, 0 if n_new==0, -1 on a
+ * bad argument. Byte-identical regardless of input row order. */
+int kb_graph_community_remap(const kb_graph_community_t *old_comm, int n_old,
+                             const kb_graph_community_t *new_comm, int n_new,
+                             kb_graph_community_t *out, int max);
+
+/* One entry of a structural diff. `kind` classifies the change; `a`/`b` carry the
+ * node key(s) or edge endpoints depending on `kind` (see below). */
+typedef enum
+{
+   KB_DIFF_NODE_ADDED = 0,      /* a = node key present in new, absent in old        */
+   KB_DIFF_NODE_REMOVED,        /* a = node key present in old, absent in new        */
+   KB_DIFF_NODE_RENAMED,        /* a = old key, b = new key (same kind, matched)     */
+   KB_DIFF_EDGE_ADDED,          /* a->b (relation in `relation`) new, not in old     */
+   KB_DIFF_EDGE_REMOVED,        /* a->b (relation) in old, not in new                */
+   KB_DIFF_NEW_ORPHAN,          /* a = node newly degree<=1 (was >1 in old)          */
+   KB_DIFF_NEW_CROSS_COMMUNITY, /* a->b edge now crosses a community boundary    */
+   KB_DIFF_NEW_CYCLE_MEMBER     /* a = file now in a dependency cycle absent old */
+} kb_graph_diff_kind_t;
+
+typedef struct
+{
+   kb_graph_diff_kind_t kind;
+   char a[KB_GRAPH_NODE_MAX];
+   char b[KB_GRAPH_NODE_MAX];
+   char relation[64]; /* set for edge kinds; empty otherwise */
+} kb_graph_diff_entry_t;
+
+/* Compute a deterministic structural diff of two projection generations. `old_*`
+ * and `new_*` are the edge arrays (relation-typed) and community assignments of
+ * the two generations; new_comm SHOULD already be remapped via
+ * kb_graph_community_remap so cross-community findings reflect real coupling, not
+ * a renumbered boundary. Emits node/edge add-remove, newly-orphaned nodes, edges
+ * that now cross a community boundary, and files newly in a dependency cycle.
+ * Every emitted list is total-ordered (kind, then a, then b lex). Writes up to
+ * `max` entries into out[]; sets *truncated if capped. Returns entries written, or
+ * -1 on a bad argument. Pure; out[] caller-owned. */
+int kb_graph_diff(const kb_graph_reledge_t *old_edges, int n_old_edges,
+                  const kb_graph_community_t *old_comm, int n_old_comm,
+                  const kb_graph_reledge_t *new_edges, int n_new_edges,
+                  const kb_graph_community_t *new_comm, int n_new_comm, kb_graph_diff_entry_t *out,
+                  int max, int *truncated);
+
 #endif /* KB_GRAPH_ANALYTICS_H */
