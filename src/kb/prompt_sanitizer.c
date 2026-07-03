@@ -27,11 +27,10 @@ int sanitize_kind_is_structured(sanitize_kind_t kind)
 }
 
 /* Enumerated injection markers (opening delimiters). Matched case-insensitively.
- * In a STRUCTURED field any occurrence is a hard reject; in FREE TEXT each is
- * defanged in place by inserting a space after its first byte, breaking the
- * special-token / role-tag / directive tokenization while staying readable.
- * Kept as a table so the S0 attack corpus and the PR's marker enumeration stay
- * in sync with the code. */
+ * In a STRUCTURED field any occurrence is a hard reject; in FREE TEXT each whole
+ * matched marker is replaced by a single space (after canonicalization), which
+ * cannot reconstitute a marker across the replacement boundary. Kept as a table
+ * so the S0 attack corpus and the PR's marker enumeration stay in sync. */
 static const char *const kMarkers[] = {
     "<|",
     "|>", /* special-token delimiters: <|im_start|>, <|endoftext|>, ...   */
@@ -86,27 +85,47 @@ static int is_hard_control(unsigned char c)
    return (c < 0x20 && c != 0x0A && c != 0x09) || c == 0x7F;
 }
 
-/* Back off `n` so out[0..n) does not end mid-UTF-8-sequence, then NUL-terminate. */
+/* If out[0..*n) ends mid-UTF-8-sequence (a truncation split a multibyte char),
+ * drop that trailing partial character; a COMPLETE final character is kept as-is.
+ * Only ever called after a length truncation. NUL-terminates. */
 static void utf8_trim(char *out, size_t *n)
 {
    size_t k = *n;
-   while (k > 0 && ((unsigned char)out[k - 1] & 0xC0) == 0x80)
-      k--; /* drop trailing continuation bytes */
-   if (k > 0)
+   if (k == 0)
    {
-      unsigned char lead = (unsigned char)out[k - 1];
-      size_t need = 0;
-      if ((lead & 0xE0) == 0xC0)
-         need = 2;
-      else if ((lead & 0xF0) == 0xE0)
-         need = 3;
-      else if ((lead & 0xF8) == 0xF0)
-         need = 4;
-      if (need && (*n - (k - 1)) < need)
-         k--; /* incomplete multibyte lead — drop it */
+      out[0] = '\0';
+      return;
    }
-   out[k] = '\0';
-   *n = k;
+   /* Walk back to the start of the last character (over continuation bytes). */
+   size_t start = k;
+   while (start > 0 && ((unsigned char)out[start - 1] & 0xC0) == 0x80)
+      start--;
+   if (start == 0)
+   {
+      /* No lead byte at all — the tail is pure continuation bytes (invalid). */
+      out[0] = '\0';
+      *n = 0;
+      return;
+   }
+   start--; /* index of the last character's lead byte */
+   unsigned char lead = (unsigned char)out[start];
+   size_t need = 1; /* ASCII / invalid-lead: treat as a single byte */
+   if ((lead & 0x80) == 0)
+      need = 1;
+   else if ((lead & 0xE0) == 0xC0)
+      need = 2;
+   else if ((lead & 0xF0) == 0xE0)
+      need = 3;
+   else if ((lead & 0xF8) == 0xF0)
+      need = 4;
+   size_t have = k - start;
+   if (have >= need)
+   {
+      out[k] = '\0'; /* last character is complete — keep everything */
+      return;
+   }
+   out[start] = '\0'; /* last character is incomplete — drop it whole */
+   *n = start;
 }
 
 /* STRUCTURED: reject on any control/newline/ANSI/injection marker; otherwise copy
@@ -144,18 +163,32 @@ static sanitize_status_t sanitize_structured(const char *field, size_t maxlen, c
    return st;
 }
 
-/* FREE TEXT: strip control/ANSI/C1 (keep newline/tab), defang markers, bound
- * length. Never rejected. */
+/* FREE TEXT: never rejected. Two passes, in the caller buffer, no alloc.
+ *
+ * Pass 1 CANONICALIZES: strip ANSI (CSI/OSC/simple), C0/DEL controls, and
+ * UTF-8-encoded C1 controls — keeping newline/tab — into out[], bounded by maxlen.
+ * Pass 2 DEFANGS the canonicalized text IN PLACE: every enumerated injection
+ * marker is replaced by a single space.
+ *
+ * Canonicalize-BEFORE-defang is the fix for the control-split bypass (roundtable
+ * R1): detecting markers on the raw input while stripping controls in the same
+ * pass would let `<\x01|im_start|\x01>` reconstitute a live `<|im_start|>` after
+ * the control bytes are removed. Here the controls are gone before any marker is
+ * matched. Whole-marker→space replacement (rather than a first-byte split) cannot
+ * reconstitute a marker across a replacement boundary, because a space is not the
+ * first byte of any marker and any contiguous `<|`/role-tag in the canonicalized
+ * text is always detected. The replacement shrinks (L bytes → 1), so the in-place
+ * rewrite's write cursor never overtakes its read cursor. */
 static sanitize_status_t sanitize_freetext(const char *field, size_t maxlen, char *out,
                                            sanitize_reason_t *reason)
 {
-   size_t n = 0;
+   /* Pass 1: canonicalize into out. */
+   size_t w = 0;
    int truncated = 0;
    for (const char *p = field; *p;)
    {
       unsigned char c = (unsigned char)*p;
-      /* ANSI escape sequence: ESC then CSI/OSC/simple — drop the whole run. */
-      if (c == 0x1B)
+      if (c == 0x1B) /* ANSI escape run — drop entirely */
       {
          p++;
          if (*p == '[') /* CSI: ESC [ ... final 0x40-0x7E */
@@ -166,7 +199,7 @@ static sanitize_status_t sanitize_freetext(const char *field, size_t maxlen, cha
             if (*p)
                p++;
          }
-         else if (*p == ']') /* OSC: ESC ] ... BEL or ST */
+         else if (*p == ']') /* OSC: ESC ] ... BEL or ST (ESC \) */
          {
             p++;
             while (*p && (unsigned char)*p != 0x07 && !((unsigned char)*p == 0x1B && p[1] == '\\'))
@@ -187,36 +220,41 @@ static sanitize_status_t sanitize_freetext(const char *field, size_t maxlen, cha
       }
       if (is_hard_control(c))
       {
-         p++; /* strip C0/DEL (newline/tab already excluded by is_hard_control) */
+         p++; /* strip C0/DEL (newline/tab preserved by is_hard_control) */
          continue;
       }
-      /* Defang an injection marker: emit its first byte then a space, re-scan. */
-      if (marker_at(p))
-      {
-         if (n + 2 > maxlen)
-         {
-            truncated = 1;
-            break;
-         }
-         out[n++] = *p++;
-         out[n++] = ' ';
-         continue;
-      }
-      if (n + 1 > maxlen)
+      if (w + 1 > maxlen)
       {
          truncated = 1;
          break;
       }
-      out[n++] = (char)c;
+      out[w++] = (char)c;
       p++;
    }
+   out[w] = '\0';
+
+   /* Pass 2: defang markers in place (replacement shrinks, so w_out <= r). */
+   size_t r = 0, wr = 0;
+   while (r < w)
+   {
+      size_t L = marker_at(&out[r]); /* out is NUL-terminated at w */
+      if (L > 0 && r + L <= w)
+      {
+         out[wr++] = ' ';
+         r += L;
+      }
+      else
+         out[wr++] = out[r++];
+   }
+   size_t n = wr;
+   if (truncated)
+      utf8_trim(out, &n); /* a truncation may have split the final char */
+   out[n] = '\0';
    if (truncated)
    {
-      utf8_trim(out, &n);
       *reason = SANITIZE_REASON_LENGTH;
       return SANITIZE_TRUNCATED;
    }
-   out[n] = '\0';
    return SANITIZE_OK;
 }
 
