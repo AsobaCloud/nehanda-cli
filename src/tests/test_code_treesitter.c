@@ -54,10 +54,10 @@ int main(void)
    printf("test_code_treesitter:\n");
 
    /* availability gates the dispatch (a representative extension per language). */
-   const char *avail[] = {".c",    ".h",    ".cpp", ".cc",    ".hpp", ".cs",     ".py",
-                          ".go",   ".js",   ".mjs", ".jsx",   ".ts",  ".tsx",    ".rs",
-                          ".java", ".rb",   ".php", ".lua",   ".sh",  ".bash",   ".swift",
-                          ".kt",   ".dart", ".css", ".scala", ".sc",  ".groovy", ".gradle"};
+   const char *avail[] = {".c",     ".h",   ".cpp",    ".cc",     ".hpp",   ".cs", ".py",   ".go",
+                          ".js",    ".mjs", ".jsx",    ".ts",     ".tsx",   ".rs", ".java", ".rb",
+                          ".php",   ".lua", ".sh",     ".bash",   ".swift", ".kt", ".dart", ".css",
+                          ".scala", ".sc",  ".groovy", ".gradle", ".m",     ".mm"};
    for (size_t i = 0; i < sizeof(avail) / sizeof(avail[0]); i++)
       assert(code_treesitter_available(avail[i]));
    assert(!code_treesitter_available(".txt"));
@@ -248,6 +248,16 @@ int main(void)
    want(".groovy", groovy, "task", "function");    /* top-level def */
    want(".gradle", "def clean() {}\n", "clean", "function");
 
+   /* --- Objective-C (@interface/@implementation/@protocol → type; a C function and
+    * a simple method → function; members inside the @implementation body) --- */
+   const char *objc = "@interface Widget : NSObject\n@end\n"
+                      "@implementation Widget\n- (void)refresh { redraw(); }\n@end\n"
+                      "void helper(void) {}\n";
+   want(".m", objc, "Widget", "type");
+   want(".m", objc, "refresh", "function"); /* simple (no-arg) method selector */
+   want(".m", objc, "helper", "function");  /* plain C function */
+   want(".mm", "@protocol Drawable\n@end\n", "Drawable", "type");
+
    /* --- nested members: methods inside a type body are surfaced (the walk descends type
     * bodies but never function bodies), across the OO languages. --- */
    want(".cpp", "class C { void m(){} };\n", "m", "function");
@@ -284,6 +294,11 @@ int main(void)
    wantcall(".py", "def f():\n    g()\n    obj.m()\n", "f", "g");
    wantcall(".scala", "object M { def f(): Unit = { g() } }\n", "f", "g");
    wantcall(".groovy", "def f() { g() }\n", "f", "g");
+   /* ObjC: a C call and an ObjC message send [self redraw] both attribute to the
+    * enclosing method (message_expression callee via its `method` field). */
+   wantcall(".m", "@implementation W\n- (void)refresh { redraw(); }\n@end\n", "refresh", "redraw");
+   wantcall(".m", "@implementation W\n- (void)refresh { [self redraw]; }\n@end\n", "refresh",
+            "redraw");
    wantcall(".py", "def f():\n    obj.m()\n", "f", "m");
    wantcall(".js", "function f(){ g(); a.b.c(); }\n", "f", "g");
    wantcall(".js", "function f(){ a.b.c(); }\n", "f", "c"); /* chained -> last id */

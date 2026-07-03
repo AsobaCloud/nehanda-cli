@@ -40,6 +40,7 @@ const TSLanguage *tree_sitter_dart(void);
 const TSLanguage *tree_sitter_css(void);
 const TSLanguage *tree_sitter_scala(void);
 const TSLanguage *tree_sitter_groovy(void);
+const TSLanguage *tree_sitter_objc(void);
 
 typedef enum
 {
@@ -61,7 +62,8 @@ typedef enum
    TSL_DART,
    TSL_CSS,
    TSL_SCALA,
-   TSL_GROOVY
+   TSL_GROOVY,
+   TSL_OBJC
 } ts_lang_t;
 
 static const TSLanguage *ts_language_for_ext(const char *ext, ts_lang_t *which)
@@ -109,6 +111,10 @@ static const TSLanguage *ts_language_for_ext(const char *ext, ts_lang_t *which)
        {".sc", TSL_SCALA, tree_sitter_scala},
        {".groovy", TSL_GROOVY, tree_sitter_groovy},
        {".gradle", TSL_GROOVY, tree_sitter_groovy},
+       /* .m is Objective-C here (also MATLAB's extension — ObjC is the intended
+        * target; a MATLAB .m simply won't parse cleanly and falls through). */
+       {".m", TSL_OBJC, tree_sitter_objc},
+       {".mm", TSL_OBJC, tree_sitter_objc},
    };
    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++)
       if (strcmp(ext, map[i].ext) == 0)
@@ -561,6 +567,41 @@ static int classify_groovy(TSNode node, const char **kind, TSNode *name_root)
    return 0;
 }
 
+/* Objective-C / Objective-C++: C function_definition (declarator-based, like C);
+ * a method_definition's selector is a direct identifier (simple methods; keyword/
+ * multi-arg selectors are a known gap); @interface/@implementation/@protocol name
+ * is the first identifier child (the superclass/category come after). Members live
+ * in the class/implementation body (descended below); ObjC message sends are
+ * handled as calls via message_expression's `method` field. */
+static int classify_objc(TSNode node, const char **kind, TSNode *name_root)
+{
+   const char *t = ts_node_type(node);
+   if (strcmp(t, "function_definition") == 0)
+   {
+      TSNode d = ts_node_child_by_field_name(node, "declarator", 10);
+      if (ts_node_is_null(d) || !first_identifier(d, name_root))
+         return 0;
+      *kind = "function";
+      return 1;
+   }
+   if (strcmp(t, "method_definition") == 0)
+   {
+      if (!direct_identifier(node, name_root))
+         return 0;
+      *kind = "function";
+      return 1;
+   }
+   if (strcmp(t, "class_interface") == 0 || strcmp(t, "class_implementation") == 0 ||
+       strcmp(t, "protocol_declaration") == 0)
+   {
+      if (!direct_identifier(node, name_root))
+         return 0;
+      *kind = "type";
+      return 1;
+   }
+   return 0;
+}
+
 static int classify(ts_lang_t lang, TSNode node, const char **kind, TSNode *name_root)
 {
    switch (lang)
@@ -602,6 +643,8 @@ static int classify(ts_lang_t lang, TSNode node, const char **kind, TSNode *name
       return classify_scala(node, kind, name_root);
    case TSL_GROOVY:
       return classify_groovy(node, kind, name_root);
+   case TSL_OBJC:
+      return classify_objc(node, kind, name_root);
    }
    return 0;
 }
@@ -636,7 +679,10 @@ static int is_descendable(const char *t)
        /* Scala: object/trait bodies + the shared template_body that holds members */
        "object_definition", "trait_definition", "template_body", "enum_definition",
        /* Groovy: class body is a closure */
-       "closure", NULL};
+       "closure",
+       /* Objective-C: @interface/@implementation/@protocol bodies */
+       "class_interface", "class_implementation", "implementation_definition",
+       "protocol_declaration", NULL};
    for (int i = 0; set[i]; i++)
       if (strcmp(t, set[i]) == 0)
          return 1;
@@ -745,8 +791,8 @@ static int is_call_node(const char *t)
    return strcmp(t, "call_expression") == 0 || strcmp(t, "call") == 0 ||
           strcmp(t, "method_invocation") == 0 || strcmp(t, "invocation_expression") == 0 ||
           strcmp(t, "function_call") == 0 || strcmp(t, "juxt_function_call") == 0 ||
-          strcmp(t, "function_call_expression") == 0 || strcmp(t, "member_call_expression") == 0 ||
-          strcmp(t, "scoped_call_expression") == 0 ||
+          strcmp(t, "message_expression") == 0 || strcmp(t, "function_call_expression") == 0 ||
+          strcmp(t, "member_call_expression") == 0 || strcmp(t, "scoped_call_expression") == 0 ||
           strcmp(t, "nullsafe_member_call_expression") == 0 || strcmp(t, "macro_invocation") == 0 ||
           strcmp(t, "object_creation_expression") == 0;
 }
