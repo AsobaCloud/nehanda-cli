@@ -13,7 +13,6 @@
 #ifdef WITH_TLS
 #include "aimee_tls.h" /* native-TLS /v1 transport for a tls: endpoint */
 #endif
-#define V1_PROTOCOL_VERSION 1
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1715,4 +1714,4 @@ int cli_start_server(void)
    return 0;
 }
 
-#include "../cli_v1_routes.inc"
+#include "cli_v1_routes.h"
