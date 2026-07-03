@@ -134,3 +134,4 @@ src/vendor/tree-sitter-scala/
 src/vendor/tree-sitter-groovy/
 src/vendor/tree-sitter-objc/
 src/vendor/tree-sitter-elixir/
+src/vendor/tree-sitter-powershell/
