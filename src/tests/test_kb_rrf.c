@@ -206,6 +206,22 @@ static void test_trust_tiebreak(void)
    printf("  test_trust_tiebreak: ok\n");
 }
 
+/* A NaN trust must not violate qsort's strict-weak ordering (it degrades to the
+ * id tie-break). Reviewer finding: the old ternary compare broke on NaN. */
+static void test_trust_nan_safe(void)
+{
+   kb_rrf_item_t a[] = {{"x", 0}, {"y", 0}};
+   kb_rrf_item_t b[] = {{"y", 0}, {"x", 0}};
+   kb_rrf_signal_t sigs[] = {{a, 2, 1.0, "s1"}, {b, 2, 1.0, "s2"}};
+   double nan = 0.0 / 0.0;
+   kb_rrf_trust_t trust[] = {{"x", nan}, {"y", nan}};
+   kb_rrf_result_t out[4];
+   int n = kb_rrf_fuse_trust(sigs, 2, 60.0, trust, 2, out, 4);
+   assert(n == 2); /* no crash; NaN degrades to id order */
+   assert(strcmp(out[0].id, "x") == 0 && strcmp(out[1].id, "y") == 0);
+   printf("  test_trust_nan_safe: ok\n");
+}
+
 /* Trust must NOT reorder candidates with different scores. */
 static void test_trust_never_overrides_score(void)
 {
@@ -223,6 +239,7 @@ int main(void)
 {
    printf("test_kb_rrf:\n");
    test_trust_tiebreak();
+   test_trust_nan_safe();
    test_trust_never_overrides_score();
    test_single_signal_math();
    test_consensus_beats_single();
