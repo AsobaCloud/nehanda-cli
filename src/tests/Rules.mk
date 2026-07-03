@@ -157,7 +157,7 @@ TEST_TARGETS := $(TESTPREFIX)/unit-test-util $(TESTPREFIX)/unit-test-db $(TESTPR
                $(TESTPREFIX)/unit-test-kb-client-memory \
                $(TESTPREFIX)/unit-test-kb-graph \
                $(TESTPREFIX)/unit-test-kb-rrf \
-               $(TESTPREFIX)/unit-test-kb-graph-analytics $(TESTPREFIX)/unit-test-lessons-cite-tracker $(TESTPREFIX)/unit-test-lessons-reflect \
+               $(TESTPREFIX)/unit-test-kb-graph-analytics $(TESTPREFIX)/unit-test-lessons-cite-tracker $(TESTPREFIX)/unit-test-lessons-reflect $(TESTPREFIX)/unit-test-lessons-actuate \
                $(TESTPREFIX)/unit-test-prompt-sanitizer \
                $(TESTPREFIX)/unit-test-guardrails-blast-radius \
                $(TESTPREFIX)/unit-test-code-collect \
@@ -1715,6 +1715,7 @@ $(OBJDIR)/tests/test_kb_rrf.o: C_FLAGS += -Ikb
 $(OBJDIR)/tests/test_kb_graph_analytics.o: C_FLAGS += -Ikb
 $(OBJDIR)/tests/test_lessons_cite_tracker.o: C_FLAGS += -Ikb
 $(OBJDIR)/tests/test_lessons_reflect.o: C_FLAGS += -Ikb
+$(OBJDIR)/tests/test_lessons_actuate.o: C_FLAGS += -Ikb
 $(OBJDIR)/tests/test_prompt_sanitizer.o: C_FLAGS += -Ikb
 
 $(TESTPREFIX)/unit-test-kb-graph: $(OBJDIR)/tests/test_kb_graph.o \
@@ -1739,6 +1740,10 @@ $(TESTPREFIX)/unit-test-lessons-cite-tracker: $(OBJDIR)/tests/test_lessons_cite_
 $(TESTPREFIX)/unit-test-lessons-reflect: $(OBJDIR)/tests/test_lessons_reflect.o \
                                          $(OBJDIR)/kb/lessons_reflect.o
 	$(TESTLINK) -o $@ $^ $(L_CORE) -lm
+
+$(TESTPREFIX)/unit-test-lessons-actuate: $(OBJDIR)/tests/test_lessons_actuate.o \
+                                         $(OBJDIR)/kb/lessons_actuate.o
+	$(TESTLINK) -o $@ $^ $(L_CORE)
 
 # Render-boundary prompt sanitizer (graph-feedback §4 / P0). Pure: no DB.
 $(TESTPREFIX)/unit-test-prompt-sanitizer: $(OBJDIR)/tests/test_prompt_sanitizer.o \

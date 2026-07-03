@@ -102,6 +102,29 @@ int db2_lessons_node_citation_count(const char *session_id, const char *node_id)
    return n;
 }
 
+int64_t db2_lessons_record_finding_verdict(const char *finding_id, const char *project_id,
+                                           const char *node_id, const char *verdict,
+                                           const char *actor_source, const char *actor_id,
+                                           int confirmed)
+{
+   if (!finding_id || !finding_id[0] || !verdict || !verdict[0])
+      return -1;
+   /* 'confirmed' verdict = the inferred edge is real (useful); 'refuted' = dead end.
+    * Any other verdict is a bad argument. */
+   const char *outcome;
+   if (strcmp(verdict, "confirmed") == 0)
+      outcome = "useful";
+   else if (strcmp(verdict, "refuted") == 0)
+      outcome = "dead_end";
+   else
+      return -1;
+   int64_t oid = db2_lessons_record_outcome("", "", project_id, 0, outcome, "", finding_id,
+                                            actor_id, actor_source, confirmed ? 1 : 0);
+   if (oid > 0 && node_id && node_id[0])
+      db2_lessons_record_citation(oid, node_id, "useful");
+   return oid;
+}
+
 int db2_lessons_list_outcomes(const char *project_id, int64_t community_gen,
                               db2_lessons_outcome_row_t *out, int max)
 {
