@@ -245,3 +245,308 @@ int kb_surprising_precision_suppress(int judged, int confirmed, int min_samples,
    double precision = (double)confirmed / (double)judged;
    return precision < floor ? 1 : 0;
 }
+
+/* ── S-community: deterministic community detection ─────────────────────────── */
+
+static int comm_str_cmp(const void *a, const void *b)
+{
+   return strcmp((const char *)a, (const char *)b);
+}
+
+/* Binary search for `name` in the lex-sorted names[] (n rows of KB_GRAPH_NODE_MAX
+ * bytes). Returns its index or -1. Names are unique + sorted, so this maps an
+ * edge endpoint to its node index deterministically. */
+static int comm_index_of(const char (*names)[KB_GRAPH_NODE_MAX], int n, const char *name)
+{
+   int lo = 0, hi = n - 1;
+   while (lo <= hi)
+   {
+      int mid = lo + (hi - lo) / 2;
+      int c = strcmp(names[mid], name);
+      if (c == 0)
+         return mid;
+      if (c < 0)
+         lo = mid + 1;
+      else
+         hi = mid - 1;
+   }
+   return -1;
+}
+
+int kb_graph_communities(const kb_graph_edge_t *edges, int n_edges, kb_graph_community_t *out,
+                         int max)
+{
+   if (!edges || n_edges < 0 || !out || max <= 0)
+      return -1;
+   if (n_edges == 0)
+      return 0;
+   if (n_edges > (INT_MAX / 2))
+      return -1;
+
+   /* 1. Collect distinct node names (non-empty endpoints), lex-sort + dedup so a
+    *    node's index equals its lex rank — the source of every tie-break's total
+    *    order and of permutation invariance. */
+   long long cap = (long long)n_edges * 2;
+   char(*raw)[KB_GRAPH_NODE_MAX] = malloc((size_t)cap * KB_GRAPH_NODE_MAX);
+   if (!raw)
+      return -1;
+   int nraw = 0;
+   for (int e = 0; e < n_edges; e++)
+   {
+      if (edges[e].source[0])
+         snprintf(raw[nraw++], KB_GRAPH_NODE_MAX, "%s", edges[e].source);
+      if (edges[e].target[0])
+         snprintf(raw[nraw++], KB_GRAPH_NODE_MAX, "%s", edges[e].target);
+   }
+   if (nraw == 0)
+   {
+      free(raw);
+      return 0;
+   }
+   qsort(raw, (size_t)nraw, KB_GRAPH_NODE_MAX, comm_str_cmp);
+   char(*names)[KB_GRAPH_NODE_MAX] = malloc((size_t)nraw * KB_GRAPH_NODE_MAX);
+   if (!names)
+   {
+      free(raw);
+      return -1;
+   }
+   int N = 0;
+   for (int i = 0; i < nraw; i++)
+      if (N == 0 || strcmp(names[N - 1], raw[i]) != 0)
+         snprintf(names[N++], KB_GRAPH_NODE_MAX, "%s", raw[i]);
+   free(raw);
+
+   /* 2. Build undirected weighted adjacency (CSR). Parallel edges are aggregated
+    *    by summation (kept as duplicate entries — the k_in accumulation sums
+    *    them); self-loops dropped; weight clamped to >= 0. All arithmetic is
+    *    integer, so summation order never affects the result. */
+   int *deg = calloc((size_t)N, sizeof(int));
+   long long *k = calloc((size_t)N, sizeof(long long)); /* weighted degree */
+   if (!deg || !k)
+   {
+      free(names);
+      free(deg);
+      free(k);
+      return -1;
+   }
+   /* First pass: per-node adjacency entry counts. */
+   for (int e = 0; e < n_edges; e++)
+   {
+      if (!edges[e].source[0] || !edges[e].target[0])
+         continue;
+      int si = comm_index_of(names, N, edges[e].source);
+      int ti = comm_index_of(names, N, edges[e].target);
+      if (si < 0 || ti < 0 || si == ti)
+         continue;
+      deg[si]++;
+      deg[ti]++;
+   }
+   long long total_adj = 0;
+   int *off = malloc((size_t)(N + 1) * sizeof(int));
+   if (!off)
+   {
+      free(names);
+      free(deg);
+      free(k);
+      return -1;
+   }
+   for (int i = 0; i < N; i++)
+   {
+      off[i] = (int)total_adj;
+      total_adj += deg[i];
+   }
+   off[N] = (int)total_adj;
+   int *nbr = total_adj ? malloc((size_t)total_adj * sizeof(int)) : malloc(1);
+   long long *ew = total_adj ? malloc((size_t)total_adj * sizeof(long long)) : malloc(1);
+   int *fill = calloc((size_t)N, sizeof(int));
+   if (!nbr || !ew || !fill)
+   {
+      free(names);
+      free(deg);
+      free(k);
+      free(off);
+      free(nbr);
+      free(ew);
+      free(fill);
+      return -1;
+   }
+   long long TWO_M = 0; /* sum of weighted degrees = 2 * total edge weight */
+   for (int e = 0; e < n_edges; e++)
+   {
+      if (!edges[e].source[0] || !edges[e].target[0])
+         continue;
+      int si = comm_index_of(names, N, edges[e].source);
+      int ti = comm_index_of(names, N, edges[e].target);
+      if (si < 0 || ti < 0 || si == ti)
+         continue;
+      long long w = edges[e].weight > 0 ? edges[e].weight : 0;
+      int ps = off[si] + fill[si]++;
+      nbr[ps] = ti;
+      ew[ps] = w;
+      int pt = off[ti] + fill[ti]++;
+      nbr[pt] = si;
+      ew[pt] = w;
+      k[si] += w;
+      k[ti] += w;
+      TWO_M += 2 * w;
+   }
+   free(deg);
+   free(fill);
+
+   /* Reject a graph whose total weight would overflow the exact-integer gain. */
+   if (TWO_M > KB_GRAPH_COMMUNITY_MAX_TWO_M)
+   {
+      free(names);
+      free(k);
+      free(off);
+      free(nbr);
+      free(ew);
+      return -1;
+   }
+
+   /* 3. Local moving. comm[i] = node i's community label (a node index). Degenerate
+    *    graph with no positive weight -> every node its own singleton. `seen` +
+    *    `visit` mark the per-node touched set without relying on acc==0 (which a
+    *    zero-weight edge would defeat, re-pushing a community + overflowing touched). */
+   int *comm = malloc((size_t)N * sizeof(int));
+   long long *sigma_tot = malloc((size_t)N * sizeof(long long));
+   int *comm_min = malloc((size_t)N * sizeof(int));
+   long long *acc = calloc((size_t)N, sizeof(long long));
+   int *touched = malloc((size_t)N * sizeof(int));
+   long long *seen = malloc((size_t)N * sizeof(long long));
+   if (!comm || !sigma_tot || !comm_min || !acc || !touched || !seen)
+   {
+      free(names);
+      free(k);
+      free(off);
+      free(nbr);
+      free(ew);
+      free(comm);
+      free(sigma_tot);
+      free(comm_min);
+      free(acc);
+      free(touched);
+      free(seen);
+      return -1;
+   }
+   for (int i = 0; i < N; i++)
+   {
+      comm[i] = i;
+      sigma_tot[i] = k[i];
+      seen[i] = -1;
+   }
+   long long visit = 0;
+
+   if (TWO_M > 0)
+   {
+      for (int pass = 0; pass < KB_GRAPH_COMMUNITY_MAX_PASSES; pass++)
+      {
+         /* Min-member of each community, recomputed from the deterministic comm[]
+          * at pass start — the tie-break's "min-member-id lex" (index == lex rank). */
+         for (int c = 0; c < N; c++)
+            comm_min[c] = N;
+         for (int i = 0; i < N; i++)
+            if (i < comm_min[comm[i]])
+               comm_min[comm[i]] = i;
+
+         int moved = 0;
+         for (int i = 0; i < N; i++)
+         {
+            int c_old = comm[i];
+            sigma_tot[c_old] -= k[i]; /* isolate i */
+
+            /* k_in per neighbouring community. Touched-list membership is stamped
+             * with the per-node `visit` (never acc==0), so a zero-weight edge
+             * cannot re-push a community and overflow `touched`. O(deg(i)). */
+            visit++;
+            int nt = 0;
+            for (int p = off[i]; p < off[i + 1]; p++)
+            {
+               int cc = comm[nbr[p]];
+               if (seen[cc] != visit)
+               {
+                  seen[cc] = visit;
+                  touched[nt++] = cc;
+               }
+               acc[cc] += ew[p];
+            }
+
+            /* Default: stay in the current community (gain 0). A neighbour lures i
+             * only on strictly positive gain; among positive-gain neighbours, ties
+             * break to the smaller pass-start min-member (deterministic +
+             * permutation-invariant). A zero-gain neighbour never displaces the
+             * stay option, so there is no gain-free churn. */
+            long long best_gain = 0;
+            int best_comm = c_old;
+            int best_min = 0; /* meaningful only once best_comm has left c_old */
+            for (int j = 0; j < nt; j++)
+            {
+               int cc = touched[j];
+               long long kin = acc[cc];
+               long long gain = TWO_M * kin - k[i] * sigma_tot[cc]; /* gamma = 1 */
+               if (gain > best_gain ||
+                   (gain == best_gain && best_comm != c_old && comm_min[cc] < best_min))
+               {
+                  best_gain = gain;
+                  best_comm = cc;
+                  best_min = comm_min[cc];
+               }
+            }
+            for (int j = 0; j < nt; j++)
+               acc[touched[j]] = 0;
+
+            sigma_tot[best_comm] += k[i];
+            comm[i] = best_comm;
+            if (best_comm != c_old)
+               moved = 1;
+         }
+         if (!moved)
+            break;
+      }
+   }
+
+   /* 4. Final community id = min-member node id (lex). rep[label] = smallest index
+    *    in that community; community string = names[rep]. */
+   int *rep = malloc((size_t)N * sizeof(int));
+   if (!rep)
+   {
+      free(names);
+      free(k);
+      free(off);
+      free(nbr);
+      free(ew);
+      free(comm);
+      free(sigma_tot);
+      free(comm_min);
+      free(acc);
+      free(touched);
+      free(seen);
+      return -1;
+   }
+   for (int c = 0; c < N; c++)
+      rep[c] = N;
+   for (int i = 0; i < N; i++)
+      if (i < rep[comm[i]])
+         rep[comm[i]] = i;
+
+   int w = N < max ? N : max;
+   for (int i = 0; i < w; i++)
+   {
+      snprintf(out[i].node, sizeof(out[i].node), "%s", names[i]);
+      snprintf(out[i].community, sizeof(out[i].community), "%s", names[rep[comm[i]]]);
+   }
+
+   free(names);
+   free(k);
+   free(off);
+   free(nbr);
+   free(ew);
+   free(comm);
+   free(sigma_tot);
+   free(comm_min);
+   free(acc);
+   free(touched);
+   free(seen);
+   free(rep);
+   return w;
+}

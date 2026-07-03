@@ -188,10 +188,167 @@ static void test_precision_suppress(void)
    printf("  test_precision_suppress: ok\n");
 }
 
+/* ── S-community: deterministic community detection ─────────────────────────── */
+
+static const char *commof(const kb_graph_community_t *c, int n, const char *node)
+{
+   for (int i = 0; i < n; i++)
+      if (strcmp(c[i].node, node) == 0)
+         return c[i].community;
+   return NULL;
+}
+
+/* Known-modular fixture: two triangles {a,b,c} and {x,y,z} joined by one weak
+ * bridge c-x. Each triangle is its own community; the bridge does not merge them.
+ * Community id = the lex-smallest member ("a" / "x"). Output is node-ascending. */
+static void test_community_two_cliques(void)
+{
+   kb_graph_edge_t edges[] = {
+       {"a", "b", 5}, {"b", "c", 5}, {"a", "c", 5}, {"x", "y", 5},
+       {"y", "z", 5}, {"x", "z", 5}, {"c", "x", 1},
+   };
+   kb_graph_community_t out[16];
+   int n = kb_graph_communities(edges, 7, out, 16);
+   assert(n == 6);
+   assert(strcmp(commof(out, n, "a"), commof(out, n, "b")) == 0);
+   assert(strcmp(commof(out, n, "a"), commof(out, n, "c")) == 0);
+   assert(strcmp(commof(out, n, "x"), commof(out, n, "y")) == 0);
+   assert(strcmp(commof(out, n, "x"), commof(out, n, "z")) == 0);
+   assert(strcmp(commof(out, n, "a"), commof(out, n, "x")) != 0);
+   assert(strcmp(commof(out, n, "b"), "a") == 0); /* community id = min-member lex */
+   assert(strcmp(commof(out, n, "z"), "x") == 0);
+   for (int i = 1; i < n; i++)
+      assert(strcmp(out[i - 1].node, out[i].node) < 0); /* node-ascending */
+   printf("  test_community_two_cliques: ok\n");
+}
+
+/* Determinism under input permutation: a shuffled + endpoint-swapped edge list
+ * yields a byte-identical partition (integer gain, fixed node order). */
+static void test_community_permutation_invariant(void)
+{
+   kb_graph_edge_t e1[] = {
+       {"a", "b", 5}, {"b", "c", 5}, {"a", "c", 5}, {"x", "y", 5},
+       {"y", "z", 5}, {"x", "z", 5}, {"c", "x", 1},
+   };
+   kb_graph_edge_t e2[] = {
+       {"c", "x", 1}, {"z", "x", 5}, {"c", "a", 5}, {"y", "z", 5},
+       {"b", "a", 5}, {"y", "x", 5}, {"c", "b", 5},
+   };
+   kb_graph_community_t o1[16], o2[16];
+   int n1 = kb_graph_communities(e1, 7, o1, 16);
+   int n2 = kb_graph_communities(e2, 7, o2, 16);
+   assert(n1 == 6 && n2 == 6);
+   for (int i = 0; i < n1; i++)
+   {
+      assert(strcmp(o1[i].node, o2[i].node) == 0);
+      assert(strcmp(o1[i].community, o2[i].community) == 0);
+   }
+   printf("  test_community_permutation_invariant: ok\n");
+}
+
+/* Disconnected components are separate communities. */
+static void test_community_disconnected(void)
+{
+   kb_graph_edge_t edges[] = {{"p", "q", 4}, {"m", "n", 4}};
+   kb_graph_community_t out[16];
+   int n = kb_graph_communities(edges, 2, out, 16);
+   assert(n == 4);
+   assert(strcmp(commof(out, n, "p"), commof(out, n, "q")) == 0);
+   assert(strcmp(commof(out, n, "m"), commof(out, n, "n")) == 0);
+   assert(strcmp(commof(out, n, "p"), commof(out, n, "m")) != 0);
+   printf("  test_community_disconnected: ok\n");
+}
+
+/* Self-loops are dropped; a zero-weight edge is inert (endpoints stay singletons). */
+static void test_community_degenerate(void)
+{
+   kb_graph_edge_t sl[] = {{"a", "a", 9}, {"a", "b", 3}};
+   kb_graph_community_t out[16];
+   int n = kb_graph_communities(sl, 2, out, 16);
+   assert(n == 2);
+   assert(strcmp(commof(out, n, "a"), commof(out, n, "b")) == 0);
+
+   kb_graph_edge_t zw[] = {{"a", "b", 0}};
+   int m = kb_graph_communities(zw, 1, out, 16);
+   assert(m == 2);
+   assert(strcmp(commof(out, m, "a"), "a") == 0);
+   assert(strcmp(commof(out, m, "b"), "b") == 0);
+   printf("  test_community_degenerate: ok\n");
+}
+
+/* Truncation + bad args. */
+static void test_community_bounds(void)
+{
+   kb_graph_edge_t edges[] = {{"a", "b", 5}, {"b", "c", 5}, {"c", "d", 5}};
+   kb_graph_community_t out[2];
+   int n = kb_graph_communities(edges, 3, out, 2);
+   assert(n == 2);
+   assert(strcmp(out[0].node, "a") == 0 && strcmp(out[1].node, "b") == 0);
+
+   assert(kb_graph_communities(NULL, 1, out, 2) == -1);
+   assert(kb_graph_communities(edges, -1, out, 2) == -1);
+   assert(kb_graph_communities(edges, 1, NULL, 2) == -1);
+   assert(kb_graph_communities(edges, 1, out, 0) == -1);
+   assert(kb_graph_communities(edges, 0, out, 2) == 0);
+   printf("  test_community_bounds: ok\n");
+}
+
+/* Many parallel zero-weight edges between the same pair must not overflow the
+ * touched-list (the sentinel is a per-node visit stamp, not acc==0). Regression
+ * for the review's zero-weight re-push finding. */
+static void test_community_zero_weight_parallel(void)
+{
+   kb_graph_edge_t edges[24];
+   int n = 0;
+   for (int i = 0; i < 20; i++)
+      edges[n++] = (kb_graph_edge_t){"a", "b", 0}; /* 20 parallel zero-weight */
+   edges[n++] = (kb_graph_edge_t){"c", "d", 3};
+   kb_graph_community_t out[8];
+   int r = kb_graph_communities(edges, n, out, 8);
+   assert(r == 4); /* a,b,c,d — no crash, no overflow */
+   /* zero-weight -> a,b stay singletons; c,d merge */
+   assert(strcmp(commof(out, r, "a"), "a") == 0);
+   assert(strcmp(commof(out, r, "b"), "b") == 0);
+   assert(strcmp(commof(out, r, "c"), commof(out, r, "d")) == 0);
+   printf("  test_community_zero_weight_parallel: ok\n");
+}
+
+/* Parallel positive edges aggregate by summed weight (two a-b edges pull a,b
+ * together strongly). */
+static void test_community_parallel_aggregate(void)
+{
+   kb_graph_edge_t edges[] = {{"a", "b", 2}, {"a", "b", 2}, {"c", "d", 4}};
+   kb_graph_community_t out[8];
+   int r = kb_graph_communities(edges, 3, out, 8);
+   assert(r == 4);
+   assert(strcmp(commof(out, r, "a"), commof(out, r, "b")) == 0);
+   assert(strcmp(commof(out, r, "c"), commof(out, r, "d")) == 0);
+   assert(strcmp(commof(out, r, "a"), commof(out, r, "c")) != 0);
+   printf("  test_community_parallel_aggregate: ok\n");
+}
+
+/* A total weight that would overflow the exact-integer gain is rejected (-1). */
+static void test_community_overflow_guard(void)
+{
+   /* Two edges of weight 1.5e9 -> 2m = 6e9 > KB_GRAPH_COMMUNITY_MAX_TWO_M. */
+   kb_graph_edge_t edges[] = {{"a", "b", 1500000000}, {"b", "c", 1500000000}};
+   kb_graph_community_t out[8];
+   assert(kb_graph_communities(edges, 2, out, 8) == -1);
+   printf("  test_community_overflow_guard: ok\n");
+}
+
 int main(void)
 {
    printf("test_kb_graph_analytics:\n");
    test_precision_suppress();
+   test_community_two_cliques();
+   test_community_permutation_invariant();
+   test_community_disconnected();
+   test_community_degenerate();
+   test_community_bounds();
+   test_community_zero_weight_parallel();
+   test_community_parallel_aggregate();
+   test_community_overflow_guard();
    test_hub_ranking();
    test_deterministic_tiebreak();
    test_self_loop();
