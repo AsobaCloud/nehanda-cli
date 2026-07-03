@@ -2183,6 +2183,17 @@ int db2_code_projection_generations_list(const char *project, void *out, int max
    return 0;
 }
 
+/* graph-feedback S3b (lessons route) stub: no outcome records in the hermetic
+ * fixture, so the lessons artifact renders empty ("no lessons yet"). */
+int db2_lessons_list_outcomes(const char *project_id, long long community_gen, void *out, int max)
+{
+   (void)project_id;
+   (void)community_gen;
+   (void)out;
+   (void)max;
+   return 0;
+}
+
 /* Hermetic mirror of the §3 provenance helper (kb_service_graph.c). The real
  * definition lives in a db2-heavy unit; this fake keeps the route test pure
  * while preserving the only branch the projection route exercises: a
