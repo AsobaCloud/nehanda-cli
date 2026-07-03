@@ -130,3 +130,4 @@ src/vendor/tree-sitter-swift/
 src/vendor/tree-sitter-kotlin/
 src/vendor/tree-sitter-dart/
 src/vendor/tree-sitter-css/
+src/vendor/tree-sitter-scala/
