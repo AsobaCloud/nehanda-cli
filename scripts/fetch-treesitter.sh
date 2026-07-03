@@ -52,6 +52,7 @@ fetch tree-sitter-dart       https://github.com/UserNobody14/tree-sitter-dart   
 fetch tree-sitter-css        https://github.com/tree-sitter/tree-sitter-css        dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f
 fetch tree-sitter-scala      https://github.com/tree-sitter/tree-sitter-scala      4d081d98670ff6e98ca42c085294fc75eec15e1d
 fetch tree-sitter-groovy     https://github.com/murtaza64/tree-sitter-groovy       deb0dcf8c4544f07564060f6e9b9f6e4b0bfc27d
+fetch tree-sitter-objc       https://github.com/tree-sitter-grammars/tree-sitter-objc 181a81b8f23a2d593e7ab4259981f50122909fda
 
 echo "fetch-treesitter: done -> $VENDOR/tree-sitter*"
 
