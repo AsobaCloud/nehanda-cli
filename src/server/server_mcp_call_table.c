@@ -13,6 +13,7 @@
 #include "code_span.h"
 #include "db1.h"
 #include "kb_client.h"
+#include "config.h"
 #include "dashboard.h"
 #include "work_queue.h"
 #include "mcp_tools.h"
@@ -1060,6 +1061,35 @@ static cJSON *mcph_index_hybrid(struct mcp_call *c)
    int max_results = pdf_arg_pos_int(c->jargs, "max_results", 100.0, &mr) ? (int)mr : 20;
    int status = -1;
    char *json = kb_client_code_hybrid(jq->valuestring, symbol, project, max_results, &status);
+   /* §3 live cite-capture (default off): observe the retrieved file paths for this
+    * session so a re-cited source earns trust across turns. Best-effort; gated by the
+    * same flag as the retrieval-side trust tie-break. */
+   if (json && project && c->sid && c->sid[0])
+   {
+      config_t ccfg;
+      if (config_load(&ccfg) == 0 && ccfg.code_trust_actuation_enabled)
+      {
+         cJSON *root = cJSON_Parse(json);
+         cJSON *results = root ? cJSON_GetObjectItemCaseSensitive(root, "results") : NULL;
+         if (cJSON_IsArray(results))
+         {
+            int n = cJSON_GetArraySize(results);
+            const char **paths = calloc((size_t)(n > 0 ? n : 1), sizeof(*paths));
+            int cnt = 0;
+            for (int i = 0; paths && i < n; i++)
+            {
+               cJSON *row = cJSON_GetArrayItem(results, i);
+               cJSON *fp = row ? cJSON_GetObjectItemCaseSensitive(row, "file_path") : NULL;
+               if (cJSON_IsString(fp) && fp->valuestring[0])
+                  paths[cnt++] = fp->valuestring;
+            }
+            if (cnt > 0)
+               kb_client_code_lessons_observe(project, c->sid, paths, cnt);
+            free(paths);
+         }
+         cJSON_Delete(root);
+      }
+   }
    return code_graph_passthrough(json, status, "index_hybrid");
 }
 
