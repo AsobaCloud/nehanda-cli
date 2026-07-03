@@ -91,6 +91,28 @@ char *kb_client_code_graph_hubs(const char *project, int max_results, int *statu
    return json;
 }
 
+int kb_client_code_lessons_observe(const char *project, const char *session_id,
+                                   const char *const *node_ids, int n_nodes)
+{
+   if (!project || !project[0] || !session_id || !session_id[0] || !node_ids || n_nodes <= 0)
+      return -1;
+   cJSON *req = cJSON_CreateObject();
+   if (!req)
+      return -1;
+   cJSON_AddStringToObject(req, "project", project);
+   cJSON_AddStringToObject(req, "session_id", session_id);
+   cJSON *arr = cJSON_AddArrayToObject(req, "node_ids");
+   for (int i = 0; arr && i < n_nodes; i++)
+      if (node_ids[i] && node_ids[i][0])
+         cJSON_AddItemToArray(arr, cJSON_CreateString(node_ids[i]));
+   int status = -1;
+   char *resp = kb_client_v1_post_json("/v1/code/lessons/observe", req,
+                                       KB_CLIENT_CODE_GRAPH_READ_TIMEOUT_MS, &status);
+   cJSON_Delete(req);
+   free(resp);
+   return (status >= 200 && status < 300) ? 0 : -1;
+}
+
 char *kb_client_code_lessons(const char *project, int *status_out)
 {
    if (status_out)

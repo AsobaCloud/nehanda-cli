@@ -59,5 +59,8 @@ int handle_get_code_graph_diff_route(const char *method, const char *query_strin
 int handle_get_code_lessons(const char *query_string, char *out_buf, int out_cap);
 int handle_get_code_lessons_route(const char *method, const char *query_string, char *out_buf,
                                   int out_cap);
+int handle_post_code_lessons_observe(const char *body, char *out_buf, int out_cap);
+int handle_post_code_lessons_observe_route(const char *method, const char *body, char *out_buf,
+                                           int out_cap);
 
 #endif
