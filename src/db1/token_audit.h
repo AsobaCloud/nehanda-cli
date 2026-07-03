@@ -127,8 +127,7 @@ extern "C"
 
    /* Aggregate the split for one session_id. Returns 0 on success (including a
     * session with no rows -> all-zero out), -1 on error / DB-not-initialized. */
-   int db1_token_audit_session_split(const char *session_id,
-                                     db1_token_audit_session_split_t *out);
+   int db1_token_audit_session_split(const char *session_id, db1_token_audit_session_split_t *out);
 
    typedef struct
    {

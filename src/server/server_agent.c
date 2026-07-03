@@ -701,8 +701,8 @@ int handle_agent_add(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
        * must not be silently crippled to summarize/format/draft when added
        * without an explicit --roles: that regression left mistral/minimax/glm/
        * codex unable to take `code`/`execute` work. */
-      server_agent_set_roles_csv(ag,
-                                 "code,review,explain,refactor,draft,execute,summarize,format,reason,search");
+      server_agent_set_roles_csv(
+          ag, "code,review,explain,refactor,draft,execute,summarize,format,reason,search");
 
    const char *exec_roles = opt_get(&opts, "exec-roles");
    if (exec_roles && exec_roles[0])
@@ -962,8 +962,8 @@ int handle_agent_roles(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    if (argc >= 2 && argv[1][0])
       server_agent_set_roles_csv(ag, argv[1]);
    else
-      server_agent_set_roles_csv(ag,
-                                 "code,review,explain,refactor,draft,execute,summarize,format,reason,search");
+      server_agent_set_roles_csv(
+          ag, "code,review,explain,refactor,draft,execute,summarize,format,reason,search");
 
    if (agent_save_config(&cfg) != 0)
       return server_send_error(conn, "could not save agents.json", NULL);
