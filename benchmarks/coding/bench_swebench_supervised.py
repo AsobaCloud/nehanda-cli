@@ -1,320 +1,342 @@
 #!/usr/bin/env python3
-"""Parallel-supervisor SWE-bench benchmark.
+"""Supervised SWE-bench benchmark (single-shot diff generation).
 
-Runs each SWE-bench Lite instance in up to three arms and measures how much of the
-EXPENSIVE SUPERVISOR's token spend aimee offloads onto (free) delegate workers,
-and whether it does so WITHOUT the wall-clock penalty that a single serial worker
-pays (the Reddit result: -75.5% supervisor tokens but 3.75x slower).
+Measures how much of the EXPENSIVE primary's token spend aimee offloads onto a
+cheap/free delegate fleet when the task is a one-shot "here is the code, produce a
+diff" request, plus wall-clock and official SWE-bench resolution.
 
-  A  primary_alone       — the primary agent (supervisor) solves the task itself.
-  B  supervised_serial   — supervisor + ONE delegate worker (--parallel 1).
-  C  supervised_parallel — supervisor + N delegate workers (--parallel N).
+SCOPE / HONESTY: this is a **single-shot diff-generation** benchmark (both arms run
+`--no-tools`, one prompt -> one diff). It is NOT the tool-using agentic workflow the
+Reddit result measured, so it is not a like-for-like reproduction of that experiment;
+treat the Reddit number as motivation, not a head-to-head baseline. An agentic version
+(workers explore/edit/test the repo, primary supervises) is tracked separately as the
+real parity claim. See SUPERVISED_SWEBENCH.md.
 
-Supervisor tokens are read from the aimee token ledger via
-`aimee session tokens <sid> --json` (token_audit rows split by delegation_id:
-empty = supervisor's own turns, set = delegate workers). Each instance/arm runs
-under its OWN supervisor session_id so the split stays per-instance even when
-instances run concurrently. The integrated patch is captured as
-`git -C <cwd> diff <base_commit>` from the shared coord-job worktree, then graded
-by the official SWE-bench Docker harness — the sole `resolved` source for ALL arms.
+Two arms per instance (same code region given to both):
+  A  primary_alone  - the expensive primary produces the diff itself.
+  C  supervised      - N distinct cheap/local workers attempt it CONCURRENTLY, then the
+                       primary reviews the candidate diffs and selects/synthesizes the
+                       best (best-of-N). It reads candidate diffs, not the code region.
 
-This module owns orchestration + record-keeping. The token/speed math and the
-Reddit-style table live in supervised_report.py. Grading reuses the official
-harness invocation from bench_swebench.py.
-
-Environment:
-  AIMEE_BENCH_FAKE_AGENT=1   — synthesize arm outputs (no live aimee), for CI.
-  AIMEE_BENCH_FAKE_GRADER=1  — skip the SWE-bench Docker grader (resolved=None).
-  AIMEE_BENCH_SUPERVISOR_N   — default N for arm C (default 6).
-  AIMEE_BENCH_ARMS           — comma list, default "A,B,C".
+Primary tokens are read from the token_audit ledger scoped to the EXACT primary job ids
+this run dispatched (delegation_id ends in `-<job_id>`), so the number is the primary's
+own turns for this run only - no time-window or cross-agent contamination. Worker tokens
+are free and reported separately. FAKE mode (AIMEE_BENCH_FAKE_AGENT=1) synthesizes arm
+outputs for CI.
 """
-
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
+import random
+import re
+import sqlite3
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
 from benchmarks.coding import supervised_report
-from benchmarks.coding.bench_swebench import _extract_patch, _load_dataset, _build_prediction, _write_predictions
 
-_FAKE_AGENT = os.environ.get("AIMEE_BENCH_FAKE_AGENT") == "1"
+_FAKE = os.environ.get("AIMEE_BENCH_FAKE_AGENT") == "1"
 _FAKE_GRADER = os.environ.get("AIMEE_BENCH_FAKE_GRADER") == "1"
-
-# The exact 10 SWE-bench Lite instances the Reddit post measured, for a direct
-# head-to-head. A run may instead take a fresh random sample (see --sample).
-REDDIT_INSTANCES = [
-    "pytest-dev__pytest-11143",
-    "scikit-learn__scikit-learn-13439",
-    "sympy__sympy-20212",
-    "django__django-12908",
-    "pytest-dev__pytest-6116",
-    "django__django-13447",
-    "django__django-15814",
-    "django__django-11179",
-    "sympy__sympy-13480",
-    "scikit-learn__scikit-learn-13584",
-]
+_POLL_WORKERS = 16
+_SCHEMA_VERSION = 2
 
 
-def _session_id(instance_id: str, arm: str, compaction: bool) -> str:
-    """A unique supervisor session per (instance, arm, compaction) cell so the
-    token_audit split is attributable even when cells run concurrently."""
-    c = "cmp" if compaction else "raw"
-    return f"swebench-sup-{instance_id}-{arm}-{c}"
+# ---------------------------------------------------------------- prompts -----
+def _solve_prompt(inst: dict) -> str:
+    return (f"You are fixing a bug in {inst['repo']}, file: {inst['file']}\n\n"
+            f"## Issue\n{inst['problem']}\n\n## Code of {inst['file']}\n"
+            f"```python\n{inst['region']}\n```\n\nReturn ONLY a unified git diff "
+            f"(```diff fenced) that implements the fix for {inst['file']}, with a/ "
+            f"and b/ prefixes and correct context lines.")
 
 
-class SupervisorClient:
-    """Thin wrapper over the `aimee` CLI for the supervised benchmark.
+def _select_prompt(inst: dict, candidates: list[tuple[str, str]]) -> str:
+    body = "".join(f"\n### Candidate {n + 1} (by {w})\n```diff\n{d}\n```\n"
+                   for n, (w, d) in enumerate(candidates))
+    return ("You are a senior engineer reviewing patches from your team for a bug. Pick the ONE "
+            "candidate that correctly and completely fixes the issue, or if none is fully correct, "
+            "output a corrected unified diff. Output ONLY the chosen/corrected unified git diff "
+            f"(```diff fenced).\n\n## Issue\n{inst['problem']}\n## File: {inst['file']}\n"
+            f"## Candidate patches{body}")
 
-    Concrete transport (how the primary agent is driven so its turns land in
-    token_audit with delegation_id empty) is resolved by roundtable ruling Q1 and
-    wired in `solve_direct` / `orchestrate`. Everything else — reading the token
-    split, capturing the patch — is transport-independent and pinned here.
-    """
 
-    def __init__(self, aimee_bin: str, cwd: Path) -> None:
+_DIFF_LINE = re.compile(r"^(diff --git |index |--- |\+\+\+ |@@ |[ +\-\\]|rename |similarity |"
+                        r"new file |deleted file |old mode |new mode |Binary )")
+
+
+def _extract_diff(text: str) -> str:
+    """Pull a unified diff out of a worker response and STOP at the first line that is
+    not part of the diff, so trailing prose is never submitted as a patch (M5)."""
+    m = re.search(r"```diff\s*\n(.*?)```", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    lines = text.splitlines()
+    start = next((i for i, ln in enumerate(lines)
+                  if ln.startswith("diff --git ") or ln.startswith("--- ")), None)
+    if start is None:
+        return ""
+    out = []
+    for ln in lines[start:]:
+        if ln == "" or _DIFF_LINE.match(ln):
+            out.append(ln)
+        else:
+            break
+    return "\n".join(out).strip()
+
+
+# ------------------------------------------------------------- aimee CLI ------
+class Fleet:
+    """Dispatch and poll delegate turns via the `aimee` CLI. Dispatch AND polling are
+    THREAD-PARALLEL so wall-clock reflects true fleet concurrency, not driver serialism
+    (C2/M1/M3). Only `done` is a success terminal; `failed`/`error`/`partial` are
+    discarded (M2)."""
+
+    _SUCCESS = "done"
+    _TERMINAL = {"done", "failed", "error", "partial"}
+
+    def __init__(self, aimee_bin: str, timeout_s: float = 420.0) -> None:
         self.aimee = aimee_bin
-        self.cwd = cwd
+        self.timeout_s = timeout_s
 
-    def _cli(self, args: list[str], *, timeout: float = 120.0) -> str:
-        proc = subprocess.run(
-            [self.aimee, *args],
-            cwd=str(self.cwd),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if proc.returncode != 0:
-            raise RuntimeError(f"aimee {' '.join(args)} failed: {proc.stderr[:400]}")
-        return proc.stdout
+    def _dispatch1(self, worker: str, prompt: str):
+        p = subprocess.run(
+            [self.aimee, "--json", "delegate", "draft", prompt, "--via", worker,
+             "--persona", "engineer", "--no-tools", "--background"],
+            capture_output=True, text=True, timeout=90)
+        try:
+            return json.loads(p.stdout).get("job_id")
+        except Exception:
+            return None
 
-    def session_tokens(self, session_id: str) -> dict[str, Any]:
-        """Read the supervisor-vs-worker token split for a session."""
-        out = self._cli(["--json", "session", "tokens", session_id])
-        return json.loads(out)
+    def dispatch_all(self, items: list[tuple]) -> dict:
+        """items: list of (key, worker, prompt). Returns {key: job_id}. Parallel."""
+        with ThreadPoolExecutor(max_workers=_POLL_WORKERS) as ex:
+            jids = list(ex.map(lambda it: self._dispatch1(it[1], it[2]), items))
+        return {it[0]: j for it, j in zip(items, jids)}
 
-    def git_diff(self, base_commit: str) -> str:
-        """Integrated patch = diff of the shared coord worktree vs base_commit."""
-        proc = subprocess.run(
-            ["git", "-C", str(self.cwd), "diff", base_commit],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        return proc.stdout
+    def _status(self, jid):
+        p = subprocess.run([self.aimee, "--json", "delegate", "status", str(jid), "--full"],
+                           capture_output=True, text=True, timeout=30)
+        try:
+            d = json.loads(p.stdout)
+            return d.get("job_status", ""), d.get("result", "")
+        except Exception:
+            return "", ""
 
-
-def _tokens_from_split(split: dict[str, Any]) -> dict[str, int]:
-    sup = split.get("supervisor", {})
-    wrk = split.get("worker", {})
-    return {
-        "supervisor_input_tokens": int(sup.get("prompt_tokens", 0)),
-        "supervisor_output_tokens": int(sup.get("completion_tokens", 0)),
-        "worker_input_tokens": int(wrk.get("prompt_tokens", 0)),
-        "worker_output_tokens": int(wrk.get("completion_tokens", 0)),
-    }
-
-
-def _fake_record(instance_id: str, arm: str, compaction: bool, idx: int) -> dict[str, Any]:
-    """Deterministic synthetic record so the harness + report are testable without
-    a live aimee. Encodes the expected SHAPE: arm A pays full supervisor cost, arms
-    B/C offload most of it onto workers, arm C runs fastest via parallelism."""
-    base_sup_in = 12000 + idx * 500
-    base_sup_out = 2200 + idx * 50
-    comp_factor = 0.7 if compaction else 1.0  # S4 compaction trims supervisor input
-    if arm == "A":
-        sup_in, sup_out = int(base_sup_in * comp_factor), base_sup_out
-        wrk_in = wrk_out = 0
-        wall = 130.0 + idx * 8
-        n = 1
-    elif arm == "B":
-        sup_in, sup_out = int(base_sup_in * 0.30 * comp_factor), int(base_sup_out * 0.45)
-        wrk_in, wrk_out = int(base_sup_in * 0.85), int(base_sup_out * 1.4)
-        wall = 320.0 + idx * 10  # serial single worker: SLOW (the Reddit tradeoff)
-        n = 1
-    else:  # C
-        sup_in, sup_out = int(base_sup_in * 0.18 * comp_factor), int(base_sup_out * 0.38)
-        wrk_in, wrk_out = int(base_sup_in * 0.95), int(base_sup_out * 1.6)
-        wall = 88.0 + idx * 4  # parallel workers: FAST
-        n = int(os.environ.get("AIMEE_BENCH_SUPERVISOR_N", "6"))
-    return {
-        "instance_id": instance_id,
-        "arm": arm,
-        "compaction": compaction,
-        "supervisor_input_tokens": sup_in,
-        "supervisor_output_tokens": sup_out,
-        "worker_input_tokens": wrk_in,
-        "worker_output_tokens": wrk_out,
-        "wall_s": wall,
-        "resolved": True if not _FAKE_GRADER else None,
-        "n_workers": n,
-        "patch": "" if _FAKE_GRADER or arm == "A" else "diff --git a/x b/x\n",
-        "invalid": False,
-    }
+    def collect(self, jobs: dict) -> dict:
+        """jobs: {key: job_id}. Poll concurrently until all terminal/timeout. Returns
+        {key: (result_or_'', ok_bool)} where ok=True only for a `done` terminal."""
+        pending = {k: (j, time.time()) for k, j in jobs.items() if j}
+        out = {}
+        while pending:
+            with ThreadPoolExecutor(max_workers=_POLL_WORKERS) as ex:
+                sts = dict(zip(pending, ex.map(lambda k: self._status(pending[k][0]), pending)))
+            for k, (st, res) in sts.items():
+                jid, td = pending[k]
+                if st in self._TERMINAL:
+                    out[k] = (res if st == self._SUCCESS else "", st == self._SUCCESS)
+                    del pending[k]
+                elif time.time() - td > self.timeout_s:
+                    out[k] = ("", False)
+                    del pending[k]
+            if pending:
+                time.sleep(2)
+        for k in jobs:
+            out.setdefault(k, ("", False))
+        return out
 
 
-def run_arm(
-    inst: dict[str, Any],
-    arm: str,
-    compaction: bool,
-    idx: int,
-    *,
-    client: SupervisorClient | None,
-    parallel_n: int,
-) -> dict[str, Any]:
-    """Execute one arm for one instance; return a measurement record.
+# ------------------------------------------------------------- token meter ----
+def _primary_tokens(db, model, job_ids):
+    """Sum the primary model's realized tokens for EXACTLY the given primary job ids.
+    A delegate turn's delegation_id is `deleg-<n>-<ts>-<job_id>`, so we match the
+    trailing `-<job_id>`. No time window -> no cross-run/cross-agent contamination (C1)."""
+    if not db or not Path(db).exists() or not job_ids:
+        return None
+    con = sqlite3.connect(db)
+    likes = " OR ".join(["delegation_id LIKE ?"] * len(job_ids))
+    params = [model] + [f"%-{j}" for j in job_ids]
+    r = con.execute(
+        f"SELECT COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0) "
+        f"FROM token_audit WHERE model=? AND usage_kind='realized' AND ({likes})", params).fetchone()
+    return {"calls": r[0], "input": r[1], "output": r[2], "total": r[1] + r[2],
+            "job_ids": list(job_ids)}
 
-    In FAKE mode returns a synthetic record. The live path (client set) is wired
-    per the roundtable transport ruling: drive the primary to solve (A) or
-    orchestrate delegates (B/C) under a per-cell session_id, then read the token
-    split and capture the integrated patch.
-    """
-    instance_id = inst.get("instance_id", "")
-    if client is None:  # FAKE
-        return _fake_record(instance_id, arm, compaction, idx)
 
-    base_commit = inst.get("base_commit", "")
-    sid = _session_id(instance_id, arm, compaction)
+# ------------------------------------------------------------- arms -----------
+def run_arm_A(insts, fleet, primary):
+    items = [(i["instance_id"], primary, _solve_prompt(i)) for i in insts]
     t0 = time.perf_counter()
-    # NOTE: the concrete drive-the-primary calls are filled in after the transport
-    # roundtable (Q1). They must (a) run under session_id `sid`, (b) toggle the
-    # compaction config, (c) for B/C use `delegate plan --launch --parallel N`.
-    patch = _drive_arm(client, inst, arm, sid, compaction, parallel_n)
-    wall = time.perf_counter() - t0
-
-    split = client.session_tokens(sid)
-    rec = {
-        "instance_id": instance_id,
-        "arm": arm,
-        "compaction": compaction,
-        "wall_s": round(wall, 1),
-        "n_workers": parallel_n if arm == "C" else (1 if arm == "B" else 1),
-        "patch": patch,
-        "resolved": None,  # filled by the grader
-        "invalid": False,
-    }
-    rec.update(_tokens_from_split(split))
-    return rec
+    jobs = fleet.dispatch_all(items)
+    res = fleet.collect(jobs)
+    wall = round(time.perf_counter() - t0, 1)
+    recs = {iid: {"diff": _extract_diff(r) if ok else ""} for iid, (r, ok) in res.items()}
+    return recs, wall, [j for j in jobs.values() if j]
 
 
-def _drive_arm(
-    client: SupervisorClient,
-    inst: dict[str, Any],
-    arm: str,
-    sid: str,
-    compaction: bool,
-    parallel_n: int,
-) -> str:
-    """Placeholder for the live supervisor drive. Raises until the transport
-    ruling (Q1) is wired, so a live run fails loudly rather than silently
-    producing empty patches. FAKE mode never reaches here."""
-    raise NotImplementedError(
-        "live supervisor transport not yet wired — pending roundtable Q1 ruling; "
-        "run with AIMEE_BENCH_FAKE_AGENT=1 for the harness/report path"
-    )
+def _pick_workers(pool, n, seed):
+    """N DISTINCT workers for one instance, seeded for reproducibility (M6)."""
+    rng = random.Random(seed)
+    p = list(pool)
+    rng.shuffle(p)
+    return p[:min(n, len(p))]
 
 
-def _grade(records: list[dict[str, Any]], target: str) -> None:
-    """Grade every arm's patch with the official SWE-bench Docker harness and fill
-    `resolved` in place. Skipped under FAKE_GRADER."""
+def run_arm_C(insts, fleet, primary, pool, n, seed):
+    t0 = time.perf_counter()
+    items, order = [], {}
+    for idx, i in enumerate(insts):
+        for k, w in enumerate(_pick_workers(pool, n, f"{seed}:{i['instance_id']}")):
+            key = (i["instance_id"], k)
+            order[key] = w
+            items.append((key, w, _solve_prompt(i)))
+    ares = fleet.dispatch_all(items)
+    ares = fleet.collect(ares)
+    cand = {i["instance_id"]: [] for i in insts}
+    for (iid, k), (r, ok) in ares.items():
+        d = _extract_diff(r) if ok else ""
+        if d:
+            cand[iid].append((order[(iid, k)], d))
+    byid = {i["instance_id"]: i for i in insts}
+    sel_items = [(iid, primary, _select_prompt(byid[iid], cs)) for iid, cs in cand.items() if cs]
+    sjobs = fleet.dispatch_all(sel_items)
+    sres = fleet.collect(sjobs)
+    recs = {}
+    for i in insts:
+        iid = i["instance_id"]
+        r, ok = sres.get(iid, ("", False))
+        recs[iid] = {"diff": _extract_diff(r) if ok else "", "n_candidates": len(cand[iid])}
+    wall = round(time.perf_counter() - t0, 1)
+    return recs, wall, [j for j in sjobs.values() if j]
+
+
+# ------------------------------------------------------------- grading -------
+def _grade(records, arm, out_dir, target):
+    for r in records.values():
+        r["resolved"] = None  # None = not graded (no diff, or grader unavailable)
     if _FAKE_GRADER:
         return
-    from benchmarks.coding.bench_swebench import _grade_with_harness
-
-    graded = [r for r in records if not r.get("invalid") and r.get("patch")]
-    if not graded:
+    if _FAKE:
+        raise SystemExit("refusing to grade fake agent output against the real harness; "
+                         "set AIMEE_BENCH_FAKE_GRADER=1 too (m1)")
+    from benchmarks.coding.bench_swebench import _grade_with_harness, _build_prediction, _write_predictions
+    preds = [_build_prediction(iid, f"{target}-{arm}", r["diff"]) for iid, r in records.items() if r["diff"]]
+    if not preds:
         return
-    preds = [_build_prediction(r["instance_id"], f"{target}-{r['arm']}", r["patch"]) for r in graded]
-    out_dir = Path(os.environ.get("AIMEE_BENCH_OUT", "benchmarks/results"))
-    preds_path = out_dir / "supervised_predictions.jsonl"
-    _write_predictions(preds_path, preds)
-    run_id = f"aimee_sup_{int(time.time())}"
+    for iid, r in records.items():
+        if r["diff"]:
+            r["resolved"] = False  # submitted but not yet confirmed resolved
+    pp = out_dir / f"pred_{arm}.jsonl"
+    _write_predictions(pp, preds)
     try:
-        resolved_ids, _ = _grade_with_harness(preds_path, run_id)
-    except RuntimeError as exc:
-        print(f"WARNING: grader unavailable: {exc}", file=sys.stderr)
+        resolved, _ = _grade_with_harness(pp, f"{target}_{arm}_{int(time.time())}")
+    except RuntimeError as e:
+        print(f"WARNING grader unavailable: {e}", file=sys.stderr)
+        for r in records.values():
+            r["resolved"] = None
         return
-    for r in graded:
-        r["resolved"] = r["instance_id"] in resolved_ids
+    for iid, r in records.items():
+        if r["diff"]:
+            r["resolved"] = iid in resolved
 
 
+# ------------------------------------------------------------- fake ----------
+def _fake_record(iid, arm, idx, n=3):
+    if arm == "A":
+        return {"diff": "diff --git a/x b/x\n", "resolved": True}
+    return {"diff": "diff --git a/x b/x\n", "n_candidates": n, "resolved": True}
+
+
+def _provenance(args, pool, n_instances):
+    def _git(*a):
+        try:
+            return subprocess.run(["git", *a], capture_output=True, text=True, timeout=10).stdout.strip()
+        except Exception:
+            return None
+    return {"schema_version": _SCHEMA_VERSION, "aimee_commit": _git("rev-parse", "HEAD"),
+            "primary_agent": args.primary, "primary_model": args.primary_model,
+            "pool_agents": pool, "n": args.n, "instances": n_instances,
+            "single_shot": True, "started_at": int(time.time())}
+
+
+# ------------------------------------------------------------- main ----------
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--variant", choices=["lite", "verified"], default="lite")
-    parser.add_argument("--arms", default=os.environ.get("AIMEE_BENCH_ARMS", "A,B,C"))
-    parser.add_argument("--parallel", type=int, default=int(os.environ.get("AIMEE_BENCH_SUPERVISOR_N", "6")))
-    parser.add_argument("--compaction", choices=["on", "off", "both"], default="on")
-    parser.add_argument("--reddit-set", action="store_true", help="Use the exact 10 Reddit instances")
-    parser.add_argument("--max-cases", type=int, default=0)
-    parser.add_argument("--target", default="aimee-supervised")
-    parser.add_argument("--aimee-bin", default=os.environ.get("AIMEE_BENCH_CLIENT", "./aimee"))
-    parser.add_argument("--cwd", default=os.environ.get("AIMEE_BENCH_REPO_CWD", "."))
-    parser.add_argument("--output", required=True)
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--regions", default="benchmarks/results/swebench_supervised/regions")
+    ap.add_argument("--arms", default="A,C")
+    ap.add_argument("--primary", default=os.environ.get("AIMEE_BENCH_PRIMARY", "codex"),
+                    help="the expensive manager agent (its tokens are what we reduce)")
+    ap.add_argument("--pool", default=os.environ.get("AIMEE_BENCH_POOL",
+                    "glm-5.2,mimo-2.5,mistral,mimo-2.5-pro,minimax,local-synth"),
+                    help="cheap/local worker fleet for arm C (must NOT contain --primary)")
+    ap.add_argument("--n", type=int, default=3, help="best-of-N workers per instance (arm C)")
+    ap.add_argument("--primary-model", default=os.environ.get("AIMEE_BENCH_PRIMARY_MODEL", ""),
+                    help="token_audit model name of the primary; required for token measurement")
+    ap.add_argument("--token-db", default=os.environ.get("AIMEE_DB", ""),
+                    help="path to aimee.db (DB1) to read primary tokens")
+    ap.add_argument("--aimee-bin", default=os.environ.get("AIMEE_BENCH_CLIENT", "./aimee"))
+    ap.add_argument("--target", default="aimee-supervised")
+    ap.add_argument("--seed", type=int, default=1729)
+    ap.add_argument("--output", required=True)
+    args = ap.parse_args()
 
     arms = [a.strip().upper() for a in args.arms.split(",") if a.strip()]
-    compactions = {"on": [True], "off": [False], "both": [True, False]}[args.compaction]
+    pool = [w.strip() for w in args.pool.split(",") if w.strip()]
+    if args.primary in pool:
+        raise SystemExit(f"--primary '{args.primary}' must not appear in --pool (m11 footgun)")
 
-    data_dir = Path(os.environ.get("AIMEE_BENCH_DATA_DIR", "data"))
-    instances = _load_dataset(data_dir, args.variant, 0) if not _FAKE_AGENT else [
-        {"instance_id": iid, "repo": "x/y", "base_commit": "HEAD"} for iid in REDDIT_INSTANCES
-    ]
-    if args.reddit_set:
-        wanted = set(REDDIT_INSTANCES)
-        instances = [i for i in instances if i.get("instance_id") in wanted]
-    if args.max_cases > 0:
-        instances = instances[: args.max_cases]
+    if _FAKE:
+        insts = [{"instance_id": f"inst-{i}", "repo": "x/y", "file": "x.py",
+                  "region": "code", "problem": "bug"} for i in range(3)]
+    else:
+        insts = [json.load(open(f)) for f in sorted(glob.glob(str(Path(args.regions) / "*.json")))]
+        if not args.token_db:
+            print("WARNING: --token-db not set; primary token reduction will be unavailable", file=sys.stderr)
+        if args.token_db and not args.primary_model:
+            raise SystemExit("--primary-model is required with --token-db (to scope the ledger)")
+    if not insts:
+        raise SystemExit(f"no regions in {args.regions}; run swebench_supervised_prep.py first")
+    print(f"{len(insts)} instances; primary={args.primary}; pool={pool}; n={args.n}", file=sys.stderr)
 
-    client = None
-    if not _FAKE_AGENT:
-        client = SupervisorClient(args.aimee_bin, Path(args.cwd))
+    fleet = None if _FAKE else Fleet(args.aimee_bin)
+    out_dir = Path(args.output).parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result = {"provenance": _provenance(args, pool, len(insts)),
+              "instances": [i["instance_id"] for i in insts], "primary": args.primary,
+              "pool": pool, "n": args.n, "arms": {}, "primary_tokens": {}}
 
-    records: list[dict[str, Any]] = []
-    for idx, inst in enumerate(instances):
-        for arm in arms:
-            for compaction in compactions:
-                pn = args.parallel if arm == "C" else 1
-                rec = run_arm(inst, arm, compaction, idx, client=client, parallel_n=pn)
-                records.append(rec)
-                print(
-                    f"  {inst.get('instance_id')} arm={arm} cmp={compaction} "
-                    f"sup={rec.get('supervisor_input_tokens')}+{rec.get('supervisor_output_tokens')} "
-                    f"wall={rec.get('wall_s')}s",
-                    file=sys.stderr,
-                )
+    if "A" in arms:
+        print("=== ARM A: primary solves (single-shot) ===", file=sys.stderr)
+        if _FAKE:
+            A = {i["instance_id"]: _fake_record(i["instance_id"], "A", k, args.n) for k, i in enumerate(insts)}
+            result["arms"]["A"] = {"records": A, "wall_total": 0.0}
+        else:
+            A, wall, jids = run_arm_A(insts, fleet, args.primary)
+            _grade(A, "A", out_dir, args.target)
+            result["primary_tokens"]["A"] = _primary_tokens(args.token_db, args.primary_model, jids)
+            result["arms"]["A"] = {"records": A, "wall_total": wall}
 
-    _grade(records, args.target)
+    if "C" in arms:
+        print("=== ARM C: supervised best-of-N + selection (single-shot) ===", file=sys.stderr)
+        if _FAKE:
+            C = {i["instance_id"]: _fake_record(i["instance_id"], "C", k, args.n) for k, i in enumerate(insts)}
+            result["arms"]["C"] = {"records": C, "wall_total": 0.0}
+        else:
+            C, wall, jids = run_arm_C(insts, fleet, args.primary, pool, args.n, args.seed)
+            _grade(C, "C", out_dir, args.target)
+            result["primary_tokens"]["C"] = _primary_tokens(args.token_db, args.primary_model, jids)
+            result["arms"]["C"] = {"records": C, "wall_total": wall}
 
-    reports = {}
-    for compaction in compactions:
-        rep = supervised_report.build_report(records, compaction=compaction)
-        reports["compaction_on" if compaction else "compaction_off"] = rep
-    lever = supervised_report.compaction_lever(records, "C") if len(compactions) == 2 else None
-
-    headline_rep = reports.get("compaction_on") or next(iter(reports.values()))
-    markdown = supervised_report.render_markdown(headline_rep, reddit_baseline={"tokens": -75.5, "slowdown": 3.75})
-
-    output = {
-        "dataset": f"swebench_{args.variant}",
-        "arms": arms,
-        "parallel_n": args.parallel,
-        "records": records,
-        "reports": reports,
-        "compaction_lever": lever,
-        "markdown": markdown,
-    }
-    out_path = Path(args.output)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(output, indent=2))
-    print("\n" + markdown, file=sys.stderr)
+    result["summary"] = supervised_report.summarize_arms(result)
+    Path(args.output).write_text(json.dumps(result, indent=2))
+    print("\n" + supervised_report.render_supervised(result), file=sys.stderr)
     print(f"written to {args.output}", file=sys.stderr)
 
 
