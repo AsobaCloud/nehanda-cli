@@ -2159,6 +2159,30 @@ int db2_code_projection_visible_source_hash(const char *project, char *out, size
    return 0;
 }
 
+/* graph-feedback S2 (snapshot-diff route) stubs. ABI-compatible with
+ * db2/code_projection.h; the hermetic fixture reports no arbitrary-generation
+ * edges, no generation metadata (so a diff call 409s), and no generation list. */
+int db2_code_projection_list_edges_for_gen(long long gen_id, void *out, int max)
+{
+   (void)gen_id;
+   (void)out;
+   (void)max;
+   return 0;
+}
+int db2_code_projection_generation_meta(long long gen_id, void *out)
+{
+   (void)gen_id;
+   (void)out;
+   return 1; /* no such generation */
+}
+int db2_code_projection_generations_list(const char *project, void *out, int max)
+{
+   (void)project;
+   (void)out;
+   (void)max;
+   return 0;
+}
+
 /* Hermetic mirror of the §3 provenance helper (kb_service_graph.c). The real
  * definition lives in a db2-heavy unit; this fake keeps the route test pure
  * while preserving the only branch the projection route exercises: a
