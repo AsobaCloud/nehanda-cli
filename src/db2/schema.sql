@@ -1384,7 +1384,7 @@ CREATE TABLE IF NOT EXISTS lessons_outcome_ledger (
     actor_id        TEXT NOT NULL DEFAULT '',
     actor_source    TEXT NOT NULL DEFAULT 'agent'
                         CHECK (actor_source IN ('user','reviewer','agent')),
-    confirmed       BOOLEAN NOT NULL DEFAULT FALSE, -- gates durable negative trust (S3c)
+    confirmed       INTEGER NOT NULL DEFAULT 0,   -- 0/1; gates durable negative trust (S3c)
     confirmed_by    TEXT NOT NULL DEFAULT '',
     confirmed_at    TEXT NOT NULL DEFAULT '',
     ts              TEXT NOT NULL DEFAULT (to_char(CURRENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS'))
