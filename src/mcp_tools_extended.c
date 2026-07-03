@@ -314,6 +314,7 @@ static const struct fam_def MCP_FAMILIES[] = {
       {"preview", "preview_blast_radius"},
       {"hybrid", "index_hybrid"},
       {"hubs", "index_graph_hubs"},
+      {"audit", "index_graph_audit"},
       {"surprising", "index_graph_surprising"},
       {"neighbors", "index_graph_node"},
       {NULL, NULL}}},
