@@ -32,38 +32,41 @@ static int hub_find(kb_graph_hub_t *acc, int nacc, const char *name)
    return -1;
 }
 
-int kb_graph_hubs(const kb_graph_edge_t *edges, int n_edges, kb_graph_hub_t *out, int max)
+/* Bottom view: degree ASC, then weighted_degree ASC, then node asc — the exact
+ * mirror of hub_cmp so the top and bottom of one degree distribution agree. */
+static int hub_cmp_bottom(const void *a, const void *b)
 {
-   if (!edges || n_edges < 0 || !out || max <= 0)
-      return -1;
-   if (n_edges == 0)
-      return 0;
-   /* Reject an absurd edge count up front: 2*n_edges (the distinct-node bound)
-    * must not overflow a 32-bit size_t on the calloc below. Real callers pass at
-    * most a few thousand edges. */
-   if (n_edges > (INT_MAX / 2))
-      return -1;
+   const kb_graph_hub_t *x = (const kb_graph_hub_t *)a;
+   const kb_graph_hub_t *y = (const kb_graph_hub_t *)b;
+   if (x->degree != y->degree)
+      return (x->degree > y->degree) - (x->degree < y->degree); /* lower first */
+   if (x->weighted_degree != y->weighted_degree)
+      return (x->weighted_degree > y->weighted_degree) - (x->weighted_degree < y->weighted_degree);
+   return strcmp(x->node, y->node);
+}
 
-   /* Upper bound on distinct nodes = 2 per edge (each edge adds at most a new
-    * source + a new target). acc is calloc'd, so every node field starts zeroed
-    * and is only ever written via snprintf — hub_cmp's strcmp is therefore safe. */
-   long long cap = (long long)n_edges * 2;
+/* Accumulate per-node in/out/weighted degree over the edge list into a fresh
+ * malloc'd array of *nacc distinct nodes (caller frees). Returns NULL only on OOM
+ * (callers validate args + emptiness first). Linear-scan lookup — O(n_edges *
+ * distinct); fine for the bounded edge counts the routes cap at. */
+static kb_graph_hub_t *hub_build(const kb_graph_edge_t *edges, int n_edges, int *nacc)
+{
+   *nacc = 0;
+   long long cap = (long long)n_edges * 2; /* <= 2 distinct nodes per edge */
    kb_graph_hub_t *acc = calloc((size_t)cap, sizeof(*acc));
    if (!acc)
-      return -1;
-   int nacc = 0;
-
+      return NULL;
+   int n = 0;
    for (int e = 0; e < n_edges; e++)
    {
-      const char *s = edges[e].source;
-      const char *t = edges[e].target;
+      const char *s = edges[e].source, *t = edges[e].target;
       int w = edges[e].weight > 0 ? edges[e].weight : 0;
       if (s[0])
       {
-         int idx = hub_find(acc, nacc, s);
+         int idx = hub_find(acc, n, s);
          if (idx < 0)
          {
-            idx = nacc++;
+            idx = n++;
             snprintf(acc[idx].node, sizeof(acc[idx].node), "%s", s);
          }
          acc[idx].out_degree++;
@@ -72,10 +75,10 @@ int kb_graph_hubs(const kb_graph_edge_t *edges, int n_edges, kb_graph_hub_t *out
       }
       if (t[0])
       {
-         int idx = hub_find(acc, nacc, t);
+         int idx = hub_find(acc, n, t);
          if (idx < 0)
          {
-            idx = nacc++;
+            idx = n++;
             snprintf(acc[idx].node, sizeof(acc[idx].node), "%s", t);
          }
          acc[idx].in_degree++;
@@ -83,14 +86,49 @@ int kb_graph_hubs(const kb_graph_edge_t *edges, int n_edges, kb_graph_hub_t *out
          acc[idx].weighted_degree += w;
       }
    }
+   *nacc = n;
+   return acc;
+}
 
-   qsort(acc, (size_t)nacc, sizeof(*acc), hub_cmp);
+int kb_graph_is_container(const char *node)
+{
+   if (!node)
+      return 0;
+   return strncmp(node, "project:", 8) == 0 || strncmp(node, "file:", 5) == 0;
+}
 
-   int w = nacc < max ? nacc : max;
-   for (int i = 0; i < w; i++)
-      out[i] = acc[i];
+int kb_graph_hubs_ranked(const kb_graph_edge_t *edges, int n_edges, kb_graph_hub_t *out, int max,
+                         kb_hub_mode_t mode)
+{
+   if (!edges || n_edges < 0 || !out || max <= 0)
+      return -1;
+   if (n_edges == 0)
+      return 0;
+   /* 2*n_edges (the distinct-node bound) must not overflow the calloc. */
+   if (n_edges > (INT_MAX / 2))
+      return -1;
+
+   int nacc = 0;
+   kb_graph_hub_t *acc = hub_build(edges, n_edges, &nacc);
+   if (!acc)
+      return -1;
+
+   qsort(acc, (size_t)nacc, sizeof(*acc), mode == KB_HUB_TOP ? hub_cmp : hub_cmp_bottom);
+
+   int w = 0;
+   for (int i = 0; i < nacc && w < max; i++)
+   {
+      if (mode == KB_HUB_BOTTOM_NOHUB && kb_graph_is_container(acc[i].node))
+         continue;
+      out[w++] = acc[i];
+   }
    free(acc);
    return w;
+}
+
+int kb_graph_hubs(const kb_graph_edge_t *edges, int n_edges, kb_graph_hub_t *out, int max)
+{
+   return kb_graph_hubs_ranked(edges, n_edges, out, max, KB_HUB_TOP);
 }
 
 /* ── §4 surprising links ───────────────────────────────────────────────────── */
@@ -548,5 +586,782 @@ int kb_graph_communities(const kb_graph_edge_t *edges, int n_edges, kb_graph_com
    free(touched);
    free(seen);
    free(rep);
+   return w;
+}
+
+/* ── S1 self-audit: file-level dependency cycles ──────────────────────────────
+ * The projection has no direct file→file edge, so collapse: `defines` edges
+ * (file→symbol) give each symbol its defining file; `calls` edges (symbol→symbol)
+ * become directed file→file edges (self-file calls dropped, parallels deduped).
+ * Iterative Tarjan SCC over that file graph — every non-trivial SCC (>= 2 files)
+ * is a circular-dependency cluster. For each, one representative simple cycle is
+ * extracted (from the lex-smallest member, DFS to a back-edge) and the SCC size
+ * reported. Deterministic: files lex-indexed, adjacency + SCC output in index
+ * order. Recursion-free (an explicit work stack) so a deep graph can't overflow. */
+
+/* Resolve a symbol to its defining file index via a lex-sorted (symbol→file) map
+ * built from the `defines` edges. On a symbol defined in multiple files the
+ * lex-min file wins (deterministic). Linear map lookup is fine for bounded input. */
+static int cyc_file_of(const char (*dsym)[KB_GRAPH_NODE_MAX], const int *dfile, int nd,
+                       const char *sym)
+{
+   int lo = 0, hi = nd - 1;
+   while (lo <= hi)
+   {
+      int mid = lo + (hi - lo) / 2;
+      int c = strcmp(dsym[mid], sym);
+      if (c == 0)
+         return dfile[mid];
+      if (c < 0)
+         lo = mid + 1;
+      else
+         hi = mid - 1;
+   }
+   return -1;
+}
+
+int kb_graph_cycles(const kb_graph_reledge_t *edges, int n_edges, kb_graph_cycle_t *out, int max,
+                    int *truncated)
+{
+   if (truncated)
+      *truncated = 0;
+   if (!edges || n_edges < 0 || !out || max <= 0)
+      return -1;
+   if (n_edges == 0)
+      return 0;
+   if (n_edges > (INT_MAX / 4))
+      return -1;
+
+   /* 1. Distinct file names, lex-sorted → file index. Files come from the `defines`
+    *    edge sources (a file that defines at least one symbol). */
+   char(*files)[KB_GRAPH_NODE_MAX] = malloc((size_t)n_edges * KB_GRAPH_NODE_MAX);
+   if (!files)
+      return -1;
+   int nf = 0;
+   for (int e = 0; e < n_edges; e++)
+      if (strcmp(edges[e].relation, "defines") == 0 && edges[e].source[0])
+         snprintf(files[nf++], KB_GRAPH_NODE_MAX, "%s", edges[e].source);
+   if (nf == 0)
+   {
+      free(files);
+      return 0; /* no defines edges → no file structure to collapse */
+   }
+   qsort(files, (size_t)nf, KB_GRAPH_NODE_MAX, comm_str_cmp);
+   int nfu = 0;
+   for (int i = 0; i < nf; i++)
+      if (nfu == 0 || strcmp(files[nfu - 1], files[i]) != 0)
+      {
+         if (nfu != i)
+            memcpy(files[nfu], files[i], KB_GRAPH_NODE_MAX);
+         nfu++;
+      }
+
+   /* 2. symbol→file map (lex-sorted by symbol, lex-min file kept). */
+   char(*dsym)[KB_GRAPH_NODE_MAX] = malloc((size_t)n_edges * KB_GRAPH_NODE_MAX);
+   int *dfile_tmp = malloc((size_t)n_edges * sizeof(int));
+   if (!dsym || !dfile_tmp)
+   {
+      free(files);
+      free(dsym);
+      free(dfile_tmp);
+      return -1;
+   }
+   /* collect (symbol, file-index) from defines, sort by symbol, dedup lex-min */
+   int nd0 = 0;
+   for (int e = 0; e < n_edges; e++)
+      if (strcmp(edges[e].relation, "defines") == 0 && edges[e].source[0] && edges[e].target[0])
+      {
+         int fi = comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])files, nfu, edges[e].source);
+         if (fi < 0)
+            continue;
+         snprintf(dsym[nd0], KB_GRAPH_NODE_MAX, "%s", edges[e].target);
+         dfile_tmp[nd0] = fi;
+         nd0++;
+      }
+   /* index-sort dsym by symbol name (stable-ish via file-index tie-break) */
+   for (int i = 1; i < nd0; i++) /* insertion sort keeps memory simple; nd0 bounded */
+   {
+      char ks[KB_GRAPH_NODE_MAX];
+      snprintf(ks, sizeof(ks), "%s", dsym[i]);
+      int kf = dfile_tmp[i], j = i - 1;
+      while (j >= 0 && (strcmp(dsym[j], ks) > 0 || (strcmp(dsym[j], ks) == 0 && dfile_tmp[j] > kf)))
+      {
+         memcpy(dsym[j + 1], dsym[j], KB_GRAPH_NODE_MAX);
+         dfile_tmp[j + 1] = dfile_tmp[j];
+         j--;
+      }
+      snprintf(dsym[j + 1], KB_GRAPH_NODE_MAX, "%s", ks);
+      dfile_tmp[j + 1] = kf;
+   }
+   int nd = 0; /* dedup by symbol, keeping first (lex-min file due to sort) */
+   for (int i = 0; i < nd0; i++)
+      if (nd == 0 || strcmp(dsym[nd - 1], dsym[i]) != 0)
+      {
+         if (nd != i)
+         {
+            memcpy(dsym[nd], dsym[i], KB_GRAPH_NODE_MAX);
+            dfile_tmp[nd] = dfile_tmp[i];
+         }
+         nd++;
+      }
+
+   /* 3. Directed file→file adjacency from `calls`, deduped, in index order. Use an
+    *    nf×? — represent as an edge set then CSR. Bound edges by n_edges. */
+   int *ce_src = malloc((size_t)n_edges * sizeof(int));
+   int *ce_dst = malloc((size_t)n_edges * sizeof(int));
+   if (!ce_src || !ce_dst)
+   {
+      free(files);
+      free(dsym);
+      free(dfile_tmp);
+      free(ce_src);
+      free(ce_dst);
+      return -1;
+   }
+   int nce = 0;
+   for (int e = 0; e < n_edges; e++)
+   {
+      if (strcmp(edges[e].relation, "calls") != 0 || !edges[e].source[0] || !edges[e].target[0])
+         continue;
+      int fs = cyc_file_of(dsym, dfile_tmp, nd, edges[e].source);
+      int fd = cyc_file_of(dsym, dfile_tmp, nd, edges[e].target);
+      if (fs < 0 || fd < 0 || fs == fd)
+         continue;
+      ce_src[nce] = fs;
+      ce_dst[nce] = fd;
+      nce++;
+   }
+   free(dsym);
+   free(dfile_tmp);
+
+   /* CSR build over file nodes (0..nfu). */
+   int *deg = calloc((size_t)nfu, sizeof(int));
+   int *off = malloc((size_t)(nfu + 1) * sizeof(int));
+   if (!deg || !off)
+   {
+      free(files);
+      free(ce_src);
+      free(ce_dst);
+      free(deg);
+      free(off);
+      return -1;
+   }
+   for (int i = 0; i < nce; i++)
+      deg[ce_src[i]]++;
+   int tot = 0;
+   for (int i = 0; i < nfu; i++)
+   {
+      off[i] = tot;
+      tot += deg[i];
+   }
+   off[nfu] = tot;
+   int *adj = tot ? malloc((size_t)tot * sizeof(int)) : malloc(1);
+   int *fill = calloc((size_t)nfu, sizeof(int));
+   if (!adj || !fill)
+   {
+      free(files);
+      free(ce_src);
+      free(ce_dst);
+      free(deg);
+      free(off);
+      free(adj);
+      free(fill);
+      return -1;
+   }
+   for (int i = 0; i < nce; i++)
+      adj[off[ce_src[i]] + fill[ce_src[i]]++] = ce_dst[i];
+   free(fill);
+   free(ce_src);
+   free(ce_dst);
+   free(deg);
+
+   /* 4. Iterative Tarjan SCC. */
+   int *index = malloc((size_t)nfu * sizeof(int));
+   int *low = malloc((size_t)nfu * sizeof(int));
+   int *onstk = calloc((size_t)nfu, sizeof(int));
+   int *scc = malloc((size_t)nfu * sizeof(int)); /* SCC id per file, -1 = unassigned */
+   int *stk = malloc((size_t)nfu * sizeof(int));
+   int *wstk = malloc((size_t)nfu * sizeof(int));  /* DFS node stack */
+   int *witer = malloc((size_t)nfu * sizeof(int)); /* per-frame adj cursor */
+   if (!index || !low || !onstk || !scc || !stk || !wstk || !witer)
+   {
+      free(files);
+      free(off);
+      free(adj);
+      free(index);
+      free(low);
+      free(onstk);
+      free(scc);
+      free(stk);
+      free(wstk);
+      free(witer);
+      return -1;
+   }
+   for (int i = 0; i < nfu; i++)
+   {
+      index[i] = -1;
+      scc[i] = -1;
+   }
+   int idx_ctr = 0, sp = 0, nscc = 0;
+   for (int root = 0; root < nfu; root++)
+   {
+      if (index[root] != -1)
+         continue;
+      int wt = 0;
+      wstk[wt] = root;
+      witer[wt] = off[root];
+      index[root] = low[root] = idx_ctr++;
+      stk[sp++] = root;
+      onstk[root] = 1;
+      while (wt >= 0)
+      {
+         int v = wstk[wt];
+         if (witer[wt] < off[v + 1])
+         {
+            int w = adj[witer[wt]++];
+            if (index[w] == -1)
+            {
+               index[w] = low[w] = idx_ctr++;
+               stk[sp++] = w;
+               onstk[w] = 1;
+               wt++;
+               wstk[wt] = w;
+               witer[wt] = off[w];
+            }
+            else if (onstk[w] && index[w] < low[v])
+            {
+               low[v] = index[w];
+            }
+         }
+         else
+         {
+            if (low[v] == index[v]) /* v is an SCC root: pop */
+            {
+               int m;
+               do
+               {
+                  m = stk[--sp];
+                  onstk[m] = 0;
+                  scc[m] = nscc;
+               } while (m != v);
+               nscc++;
+            }
+            wt--;
+            if (wt >= 0 && low[v] < low[wstk[wt]])
+               low[wstk[wt]] = low[v];
+         }
+      }
+   }
+
+   /* 5. For each SCC with >= 2 members, emit a representative cycle. Members are
+    *    naturally in file-index (lex) order; the cycle path is found by a DFS from
+    *    the lex-smallest member back to itself, restricted to the SCC. */
+   int *scc_size = calloc((size_t)(nscc > 0 ? nscc : 1), sizeof(int));
+   if (!scc_size)
+   {
+      free(files);
+      free(off);
+      free(adj);
+      free(index);
+      free(low);
+      free(onstk);
+      free(scc);
+      free(stk);
+      free(wstk);
+      free(witer);
+      return -1;
+   }
+   for (int i = 0; i < nfu; i++)
+      scc_size[scc[i]]++;
+
+   /* reuse onstk as "in current DFS path" marker, index as parent-in-path */
+   int nout = 0;
+   for (int s = 0; s < nscc && nout < max; s++)
+   {
+      if (scc_size[s] < 2)
+         continue;
+      /* lex-smallest member = smallest file index in this SCC */
+      int start = -1;
+      for (int i = 0; i < nfu; i++)
+         if (scc[i] == s)
+         {
+            start = i;
+            break;
+         }
+      /* DFS from start restricted to SCC s, find first edge back to start → cycle */
+      for (int i = 0; i < nfu; i++)
+      {
+         onstk[i] = 0;
+         index[i] = -1;
+      }
+      int found = 0;
+      int dsp = 0;
+      wstk[dsp] = start;
+      witer[dsp] = off[start];
+      onstk[start] = 1;
+      while (dsp >= 0 && !found)
+      {
+         int v = wstk[dsp];
+         if (witer[dsp] < off[v + 1])
+         {
+            int w = adj[witer[dsp]++];
+            if (scc[w] != s)
+               continue;
+            if (w == start && dsp >= 1)
+            {
+               /* cycle = wstk[0..dsp] then back to start */
+               int len = dsp + 1;
+               if (len > KB_AUDIT_CYCLE_MAX_LEN)
+               {
+                  len = KB_AUDIT_CYCLE_MAX_LEN;
+                  if (truncated)
+                     *truncated = 1;
+               }
+               for (int p = 0; p < len; p++)
+                  snprintf(out[nout].files[p], KB_GRAPH_NODE_MAX, "%s", files[wstk[p]]);
+               out[nout].len = len;
+               nout++;
+               found = 1;
+            }
+            else if (!onstk[w])
+            {
+               onstk[w] = 1;
+               dsp++;
+               wstk[dsp] = w;
+               witer[dsp] = off[w];
+            }
+         }
+         else
+         {
+            onstk[v] = 0;
+            dsp--;
+         }
+      }
+      if (scc_size[s] > KB_AUDIT_CYCLE_MAX_LEN && truncated)
+         *truncated = 1;
+   }
+   if (nout >= max && truncated)
+      *truncated = 1;
+
+   free(files);
+   free(off);
+   free(adj);
+   free(index);
+   free(low);
+   free(onstk);
+   free(scc);
+   free(stk);
+   free(wstk);
+   free(witer);
+   free(scc_size);
+   return nout;
+}
+
+/* ── S1 self-audit: bridges (Brandes betweenness) ─────────────────────────────
+ * Unweighted, undirected betweenness over the symbol graph. Exact when node count
+ * <= KB_AUDIT_BRIDGE_EXACT_MAX; above it, estimated from a deterministic first-K
+ * lex source sample and scaled (marked approximate). Container/file-hub nodes are
+ * excluded from the output ranking (they still route paths). */
+
+static int bridge_cmp(const void *a, const void *b)
+{
+   const kb_graph_bridge_t *x = a, *y = b;
+   if (x->betweenness != y->betweenness)
+      return x->betweenness < y->betweenness ? 1 : -1; /* desc */
+   return strcmp(x->node, y->node);
+}
+
+int kb_graph_bridges(const kb_graph_edge_t *edges, int n_edges, kb_graph_bridge_t *out, int max,
+                     int *approximate)
+{
+   if (approximate)
+      *approximate = 0;
+   if (!edges || n_edges < 0 || !out || max <= 0)
+      return -1;
+   if (n_edges == 0)
+      return 0;
+   if (n_edges > (INT_MAX / 2))
+      return -1;
+
+   /* distinct nodes, lex-sorted → index */
+   long long cap = (long long)n_edges * 2;
+   char(*raw)[KB_GRAPH_NODE_MAX] = malloc((size_t)cap * KB_GRAPH_NODE_MAX);
+   if (!raw)
+      return -1;
+   int nr = 0;
+   for (int e = 0; e < n_edges; e++)
+   {
+      if (edges[e].source[0])
+         snprintf(raw[nr++], KB_GRAPH_NODE_MAX, "%s", edges[e].source);
+      if (edges[e].target[0])
+         snprintf(raw[nr++], KB_GRAPH_NODE_MAX, "%s", edges[e].target);
+   }
+   if (nr == 0)
+   {
+      free(raw);
+      return 0;
+   }
+   qsort(raw, (size_t)nr, KB_GRAPH_NODE_MAX, comm_str_cmp);
+   char(*names)[KB_GRAPH_NODE_MAX] = malloc((size_t)nr * KB_GRAPH_NODE_MAX);
+   if (!names)
+   {
+      free(raw);
+      return -1;
+   }
+   int N = 0;
+   for (int i = 0; i < nr; i++)
+      if (N == 0 || strcmp(names[N - 1], raw[i]) != 0)
+         snprintf(names[N++], KB_GRAPH_NODE_MAX, "%s", raw[i]);
+   free(raw);
+
+   /* undirected CSR (unweighted, dedup not required — parallel edges just add
+    * repeated neighbours, harmless for BFS shortest paths). */
+   int *deg = calloc((size_t)N, sizeof(int));
+   int *off = malloc((size_t)(N + 1) * sizeof(int));
+   if (!deg || !off)
+   {
+      free(names);
+      free(deg);
+      free(off);
+      return -1;
+   }
+   for (int e = 0; e < n_edges; e++)
+   {
+      if (!edges[e].source[0] || !edges[e].target[0])
+         continue;
+      int s = comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])names, N, edges[e].source);
+      int t = comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])names, N, edges[e].target);
+      if (s < 0 || t < 0 || s == t)
+         continue;
+      deg[s]++;
+      deg[t]++;
+   }
+   int tot = 0;
+   for (int i = 0; i < N; i++)
+   {
+      off[i] = tot;
+      tot += deg[i];
+   }
+   off[N] = tot;
+   int *adj = tot ? malloc((size_t)tot * sizeof(int)) : malloc(1);
+   int *fill = calloc((size_t)N, sizeof(int));
+   if (!adj || !fill)
+   {
+      free(names);
+      free(deg);
+      free(off);
+      free(adj);
+      free(fill);
+      return -1;
+   }
+   for (int e = 0; e < n_edges; e++)
+   {
+      if (!edges[e].source[0] || !edges[e].target[0])
+         continue;
+      int s = comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])names, N, edges[e].source);
+      int t = comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])names, N, edges[e].target);
+      if (s < 0 || t < 0 || s == t)
+         continue;
+      adj[off[s] + fill[s]++] = t;
+      adj[off[t] + fill[t]++] = s;
+   }
+   free(fill);
+   free(deg);
+
+   double *bc = calloc((size_t)N, sizeof(double));
+   double *delta = malloc((size_t)N * sizeof(double));
+   double *sigma = malloc((size_t)N * sizeof(double));
+   int *dist = malloc((size_t)N * sizeof(int));
+   int *order = malloc((size_t)N * sizeof(int)); /* BFS visit order (for reverse accumulation) */
+   int *bfsq = malloc((size_t)N * sizeof(int));
+   /* predecessor lists as CSR-of-edges is complex; use per-node pred via re-scan */
+   if (!bc || !delta || !sigma || !dist || !order || !bfsq)
+   {
+      free(names);
+      free(off);
+      free(adj);
+      free(bc);
+      free(delta);
+      free(sigma);
+      free(dist);
+      free(order);
+      free(bfsq);
+      return -1;
+   }
+
+   int sample = N;
+   double scale = 1.0;
+   if (N > KB_AUDIT_BRIDGE_EXACT_MAX)
+   {
+      sample = KB_AUDIT_BRIDGE_SAMPLE < N ? KB_AUDIT_BRIDGE_SAMPLE : N;
+      scale = (double)N / (double)sample; /* estimator scale */
+      if (approximate)
+         *approximate = 1;
+   }
+
+   for (int si = 0; si < sample; si++)
+   {
+      int s = si; /* deterministic: first `sample` lex nodes */
+      for (int i = 0; i < N; i++)
+      {
+         sigma[i] = 0.0;
+         dist[i] = -1;
+         delta[i] = 0.0;
+      }
+      sigma[s] = 1.0;
+      dist[s] = 0;
+      int qh = 0, qt = 0, no = 0;
+      bfsq[qt++] = s;
+      while (qh < qt)
+      {
+         int v = bfsq[qh++];
+         order[no++] = v;
+         for (int p = off[v]; p < off[v + 1]; p++)
+         {
+            int w = adj[p];
+            if (dist[w] < 0)
+            {
+               dist[w] = dist[v] + 1;
+               bfsq[qt++] = w;
+            }
+            if (dist[w] == dist[v] + 1)
+               sigma[w] += sigma[v];
+         }
+      }
+      /* reverse accumulation: for each w in reverse BFS order, push dependency to
+       * its predecessors (neighbours one hop closer to s). */
+      for (int i = no - 1; i >= 0; i--)
+      {
+         int w = order[i];
+         for (int p = off[w]; p < off[w + 1]; p++)
+         {
+            int v = adj[p];
+            if (dist[v] == dist[w] - 1 && sigma[w] > 0.0)
+               delta[v] += (sigma[v] / sigma[w]) * (1.0 + delta[w]);
+         }
+         if (w != s)
+            bc[w] += delta[w];
+      }
+   }
+
+   int nb = 0;
+   kb_graph_bridge_t *cand = malloc((size_t)N * sizeof(*cand));
+   if (!cand)
+   {
+      free(names);
+      free(off);
+      free(adj);
+      free(bc);
+      free(delta);
+      free(sigma);
+      free(dist);
+      free(order);
+      free(bfsq);
+      return -1;
+   }
+   for (int i = 0; i < N; i++)
+   {
+      if (kb_graph_is_container(names[i]))
+         continue;
+      double b = bc[i] * scale / 2.0; /* undirected: each path counted twice */
+      if (b <= 0.0)
+         continue;
+      snprintf(cand[nb].node, KB_GRAPH_NODE_MAX, "%s", names[i]);
+      cand[nb].betweenness = b;
+      nb++;
+   }
+   qsort(cand, (size_t)nb, sizeof(*cand), bridge_cmp);
+   int w = nb < max ? nb : max;
+   for (int i = 0; i < w; i++)
+      out[i] = cand[i];
+
+   free(cand);
+   free(names);
+   free(off);
+   free(adj);
+   free(bc);
+   free(delta);
+   free(sigma);
+   free(dist);
+   free(order);
+   free(bfsq);
+   return w;
+}
+
+/* ── S1 self-audit: low-cohesion communities (conductance) ────────────────────
+ * conductance(C) = cut(C) / min(vol(C), 2m - vol(C)), where vol is summed weighted
+ * degree and cut is the weight leaving C. Gated at member count >= min_size.
+ * Higher = worse cohesion (a split candidate). */
+
+static int cohesion_cmp(const void *a, const void *b)
+{
+   const kb_graph_cohesion_t *x = a, *y = b;
+   if (x->conductance != y->conductance)
+      return x->conductance < y->conductance ? 1 : -1; /* desc */
+   return strcmp(x->community, y->community);
+}
+
+int kb_graph_cohesion(const kb_graph_edge_t *edges, int n_edges, const kb_graph_community_t *comm,
+                      int n_comm, int min_size, kb_graph_cohesion_t *out, int max)
+{
+   if (!edges || n_edges < 0 || !comm || n_comm < 0 || !out || max <= 0)
+      return -1;
+   if (n_edges == 0 || n_comm == 0)
+      return 0;
+   if (min_size < 1)
+      min_size = 1;
+
+   /* Sort a copy of the (node → community) assignment by node for binary lookup. */
+   kb_graph_community_t *asg = malloc((size_t)n_comm * sizeof(*asg));
+   if (!asg)
+      return -1;
+   memcpy(asg, comm, (size_t)n_comm * sizeof(*asg));
+   /* insertion sort by node (n_comm bounded); assignment is usually already sorted */
+   for (int i = 1; i < n_comm; i++)
+   {
+      kb_graph_community_t key = asg[i];
+      int j = i - 1;
+      while (j >= 0 && strcmp(asg[j].node, key.node) > 0)
+      {
+         asg[j + 1] = asg[j];
+         j--;
+      }
+      asg[j + 1] = key;
+   }
+
+   /* Distinct communities (lex-sorted) + per-community accumulators. */
+   char(*cnames)[KB_GRAPH_NODE_MAX] = malloc((size_t)n_comm * KB_GRAPH_NODE_MAX);
+   if (!cnames)
+   {
+      free(asg);
+      return -1;
+   }
+   for (int i = 0; i < n_comm; i++)
+      snprintf(cnames[i], KB_GRAPH_NODE_MAX, "%s", asg[i].community);
+   qsort(cnames, (size_t)n_comm, KB_GRAPH_NODE_MAX, comm_str_cmp);
+   int nc = 0;
+   for (int i = 0; i < n_comm; i++)
+      if (nc == 0 || strcmp(cnames[nc - 1], cnames[i]) != 0)
+      {
+         if (nc != i)
+            memcpy(cnames[nc], cnames[i], KB_GRAPH_NODE_MAX);
+         nc++;
+      }
+
+   long long *vol = calloc((size_t)nc, sizeof(long long));
+   long long *cut = calloc((size_t)nc, sizeof(long long));
+   int *csize = calloc((size_t)nc, sizeof(int));
+   if (!vol || !cut || !csize)
+   {
+      free(asg);
+      free(cnames);
+      free(vol);
+      free(cut);
+      free(csize);
+      return -1;
+   }
+   for (int i = 0; i < n_comm; i++)
+   {
+      int ci = comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])cnames, nc, asg[i].community);
+      if (ci >= 0)
+         csize[ci]++;
+   }
+
+   long long two_m = 0;
+   for (int e = 0; e < n_edges; e++)
+   {
+      if (!edges[e].source[0] || !edges[e].target[0] ||
+          strcmp(edges[e].source, edges[e].target) == 0)
+         continue;
+      long long w = edges[e].weight > 0 ? edges[e].weight : 0;
+      /* community of each endpoint — binary search the node-sorted assignment */
+      int si = -1, ti = -1;
+      {
+         int lo = 0, hi = n_comm - 1;
+         while (lo <= hi)
+         {
+            int mid = lo + (hi - lo) / 2;
+            int c = strcmp(asg[mid].node, edges[e].source);
+            if (c == 0)
+            {
+               si = mid;
+               break;
+            }
+            if (c < 0)
+               lo = mid + 1;
+            else
+               hi = mid - 1;
+         }
+         lo = 0;
+         hi = n_comm - 1;
+         while (lo <= hi)
+         {
+            int mid = lo + (hi - lo) / 2;
+            int c = strcmp(asg[mid].node, edges[e].target);
+            if (c == 0)
+            {
+               ti = mid;
+               break;
+            }
+            if (c < 0)
+               lo = mid + 1;
+            else
+               hi = mid - 1;
+         }
+      }
+      int cs = si >= 0
+                   ? comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])cnames, nc, asg[si].community)
+                   : -1;
+      int ct = ti >= 0
+                   ? comm_index_of((const char(*)[KB_GRAPH_NODE_MAX])cnames, nc, asg[ti].community)
+                   : -1;
+      two_m += 2 * w;
+      if (cs >= 0)
+         vol[cs] += w;
+      if (ct >= 0)
+         vol[ct] += w;
+      if (cs >= 0 && ct >= 0 && cs != ct)
+      {
+         cut[cs] += w;
+         cut[ct] += w;
+      }
+   }
+
+   int nout = 0;
+   kb_graph_cohesion_t *result = malloc((size_t)nc * sizeof(*result));
+   if (!result)
+   {
+      free(asg);
+      free(cnames);
+      free(vol);
+      free(cut);
+      free(csize);
+      return -1;
+   }
+   for (int c = 0; c < nc; c++)
+   {
+      if (csize[c] < min_size)
+         continue;
+      long long other = two_m - vol[c];
+      long long denom = vol[c] < other ? vol[c] : other;
+      if (denom <= 0)
+         continue; /* whole graph is one community, or empty — no meaningful cut */
+      double cond = (double)cut[c] / (double)denom;
+      snprintf(result[nout].community, KB_GRAPH_NODE_MAX, "%s", cnames[c]);
+      result[nout].conductance = cond;
+      result[nout].size = csize[c];
+      nout++;
+   }
+   qsort(result, (size_t)nout, sizeof(*result), cohesion_cmp);
+   int w = nout < max ? nout : max;
+   for (int i = 0; i < w; i++)
+      out[i] = result[i];
+
+   free(result);
+   free(asg);
+   free(cnames);
+   free(vol);
+   free(cut);
+   free(csize);
    return w;
 }
