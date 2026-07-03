@@ -17,6 +17,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h> /* strncasecmp */
 
 /* Per-thread captured identity for the request currently being routed. Thread-
  * local for the same reason as the front-end's g_rpc_conn_caps: each connection
@@ -30,6 +31,17 @@ static _Thread_local char tl_principal[VAULT_PRINCIPAL_MAX] = "";
  * call, cleared with the rest. Points into the request buffer — read only within
  * the handler. */
 static _Thread_local const char *tl_query = "";
+/* The in-flight request's inbound aimee-session-id header value and bearer token,
+ * captured for the economizer gateway-mutation session-key resolver (which needs
+ * them alongside the vault principal). Copied out of the request buffer at capture
+ * and cleared (bearer zeroed) with the rest — valid only during the route handler
+ * on the serving thread. Empty when absent. */
+static _Thread_local char tl_session_hdr[80] = "";
+/* Bearer buffer sized for long tokens (JWT/OIDC bearers can exceed 512B). Truncation
+ * beyond this is deterministic (same input -> same truncated string -> same session
+ * key), so it only risks two >2KB bearers that share a 2KB prefix sharing a disable
+ * bucket — a benign availability edge, not a security boundary. */
+static _Thread_local char tl_bearer[2048] = "";
 
 /* The shared secret that authenticates a webchat `webuser:` assertion is the
  * server.token file (0600, in AIMEE_HOME — the secret only the webchat backend
@@ -110,6 +122,30 @@ void server_http_identity_capture(int fd, int is_tcp, const char *buf)
    }
    tl_transport = vault_principal_resolve(is_tcp, is_tls, peer_uid, webuser, webuser_token_ok,
                                           cert_cn, tl_principal, sizeof(tl_principal));
+
+   /* Capture the economizer session-key inputs (aimee-session-id + bearer) for
+    * buffered gateway handlers. Purely additive; empty when absent. */
+   tl_session_hdr[0] = '\0';
+   tl_bearer[0] = '\0';
+   if (buf)
+   {
+      http_header(buf, "aimee-session-id", tl_session_hdr, sizeof(tl_session_hdr));
+      char authz[2048] = "";
+      /* Bearer scheme token is case-insensitive (RFC 7235 §2.1). */
+      if (http_header(buf, "Authorization", authz, sizeof(authz)) &&
+          strncasecmp(authz, "Bearer ", 7) == 0)
+         snprintf(tl_bearer, sizeof(tl_bearer), "%s", authz + 7);
+   }
+}
+
+const char *server_http_identity_session_hdr(void)
+{
+   return tl_session_hdr;
+}
+
+const char *server_http_identity_bearer(void)
+{
+   return tl_bearer;
 }
 
 const char *server_http_identity_principal(void)
@@ -132,6 +168,8 @@ void server_http_identity_clear(void)
    tl_transport = ATTEST_NONE;
    tl_principal[0] = '\0';
    tl_query = "";
+   tl_session_hdr[0] = '\0';
+   memset(tl_bearer, 0, sizeof(tl_bearer)); /* zero the secret, don't just truncate */
 }
 
 void server_http_identity_set_query(const char *q)
