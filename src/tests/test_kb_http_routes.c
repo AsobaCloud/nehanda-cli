@@ -2132,6 +2132,33 @@ int db2_code_projection_list_edges(const char *project, void *out, int max)
    return n;
 }
 
+/* graph-feedback S1 (self-audit route) stubs. The audit route reaches these DB2
+ * projection helpers; the hermetic fixture reports a visible generation with no
+ * persisted communities and no source hash. Signatures are ABI-compatible with
+ * db2/code_projection.h (int64_t==long long, code_projection_community_t*==void*,
+ * size_t) — the header is deliberately not included here (same reason the
+ * list_edges stub above uses void*). The real prompt_sanitizer.o IS linked (pure,
+ * no deps), so sanitize_for_prompt is exercised for real, not stubbed. */
+long long db2_code_projection_visible_id(const char *project)
+{
+   (void)project;
+   return 1;
+}
+int db2_code_projection_communities_list(long long gen_id, void *out, int max)
+{
+   (void)gen_id;
+   (void)out;
+   (void)max;
+   return 0;
+}
+int db2_code_projection_visible_source_hash(const char *project, char *out, size_t out_len)
+{
+   (void)project;
+   if (out && out_len)
+      out[0] = '\0';
+   return 0;
+}
+
 /* Hermetic mirror of the §3 provenance helper (kb_service_graph.c). The real
  * definition lives in a db2-heavy unit; this fake keeps the route test pure
  * while preserving the only branch the projection route exercises: a

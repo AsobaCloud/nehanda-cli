@@ -45,8 +45,10 @@ undocumented, or a documented file no longer calls the sanitizer.
 
 | File | Render surface | Kind(s) | Slice |
 |------|----------------|---------|-------|
-| _(none yet)_ | S0 ships the boundary only; §1/§2/§3/§6 render surfaces are added in later slices and register here as they land. | — | S0 |
+| `src/kb/http/kb_http_code.c` | `GET /v1/code/graph/audit` findings — cycle file paths, orphan/bridge/unverified symbol labels, community names rendered into the agent-visible audit JSON. | `SANITIZE_FILE_PATH`, `SANITIZE_SYMBOL_LABEL`, `SANITIZE_COMMUNITY_NAME` | S1 |
 
-> When S1 (self-audit) renders finding strings, S3 (lessons), or S5/S6 (grammars /
-> media captions) render corpus text, add a row here in the same PR that adds the
+> The audit route renders corpus-derived node/file/community strings; each goes
+> through `audit_safe()` → `sanitize_for_prompt` (fail-closed to `[unsafe-label]`
+> on `SANITIZE_REJECTED`). When S3 (lessons) or S5/S6 (grammars / media captions)
+> render corpus text, add a row here in the same PR that adds the
 > `sanitize_for_prompt` call, or `make lint` fails.
