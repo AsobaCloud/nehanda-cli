@@ -58,7 +58,7 @@ int main(void)
                           ".go",   ".js",   ".mjs", ".jsx",   ".ts",  ".tsx",    ".rs",
                           ".java", ".rb",   ".php", ".lua",   ".sh",  ".bash",   ".swift",
                           ".kt",   ".dart", ".css", ".scala", ".sc",  ".groovy", ".gradle",
-                          ".m",    ".mm",   ".kts", ".ex",    ".exs"};
+                          ".m",    ".mm",   ".kts", ".ex",    ".exs", ".ps1",    ".psm1"};
    for (size_t i = 0; i < sizeof(avail) / sizeof(avail[0]); i++)
       assert(code_treesitter_available(avail[i]));
    assert(!code_treesitter_available(".txt"));
@@ -194,6 +194,11 @@ int main(void)
    const char *sh = "foo() { echo hi; }\nfunction bar { echo yo; }\n";
    want(".sh", sh, "foo", "function");
    want(".sh", sh, "bar", "function");
+   /* Bash also has `command`/`command_name`/`statement_list` node types (shared with
+    * PowerShell's additions), but bash defs stay clean (a command is not a def) and
+    * bash CALL extraction is gated off entirely (code_treesitter_calls returns -1 for
+    * TSL_BASH), so the PowerShell node-type additions do not affect bash. */
+   want(".sh", "foo() { helper arg; }\n", "foo", "function"); /* command != spurious def */
 
    /* --- Swift --- */
    const char *swift = "func f(){}\nclass C{}\nstruct S{}\nprotocol P{}\n";
@@ -279,6 +284,15 @@ int main(void)
    want(".ex", elixir, "helper", "function"); /* defp foo — name is a bare identifier */
    want(".exs", "defmodule S do\n  def run, do: :ok\nend\n", "run", "function");
 
+   /* --- PowerShell (function_statement → function; class → type; method → function;
+    * command invocations are the call form) --- */
+   const char *ps = "function Get-Thing {\n  param($x)\n  Write-Host $x\n}\n"
+                    "class Animal {\n  [void] Speak() { Write-Host 'hi' }\n}\n";
+   want(".ps1", ps, "Get-Thing", "function");
+   want(".ps1", ps, "Animal", "type");
+   want(".ps1", ps, "Speak", "function"); /* class method */
+   want(".psm1", "function Export-Data {}\n", "Export-Data", "function");
+
    /* --- nested members: methods inside a type body are surfaced (the walk descends type
     * bodies but never function bodies), across the OO languages. --- */
    want(".cpp", "class C { void m(){} };\n", "m", "function");
@@ -323,6 +337,8 @@ int main(void)
    /* Elixir: a body call attributes to the enclosing def; the `def` macro-call itself
     * is NOT emitted as a call (the !is_def guard). */
    wantcall(".ex", "defmodule M do\n  def run do\n    work()\n  end\nend\n", "run", "work");
+   /* PowerShell: a command invocation inside a function is a call to that command. */
+   wantcall(".ps1", "function Deploy {\n  Publish-Build\n}\n", "Deploy", "Publish-Build");
    wantcall(".py", "def f():\n    obj.m()\n", "f", "m");
    wantcall(".js", "function f(){ g(); a.b.c(); }\n", "f", "g");
    wantcall(".js", "function f(){ a.b.c(); }\n", "f", "c"); /* chained -> last id */
