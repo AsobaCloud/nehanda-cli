@@ -42,6 +42,7 @@ const TSLanguage *tree_sitter_scala(void);
 const TSLanguage *tree_sitter_groovy(void);
 const TSLanguage *tree_sitter_objc(void);
 const TSLanguage *tree_sitter_elixir(void);
+const TSLanguage *tree_sitter_powershell(void);
 
 typedef enum
 {
@@ -65,7 +66,8 @@ typedef enum
    TSL_SCALA,
    TSL_GROOVY,
    TSL_OBJC,
-   TSL_ELIXIR
+   TSL_ELIXIR,
+   TSL_POWERSHELL
 } ts_lang_t;
 
 static const TSLanguage *ts_language_for_ext(const char *ext, ts_lang_t *which)
@@ -119,6 +121,8 @@ static const TSLanguage *ts_language_for_ext(const char *ext, ts_lang_t *which)
        {".mm", TSL_OBJC, tree_sitter_objc},
        {".ex", TSL_ELIXIR, tree_sitter_elixir},
        {".exs", TSL_ELIXIR, tree_sitter_elixir},
+       {".ps1", TSL_POWERSHELL, tree_sitter_powershell},
+       {".psm1", TSL_POWERSHELL, tree_sitter_powershell},
    };
    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++)
       if (strcmp(ext, map[i].ext) == 0)
@@ -153,7 +157,9 @@ static int is_identifier_type(const char *t)
    return strcmp(t, "identifier") == 0 || strcmp(t, "type_identifier") == 0 ||
           strcmp(t, "field_identifier") == 0 || strcmp(t, "simple_identifier") == 0 ||
           strcmp(t, "constant") == 0 || strcmp(t, "name") == 0 ||
-          strcmp(t, "property_identifier") == 0;
+          strcmp(t, "property_identifier") == 0 ||
+          /* PowerShell: the invoked command name behaves as the callee identifier */
+          strcmp(t, "command_name") == 0;
 }
 
 /* Pre-order DFS for the first descendant whose type is one of the identifier kinds — used
@@ -658,6 +664,34 @@ static int classify_elixir(TSNode node, const char *content, const char **kind, 
    return 1;
 }
 
+/* PowerShell: function_statement/class_method_definition → function, class_statement
+ * → type. The name is a specific child node type (function_name or simple_name), not a
+ * `name` field or a generic identifier, so pull it with child_of_type. Command
+ * invocations are calls (see is_call_node/is_identifier_type for command_name). */
+static int classify_powershell(TSNode node, const char **kind, TSNode *name_root)
+{
+   const char *t = ts_node_type(node);
+   const char *name_type;
+   if (strcmp(t, "function_statement") == 0)
+   {
+      *kind = "function";
+      name_type = "function_name";
+   }
+   else if (strcmp(t, "class_method_definition") == 0)
+   {
+      *kind = "function";
+      name_type = "simple_name";
+   }
+   else if (strcmp(t, "class_statement") == 0)
+   {
+      *kind = "type";
+      name_type = "simple_name";
+   }
+   else
+      return 0;
+   return child_of_type(node, name_type, name_root);
+}
+
 static int classify(ts_lang_t lang, TSNode node, const char *content, const char **kind,
                     TSNode *name_root)
 {
@@ -704,6 +738,8 @@ static int classify(ts_lang_t lang, TSNode node, const char *content, const char
       return classify_objc(node, kind, name_root);
    case TSL_ELIXIR:
       return classify_elixir(node, content, kind, name_root);
+   case TSL_POWERSHELL:
+      return classify_powershell(node, kind, name_root);
    }
    return 0;
 }
@@ -745,7 +781,10 @@ static int is_descendable(const char *t)
        /* Elixir: a module is a `call` (defmodule …) whose members live in its do_block;
         * both must be descended. Safe: visit() halts on any matched function, so a
         * `def`'s body (also a do_block) is never descended. */
-       "call", "do_block", NULL};
+       "call", "do_block",
+       /* PowerShell: top-level defs are wrapped in a statement_list under `program`;
+        * class bodies hold their method definitions */
+       "statement_list", "class_statement", NULL};
    for (int i = 0; set[i]; i++)
       if (strcmp(t, set[i]) == 0)
          return 1;
@@ -854,8 +893,9 @@ static int is_call_node(const char *t)
    return strcmp(t, "call_expression") == 0 || strcmp(t, "call") == 0 ||
           strcmp(t, "method_invocation") == 0 || strcmp(t, "invocation_expression") == 0 ||
           strcmp(t, "function_call") == 0 || strcmp(t, "juxt_function_call") == 0 ||
-          strcmp(t, "message_expression") == 0 || strcmp(t, "function_call_expression") == 0 ||
-          strcmp(t, "member_call_expression") == 0 || strcmp(t, "scoped_call_expression") == 0 ||
+          strcmp(t, "message_expression") == 0 || strcmp(t, "command") == 0 ||
+          strcmp(t, "function_call_expression") == 0 || strcmp(t, "member_call_expression") == 0 ||
+          strcmp(t, "scoped_call_expression") == 0 ||
           strcmp(t, "nullsafe_member_call_expression") == 0 || strcmp(t, "macro_invocation") == 0 ||
           strcmp(t, "object_creation_expression") == 0;
 }
