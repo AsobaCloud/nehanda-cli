@@ -42,5 +42,8 @@ int handle_get_code_graph_route(const char *method, const char *query_string, ch
 int handle_get_code_graph_surprising(const char *query_string, char *out_buf, int out_cap);
 int handle_get_code_graph_surprising_route(const char *method, const char *query_string,
                                            char *out_buf, int out_cap);
+int handle_get_code_graph_audit(const char *query_string, char *out_buf, int out_cap);
+int handle_get_code_graph_audit_route(const char *method, const char *query_string, char *out_buf,
+                                      int out_cap);
 
 #endif

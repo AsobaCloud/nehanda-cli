@@ -1124,6 +1124,7 @@ char *kb_client_pdf_open_asset(const char *project, long long asset_id, int *sta
 char *kb_client_code_hybrid(const char *query, const char *symbol, const char *project,
                             int max_results, int *status_out);
 char *kb_client_code_graph_hubs(const char *project, int max_results, int *status_out);
+char *kb_client_code_graph_audit(const char *project, int max_findings, int *status_out);
 /* /v1/code/graph/surprising: file pairs that are semantically close yet
  * structurally far (project required). `judge` opts into the LLM confirmation. */
 char *kb_client_code_graph_surprising(const char *project, int max_results, int judge,

@@ -23,6 +23,18 @@ typedef struct
    int weight;
 } kb_graph_edge_t;
 
+/* A relation-typed edge — the generic kb_graph_edge_t plus the projection's
+ * relation label ("calls"/"defines"/"imports"/…). Only kb_graph_cycles needs
+ * relations (to collapse symbols to their defining file); the other analytics are
+ * relation-agnostic, so this is kept separate rather than bloating kb_graph_edge_t.
+ * Mirrors the (source, relation, target) of code_projection_edge_t. */
+typedef struct
+{
+   char source[KB_GRAPH_NODE_MAX];
+   char relation[64];
+   char target[KB_GRAPH_NODE_MAX];
+} kb_graph_reledge_t;
+
 /* One ranked hub node. */
 typedef struct
 {
@@ -150,5 +162,99 @@ typedef struct
  * of the order edges are presented in. */
 int kb_graph_communities(const kb_graph_edge_t *edges, int n_edges, kb_graph_community_t *out,
                          int max);
+
+/* ── S1 self-audit: surface what the graph is unsure about (proposal §1) ─────────
+ *
+ * A read-only, deterministic analytic pass over the projection graph that emits
+ * ranked structural-health findings. Pure (in-memory edge array only); each
+ * function unit-tests standalone and is composed by the /v1/code/graph/audit
+ * route. Every output list is total-ordered (score then node lex) so equal-scored
+ * items never permute between runs and read as change. */
+
+/* Hub-ranking view. TOP = most-connected (the existing refactor-risk signal).
+ * BOTTOM = least-connected (the orphan view). BOTTOM_NOHUB = least-connected
+ * excluding container/hub nodes (project:/file: prefixes) so a genuinely orphaned
+ * *symbol* isn't crowded out by empty container nodes. One ranking, two views
+ * (§1): top and bottom of the same degree distribution can't disagree. */
+typedef enum
+{
+   KB_HUB_TOP = 0,
+   KB_HUB_BOTTOM = 1,
+   KB_HUB_BOTTOM_NOHUB = 2
+} kb_hub_mode_t;
+
+/* Rank nodes by degree in the requested view; otherwise identical contract to
+ * kb_graph_hubs (which is now the KB_HUB_TOP wrapper). For a BOTTOM* view the
+ * order is degree ASC, then weighted_degree ASC, then node asc. */
+int kb_graph_hubs_ranked(const kb_graph_edge_t *edges, int n_edges, kb_graph_hub_t *out, int max,
+                         kb_hub_mode_t mode);
+
+/* True if `node` is a container/hub node (project:/file: key prefix) — excluded
+ * from the orphan and bridge views because their degree is structural bookkeeping,
+ * not a real symbol relationship. */
+int kb_graph_is_container(const char *node);
+
+/* ── cycles ──────────────────────────────────────────────────────────────────
+ * File-level dependency cycles. The projection carries no direct file→file edge,
+ * so we collapse: `defines` edges (file→symbol) map each symbol to its file, then
+ * `calls` edges (symbol→symbol) become directed file→file edges (self-file calls
+ * dropped). Tarjan SCC over that file graph, then a bounded DFS per non-trivial
+ * SCC enumerates up to KB_AUDIT_CYCLE_CAP simple cycles (Johnson explodes on dense
+ * diamonds). Truncation is reported, never silent. */
+#define KB_AUDIT_CYCLE_MAX_LEN 32  /* longest cycle reported; longer ones truncated */
+#define KB_AUDIT_CYCLE_CAP     100 /* max cycles enumerated per SCC */
+
+typedef struct
+{
+   char files[KB_AUDIT_CYCLE_MAX_LEN][KB_GRAPH_NODE_MAX];
+   int len; /* number of files in the cycle (>= 2) */
+} kb_graph_cycle_t;
+
+/* Detect file-level cycles into out[] (up to max), each a canonical-rotation
+ * ordered file list. Sets *truncated to 1 if any SCC hit KB_AUDIT_CYCLE_CAP or
+ * the out buffer filled. Returns the count written, 0 if acyclic, -1 on bad arg. */
+int kb_graph_cycles(const kb_graph_reledge_t *edges, int n_edges, kb_graph_cycle_t *out, int max,
+                    int *truncated);
+
+/* ── bridges ─────────────────────────────────────────────────────────────────
+ * High edge-betweenness nodes that are NOT container/file hubs — the cross-cutting
+ * concerns connecting otherwise-separate modules. Brandes betweenness (unweighted,
+ * undirected). Exact when the node count is <= KB_AUDIT_BRIDGE_EXACT_MAX; above it,
+ * betweenness is estimated from a deterministic first-K lex source sample and the
+ * result is marked approximate. */
+#define KB_AUDIT_BRIDGE_EXACT_MAX 1500 /* exact Brandes below this many nodes */
+#define KB_AUDIT_BRIDGE_SAMPLE    256  /* deterministic source sample above it */
+
+typedef struct
+{
+   char node[KB_GRAPH_NODE_MAX];
+   double betweenness; /* Brandes score; approximate scores are sample-scaled */
+} kb_graph_bridge_t;
+
+/* Rank non-container nodes by betweenness into out[] (up to max), desc then node
+ * asc. Sets *approximate to 1 when sampling was used. Returns count written, 0 if
+ * no bridges, -1 on bad arg. */
+int kb_graph_bridges(const kb_graph_edge_t *edges, int n_edges, kb_graph_bridge_t *out, int max,
+                     int *approximate);
+
+/* ── low-cohesion communities ────────────────────────────────────────────────
+ * A community (from kb_graph_communities) is incohesive when a large share of its
+ * incident edge weight leaves the community. Scored by conductance =
+ * cut(C) / min(vol(C), vol(V\C)) — NOT raw internal density, which returns ~1.0
+ * for tiny communities and misreads sparse-but-valid structure. Gated at size >=
+ * min_size (proposal: 8). Higher conductance = worse cohesion (a split candidate). */
+typedef struct
+{
+   char community[KB_GRAPH_NODE_MAX];
+   double conductance;
+   int size; /* member count */
+} kb_graph_cohesion_t;
+
+/* Score communities and write the worst (highest-conductance) into out[] (up to
+ * max), desc then community lex. `comm`/`n_comm` is the assignment from
+ * kb_graph_communities over the SAME edges. Only communities of size >= min_size
+ * are considered. Returns count written, 0 if none qualify, -1 on bad arg. */
+int kb_graph_cohesion(const kb_graph_edge_t *edges, int n_edges, const kb_graph_community_t *comm,
+                      int n_comm, int min_size, kb_graph_cohesion_t *out, int max);
 
 #endif /* KB_GRAPH_ANALYTICS_H */

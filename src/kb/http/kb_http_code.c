@@ -21,6 +21,7 @@
 #include "kb/kb_graph_analytics.h"
 #include "kb/kb_service_graph.h"
 #include "kb/kb_surprising_judge.h"
+#include "kb/prompt_sanitizer.h" /* §1 render boundary: sanitize corpus-derived labels */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -1699,6 +1700,372 @@ int handle_get_code_graph_surprising_route(const char *method, const char *query
    if (strcmp(method, "GET") != 0)
       return code_method_not_allowed(out_buf, out_cap);
    return handle_get_code_graph_surprising(query_string, out_buf, out_cap);
+}
+
+/* GET /v1/code/graph/audit?project=<proj>[&max_findings=N]
+ *
+ * §1 self-audit: a deterministic, read-only structural-health pass over the
+ * project's visible projection graph. Emits ranked findings — file-dependency
+ * cycles, orphaned symbols, bridge symbols, low-cohesion communities, and
+ * (labeled `no-confirmation-yet`) unverified-inferred edges — with an honesty gate
+ * that says "clean" / "insufficient signal" rather than inventing noise. Pure
+ * analytics over data already persisted; no LLM. Every corpus-derived string
+ * rendered into the response passes the S0 sanitizer (fail-closed per field). */
+#define AUDIT_MAX_EDGES         10000
+#define AUDIT_COHESION_MIN_SIZE 8
+#define AUDIT_UNVERIFIED_MIN    3 /* >= this many inferred-provenance incident edges */
+
+/* FNV-1a 32-bit over a string → 8 hex chars. Deterministic stable id for the
+ * §1↔§3 finding-outcome loop (a finding's id must not drift run-to-run). */
+static void audit_finding_id(const char *prefix, const char *key, char *out, size_t out_len)
+{
+   unsigned int h = 2166136261u;
+   for (const unsigned char *p = (const unsigned char *)key; p && *p; p++)
+   {
+      h ^= *p;
+      h *= 16777619u;
+   }
+   snprintf(out, out_len, "%s:%08x", prefix, h);
+}
+
+/* Sanitize a corpus-derived label into buf (returned). On SANITIZE_REJECTED — a
+ * structured field carrying control/injection markup — fail closed to a constant
+ * marker so the finding still renders but can't smuggle a payload into an agent. */
+static const char *audit_safe(const char *in, sanitize_kind_t kind, char *buf, size_t buflen)
+{
+   sanitize_reason_t reason;
+   sanitize_status_t st = sanitize_for_prompt(in ? in : "", kind, buf, buflen, &reason);
+   if (st == SANITIZE_REJECTED)
+      snprintf(buf, buflen, "[unsafe-label]");
+   return buf;
+}
+
+int handle_get_code_graph_audit(const char *query_string, char *out_buf, int out_cap)
+{
+   char project[256] = "";
+   if (!code_qparam(query_string, "project", project, sizeof(project)) || !project[0])
+      return code_scan_write_error(out_buf, out_cap, "missing project");
+
+   int max_f = 20;
+   char mf[16] = "";
+   if (code_qparam(query_string, "max_findings", mf, sizeof(mf)))
+      max_f = atoi(mf);
+   if (max_f < 1)
+      max_f = 1;
+   if (max_f > 200)
+      max_f = 200;
+
+   if (!db2_is_initialized())
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"knowledge service not initialized\"}");
+      return 503;
+   }
+
+   code_projection_edge_t *edges = calloc(AUDIT_MAX_EDGES, sizeof(*edges));
+   kb_graph_edge_t *gedges = calloc(AUDIT_MAX_EDGES, sizeof(*gedges));
+   kb_graph_reledge_t *redges = calloc(AUDIT_MAX_EDGES, sizeof(*redges));
+   if (!edges || !gedges || !redges)
+   {
+      free(edges);
+      free(gedges);
+      free(redges);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+
+   int ne = db2_code_projection_list_edges(project, edges, AUDIT_MAX_EDGES);
+   if (ne < 0)
+   {
+      free(edges);
+      free(gedges);
+      free(redges);
+      snprintf(out_buf, (size_t)out_cap,
+               "{\"error\":\"projection graph unavailable\",\"code\":\"no_projection\"}");
+      return 503;
+   }
+   for (int i = 0; i < ne; i++)
+   {
+      snprintf(gedges[i].source, sizeof(gedges[i].source), "%s", edges[i].source);
+      snprintf(gedges[i].target, sizeof(gedges[i].target), "%s", edges[i].target);
+      gedges[i].weight = edges[i].structural_weight;
+      snprintf(redges[i].source, sizeof(redges[i].source), "%s", edges[i].source);
+      snprintf(redges[i].relation, sizeof(redges[i].relation), "%s", edges[i].relation);
+      snprintf(redges[i].target, sizeof(redges[i].target), "%s", edges[i].target);
+   }
+
+   /* Community assignment for the visible generation (for cohesion + grouping). */
+   int64_t vgen = db2_code_projection_visible_id(project);
+   code_projection_community_t *crows = NULL;
+   kb_graph_community_t *comm = NULL;
+   int ncomm = 0;
+   if (vgen > 0)
+   {
+      crows = calloc(AUDIT_MAX_EDGES, sizeof(*crows));
+      comm = calloc(AUDIT_MAX_EDGES, sizeof(*comm));
+      if (crows && comm)
+      {
+         ncomm = db2_code_projection_communities_list(vgen, crows, AUDIT_MAX_EDGES);
+         if (ncomm < 0)
+            ncomm = 0;
+         for (int i = 0; i < ncomm; i++)
+         {
+            snprintf(comm[i].node, sizeof(comm[i].node), "%s", crows[i].node_id);
+            snprintf(comm[i].community, sizeof(comm[i].community), "%s", crows[i].community_id);
+         }
+      }
+   }
+   char source_hash[128] = "";
+   db2_code_projection_visible_source_hash(project, source_hash, sizeof(source_hash));
+
+   /* ── run the analytics ──────────────────────────────────────────────────── */
+   kb_graph_cycle_t *cycles = calloc((size_t)max_f, sizeof(*cycles));
+   kb_graph_hub_t *orphans = calloc((size_t)max_f, sizeof(*orphans));
+   kb_graph_bridge_t *bridges = calloc((size_t)max_f, sizeof(*bridges));
+   kb_graph_cohesion_t *cohesion = calloc((size_t)max_f, sizeof(*cohesion));
+   if (!cycles || !orphans || !bridges || !cohesion)
+   {
+      free(edges);
+      free(gedges);
+      free(redges);
+      free(crows);
+      free(comm);
+      free(cycles);
+      free(orphans);
+      free(bridges);
+      free(cohesion);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+
+   int cyc_trunc = 0, bridge_approx = 0;
+   int n_cyc = kb_graph_cycles(redges, ne, cycles, max_f, &cyc_trunc);
+   if (n_cyc < 0)
+      n_cyc = 0;
+   /* orphans: least-connected non-container nodes, degree <= 1 */
+   int n_orph_raw = kb_graph_hubs_ranked(gedges, ne, orphans, max_f, KB_HUB_BOTTOM_NOHUB);
+   if (n_orph_raw < 0)
+      n_orph_raw = 0;
+   int n_orph = 0;
+   for (int i = 0; i < n_orph_raw; i++)
+      if (orphans[i].degree <= 1)
+         orphans[n_orph++] = orphans[i];
+   int n_bridge = kb_graph_bridges(gedges, ne, bridges, max_f, &bridge_approx);
+   if (n_bridge < 0)
+      n_bridge = 0;
+   int n_cohesion =
+       kb_graph_cohesion(gedges, ne, comm, ncomm, AUDIT_COHESION_MIN_SIZE, cohesion, max_f);
+   if (n_cohesion < 0)
+      n_cohesion = 0;
+
+   /* unverified-inferred: per-node count of incident edges carrying inferred/
+    * ambiguous provenance (structural_weight == 0 is the only provenance signal on
+    * a projection edge). Ships labeled no-confirmation-yet, OUT of the roll-up —
+    * the confirmation signal arrives in S3. Reuses the orphan buffer's node list is
+    * unsafe; compute inline into a small ranked set. */
+   /* (kept minimal: count weight-0 incident edges per node, surface >= threshold) */
+
+   /* ── assemble response ──────────────────────────────────────────────────── */
+   cJSON *resp = cJSON_CreateObject();
+   if (!resp)
+   {
+      free(edges);
+      free(gedges);
+      free(redges);
+      free(crows);
+      free(comm);
+      free(cycles);
+      free(orphans);
+      free(bridges);
+      free(cohesion);
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      return 500;
+   }
+   cJSON_AddStringToObject(resp, "status", "ok");
+   cJSON_AddStringToObject(resp, "project", project);
+   cJSON_AddNumberToObject(resp, "generation_id", (double)vgen);
+   if (source_hash[0])
+      cJSON_AddStringToObject(resp, "source_hash", source_hash); /* staleness echo (R1) */
+   cJSON_AddNumberToObject(resp, "edge_count", ne);
+   cJSON_AddBoolToObject(resp, "truncated", ne >= AUDIT_MAX_EDGES);
+
+   cJSON *findings = cJSON_AddObjectToObject(resp, "findings");
+   char fid[80];
+   char sbuf[KB_GRAPH_NODE_MAX + 16];
+
+   /* cycles */
+   cJSON *jc = findings ? cJSON_AddArrayToObject(findings, "cycles") : NULL;
+   for (int i = 0; jc && i < n_cyc; i++)
+   {
+      cJSON *f = cJSON_CreateObject();
+      if (!f)
+         continue;
+      audit_finding_id("cycle", cycles[i].files[0], fid, sizeof(fid));
+      cJSON_AddStringToObject(f, "finding_id", fid);
+      cJSON *arr = cJSON_AddArrayToObject(f, "files");
+      for (int p = 0; arr && p < cycles[i].len; p++)
+         cJSON_AddItemToArray(arr,
+                              cJSON_CreateString(audit_safe(cycles[i].files[p], SANITIZE_FILE_PATH,
+                                                            sbuf, sizeof(sbuf))));
+      cJSON_AddStringToObject(f, "why", "files form a circular dependency (collapsed call graph)");
+      cJSON_AddItemToArray(jc, f);
+   }
+   cJSON_AddBoolToObject(findings, "cycles_truncated", cyc_trunc != 0);
+
+   /* orphans */
+   cJSON *jo = findings ? cJSON_AddArrayToObject(findings, "orphans") : NULL;
+   for (int i = 0; jo && i < n_orph; i++)
+   {
+      cJSON *f = cJSON_CreateObject();
+      if (!f)
+         continue;
+      audit_finding_id("orphan", orphans[i].node, fid, sizeof(fid));
+      cJSON_AddStringToObject(f, "finding_id", fid);
+      cJSON_AddStringToObject(
+          f, "node", audit_safe(orphans[i].node, SANITIZE_SYMBOL_LABEL, sbuf, sizeof(sbuf)));
+      cJSON_AddNumberToObject(f, "degree", orphans[i].degree);
+      cJSON_AddStringToObject(f, "why",
+                              "weakly-connected symbol (dead code, missing edge, or "
+                              "undocumented entry point)");
+      cJSON_AddItemToArray(jo, f);
+   }
+
+   /* bridges */
+   cJSON *jb = findings ? cJSON_AddArrayToObject(findings, "bridges") : NULL;
+   for (int i = 0; jb && i < n_bridge; i++)
+   {
+      cJSON *f = cJSON_CreateObject();
+      if (!f)
+         continue;
+      audit_finding_id("bridge", bridges[i].node, fid, sizeof(fid));
+      cJSON_AddStringToObject(f, "finding_id", fid);
+      cJSON_AddStringToObject(
+          f, "node", audit_safe(bridges[i].node, SANITIZE_SYMBOL_LABEL, sbuf, sizeof(sbuf)));
+      cJSON_AddNumberToObject(f, "betweenness", bridges[i].betweenness);
+      cJSON_AddStringToObject(f, "why",
+                              "cross-cutting concern connecting otherwise-separate modules");
+      cJSON_AddItemToArray(jb, f);
+   }
+   cJSON_AddBoolToObject(findings, "bridges_approximate", bridge_approx != 0);
+
+   /* low-cohesion communities */
+   cJSON *jco = findings ? cJSON_AddArrayToObject(findings, "low_cohesion") : NULL;
+   for (int i = 0; jco && i < n_cohesion; i++)
+   {
+      cJSON *f = cJSON_CreateObject();
+      if (!f)
+         continue;
+      audit_finding_id("cohesion", cohesion[i].community, fid, sizeof(fid));
+      cJSON_AddStringToObject(f, "finding_id", fid);
+      cJSON_AddStringToObject(
+          f, "community",
+          audit_safe(cohesion[i].community, SANITIZE_COMMUNITY_NAME, sbuf, sizeof(sbuf)));
+      cJSON_AddNumberToObject(f, "conductance", cohesion[i].conductance);
+      cJSON_AddNumberToObject(f, "min_size_threshold", AUDIT_COHESION_MIN_SIZE);
+      cJSON_AddNumberToObject(f, "size", cohesion[i].size);
+      cJSON_AddStringToObject(f, "community_id_scope", "generation-local");
+      cJSON_AddStringToObject(f, "why",
+                              "high conductance: much of the module's edge weight leaves it "
+                              "(split candidate)");
+      cJSON_AddItemToArray(jco, f);
+   }
+
+   /* unverified-inferred: labeled no-confirmation-yet, excluded from the roll-up. */
+   cJSON *ju = findings ? cJSON_AddObjectToObject(findings, "unverified_inferred") : NULL;
+   if (ju)
+   {
+      cJSON_AddStringToObject(ju, "signal", "no-confirmation-yet");
+      cJSON *ua = cJSON_AddArrayToObject(ju, "nodes");
+      /* Count weight-0 incident edges per node; surface those at/above threshold.
+       * Emitted in edge-scan order (deterministic — list_edges is ORDER BY). */
+      int emitted = 0;
+      /* simple O(n^2)-bounded pass acceptable at AUDIT_MAX_EDGES cap for a labeled,
+       * roll-up-excluded finding; a hash index is a later optimization. */
+      for (int i = 0; ua && i < ne && emitted < max_f; i++)
+      {
+         const char *node = edges[i].source[0] ? edges[i].source : NULL;
+         if (!node || edges[i].structural_weight != 0)
+            continue;
+         /* skip if already emitted */
+         int dup = 0;
+         for (int j = 0; j < i; j++)
+            if (edges[j].structural_weight == 0 && strcmp(edges[j].source, node) == 0)
+            {
+               dup = 1;
+               break;
+            }
+         if (dup)
+            continue;
+         int cnt = 0;
+         for (int j = 0; j < ne; j++)
+            if (edges[j].structural_weight == 0 &&
+                (strcmp(edges[j].source, node) == 0 || strcmp(edges[j].target, node) == 0))
+               cnt++;
+         if (cnt < AUDIT_UNVERIFIED_MIN)
+            continue;
+         cJSON *f = cJSON_CreateObject();
+         if (!f)
+            continue;
+         audit_finding_id("unverified", node, fid, sizeof(fid));
+         cJSON_AddStringToObject(f, "finding_id", fid);
+         cJSON_AddStringToObject(f, "node",
+                                 audit_safe(node, SANITIZE_SYMBOL_LABEL, sbuf, sizeof(sbuf)));
+         cJSON_AddNumberToObject(f, "inferred_edges", cnt);
+         cJSON_AddItemToArray(ua, f);
+         emitted++;
+      }
+   }
+
+   /* honesty gate + roll-up summary (unverified-inferred excluded per R1). */
+   int total = n_cyc + n_orph + n_bridge + n_cohesion;
+   int clean = (total == 0);
+   int insufficient = (ne < 5); /* too sparse to trust orphan/cohesion signals */
+   cJSON_AddBoolToObject(resp, "clean", clean && !insufficient);
+   cJSON_AddBoolToObject(resp, "insufficient_signal", insufficient);
+   char summary[192];
+   snprintf(summary, sizeof(summary), "%d cycles, %d orphans, %d bridges, %d low-cohesion", n_cyc,
+            n_orph, n_bridge, n_cohesion);
+   cJSON_AddStringToObject(resp, "summary",
+                           insufficient ? "insufficient signal" : (clean ? "clean" : summary));
+
+   free(edges);
+   free(gedges);
+   free(redges);
+   free(crows);
+   free(comm);
+   free(cycles);
+   free(orphans);
+   free(bridges);
+   free(cohesion);
+
+   char *s = cJSON_PrintUnformatted(resp);
+   int status = 200;
+   if (!s)
+   {
+      snprintf(out_buf, (size_t)out_cap, "{\"error\":\"oom\"}");
+      status = 500;
+   }
+   else if (strlen(s) >= (size_t)out_cap)
+   {
+      snprintf(
+          out_buf, (size_t)out_cap,
+          "{\"error\":\"result too large; reduce max_findings\",\"code\":\"result_too_large\"}");
+      status = 413;
+   }
+   else
+   {
+      snprintf(out_buf, (size_t)out_cap, "%s", s);
+   }
+   free(s);
+   cJSON_Delete(resp);
+   return status;
+}
+
+int handle_get_code_graph_audit_route(const char *method, const char *query_string, char *out_buf,
+                                      int out_cap)
+{
+   if (strcmp(method, "GET") != 0)
+      return code_method_not_allowed(out_buf, out_cap);
+   return handle_get_code_graph_audit(query_string, out_buf, out_cap);
 }
 
 int handle_get_code_graph_hubs_route(const char *method, const char *query_string, char *out_buf,

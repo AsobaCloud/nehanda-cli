@@ -337,9 +337,176 @@ static void test_community_overflow_guard(void)
    printf("  test_community_overflow_guard: ok\n");
 }
 
+/* ── S1 self-audit tests ──────────────────────────────────────────────────── */
+
+/* Orphan view: least-connected non-container node surfaces first; container
+ * (file:/project:) nodes are excluded from the BOTTOM_NOHUB ranking. */
+static void test_orphans_bottom_mode(void)
+{
+   kb_graph_edge_t e[] = {
+       {"h", "a", 1},      {"h", "b", 1},    {"h", "c", 1},
+       {"h", "d", 1},      {"h", "lone", 1}, /* lone: degree 1 symbol */
+       {"file:x", "h", 1},                   /* container, degree 1 */
+   };
+   kb_graph_hub_t out[16];
+   int n = kb_graph_hubs_ranked(e, 6, out, 16, KB_HUB_BOTTOM_NOHUB);
+   assert(n >= 1);
+   /* lowest-degree non-container first; file:x excluded */
+   assert(out[0].degree == 1);
+   for (int i = 0; i < n; i++)
+      assert(!kb_graph_is_container(out[i].node));
+   assert(kb_graph_is_container("file:x") && kb_graph_is_container("project:p"));
+   assert(!kb_graph_is_container("symbol:foo"));
+   printf("  test_orphans_bottom_mode: ok\n");
+}
+
+/* A 3-file dependency ring (fa→fb→fc→fa via symbol calls collapsed to files) is
+ * detected as one cycle of length 3. */
+static void test_cycles_ring(void)
+{
+   kb_graph_reledge_t e[] = {
+       {"fa", "defines", "sa"}, {"fb", "defines", "sb"}, {"fc", "defines", "sc"},
+       {"sa", "calls", "sb"},   {"sb", "calls", "sc"},   {"sc", "calls", "sa"},
+   };
+   kb_graph_cycle_t out[8];
+   int trunc = -1;
+   int n = kb_graph_cycles(e, 6, out, 8, &trunc);
+   assert(n == 1);
+   assert(out[0].len == 3);
+   assert(trunc == 0);
+   /* cycle starts at the lex-smallest file, fa */
+   assert(strcmp(out[0].files[0], "fa") == 0);
+   printf("  test_cycles_ring: ok\n");
+}
+
+/* Acyclic call chain → no cycle; a same-file call is dropped (no self-loop). */
+static void test_cycles_acyclic_and_selfdrop(void)
+{
+   kb_graph_reledge_t lin[] = {
+       {"fa", "defines", "sa"}, {"fb", "defines", "sb"}, {"fc", "defines", "sc"},
+       {"sa", "calls", "sb"},   {"sb", "calls", "sc"},
+   };
+   kb_graph_cycle_t out[8];
+   int trunc = 0;
+   assert(kb_graph_cycles(lin, 5, out, 8, &trunc) == 0);
+
+   /* two symbols in the SAME file calling each other → collapses to a self-loop,
+    * which is dropped → no cycle. */
+   kb_graph_reledge_t same[] = {
+       {"fa", "defines", "s1"},
+       {"fa", "defines", "s2"},
+       {"s1", "calls", "s2"},
+       {"s2", "calls", "s1"},
+   };
+   assert(kb_graph_cycles(same, 4, out, 8, &trunc) == 0);
+   printf("  test_cycles_acyclic_and_selfdrop: ok\n");
+}
+
+/* Barbell: two triangles joined through a single node m — m has the highest
+ * betweenness (it lies on every cross-clique shortest path). */
+static void test_bridges_barbell(void)
+{
+   kb_graph_edge_t e[] = {
+       {"a", "b", 1}, {"b", "c", 1}, {"a", "c", 1}, /* triangle 1 */
+       {"x", "y", 1}, {"y", "z", 1}, {"x", "z", 1}, /* triangle 2 */
+       {"c", "m", 1}, {"m", "x", 1},                /* bridge via m */
+   };
+   kb_graph_bridge_t out[16];
+   int approx = -1;
+   int n = kb_graph_bridges(e, 8, out, 16, &approx);
+   assert(n >= 1);
+   assert(strcmp(out[0].node, "m") == 0); /* highest betweenness */
+   assert(approx == 0);                   /* small graph → exact */
+   printf("  test_bridges_barbell: ok\n");
+}
+
+/* Cohesion: a community that leaks an edge outward has positive conductance and
+ * ranks above a fully-internal (conductance 0) community; a below-min_size
+ * community is excluded. */
+static void test_cohesion_conductance(void)
+{
+   /* "big": 8-node cycle, fully internal. "leak": 8-node cycle + one edge to z.
+    * "zc": the singleton z (size 1, excluded at min_size=8). */
+   kb_graph_edge_t e[18];
+   int ne = 0;
+   const char *big[8] = {"n0", "n1", "n2", "n3", "n4", "n5", "n6", "n7"};
+   const char *leak[8] = {"m0", "m1", "m2", "m3", "m4", "m5", "m6", "m7"};
+   for (int i = 0; i < 8; i++)
+   {
+      e[ne++] = (kb_graph_edge_t){"", "", 1};
+      snprintf(e[ne - 1].source, KB_GRAPH_NODE_MAX, "%s", big[i]);
+      snprintf(e[ne - 1].target, KB_GRAPH_NODE_MAX, "%s", big[(i + 1) % 8]);
+   }
+   for (int i = 0; i < 8; i++)
+   {
+      e[ne++] = (kb_graph_edge_t){"", "", 1};
+      snprintf(e[ne - 1].source, KB_GRAPH_NODE_MAX, "%s", leak[i]);
+      snprintf(e[ne - 1].target, KB_GRAPH_NODE_MAX, "%s", leak[(i + 1) % 8]);
+   }
+   e[ne++] = (kb_graph_edge_t){"m0", "z", 1}; /* leak edge outward */
+
+   kb_graph_community_t asg[17];
+   int na = 0;
+   for (int i = 0; i < 8; i++)
+   {
+      asg[na] = (kb_graph_community_t){"", "big"};
+      snprintf(asg[na].node, KB_GRAPH_NODE_MAX, "%s", big[i]);
+      na++;
+   }
+   for (int i = 0; i < 8; i++)
+   {
+      asg[na] = (kb_graph_community_t){"", "leak"};
+      snprintf(asg[na].node, KB_GRAPH_NODE_MAX, "%s", leak[i]);
+      na++;
+   }
+   asg[na++] = (kb_graph_community_t){"z", "zc"}; /* singleton */
+
+   kb_graph_cohesion_t out[8];
+   int n = kb_graph_cohesion(e, ne, asg, na, 8, out, 8);
+   assert(n == 2); /* big + leak; zc excluded (size 1) */
+   assert(strcmp(out[0].community, "leak") == 0);
+   assert(out[0].conductance > 0.0);
+   assert(strcmp(out[1].community, "big") == 0);
+   assert(out[1].conductance == 0.0);
+   assert(out[0].size == 8 && out[1].size == 8);
+   printf("  test_cohesion_conductance: ok\n");
+}
+
+/* Determinism: cycles/bridges/cohesion outputs are identical under input edge
+ * permutation (reverse order here). */
+static void test_audit_permutation_invariant(void)
+{
+   kb_graph_edge_t e[] = {
+       {"a", "b", 1}, {"b", "c", 1}, {"a", "c", 1}, {"x", "y", 1},
+       {"y", "z", 1}, {"x", "z", 1}, {"c", "m", 1}, {"m", "x", 1},
+   };
+   int ne = 8;
+   kb_graph_edge_t rev[8];
+   for (int i = 0; i < ne; i++)
+      rev[i] = e[ne - 1 - i];
+
+   kb_graph_bridge_t b1[16], b2[16];
+   int ap1 = 0, ap2 = 0;
+   int n1 = kb_graph_bridges(e, ne, b1, 16, &ap1);
+   int n2 = kb_graph_bridges(rev, ne, b2, 16, &ap2);
+   assert(n1 == n2);
+   for (int i = 0; i < n1; i++)
+   {
+      assert(strcmp(b1[i].node, b2[i].node) == 0);
+      assert(b1[i].betweenness == b2[i].betweenness);
+   }
+   printf("  test_audit_permutation_invariant: ok\n");
+}
+
 int main(void)
 {
    printf("test_kb_graph_analytics:\n");
+   test_orphans_bottom_mode();
+   test_cycles_ring();
+   test_cycles_acyclic_and_selfdrop();
+   test_bridges_barbell();
+   test_cohesion_conductance();
+   test_audit_permutation_invariant();
    test_precision_suppress();
    test_community_two_cliques();
    test_community_permutation_invariant();
