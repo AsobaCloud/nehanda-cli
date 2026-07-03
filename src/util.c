@@ -1,7 +1,9 @@
 /* util.c: core utilities (normalization, option parsing, security, path helpers) */
 #include "aimee.h"
+#include "headers/util.h"
 #include <ctype.h>
 #include <stdarg.h>
+#include <sys/stat.h>
 #include <time.h>
 #ifndef _WIN32
 /* POSIX process helpers (run_cmd*) live below; their headers and the `environ`
@@ -1052,4 +1054,76 @@ size_t aimee_base64_decode(const char *in, unsigned char *out, size_t out_cap)
       }
    }
    return o;
+}
+
+/* --- Worktree isolation helpers (see headers/util.h) --- */
+
+int aimee_path_is_main_clone(const char *path)
+{
+   if (!path || !path[0])
+      return 0;
+   char cur[MAX_PATH_LEN];
+   if (snprintf(cur, sizeof(cur), "%s", path) >= (int)sizeof(cur))
+      return 0; /* path truncated -> fail-open (allow), never scan a partial path */
+   for (;;)
+   {
+      char g[MAX_PATH_LEN + 8];
+      snprintf(g, sizeof(g), "%s/.git", cur);
+      struct stat st;
+      if (stat(g, &st) == 0)
+         return S_ISDIR(st.st_mode) ? 1 : 0; /* dir = main clone; file = worktree */
+      char *slash = strrchr(cur, '/');
+      if (!slash || slash == cur)
+         return 0;
+      *slash = '\0';
+   }
+}
+
+int aimee_edit_target_in_main_clone(const char *file_path, const char *cwd)
+{
+   char target[MAX_PATH_LEN];
+   if (file_path && file_path[0])
+   {
+      /* Resolve the mutation target: absolute path as-is, else relative to cwd.
+       * Keying on the target (not just cwd) catches an absolute Edit into the
+       * main clone from a worktree session, and vice-versa. */
+      int n;
+      if (aimee_path_is_absolute(file_path))
+         n = snprintf(target, sizeof(target), "%s", file_path);
+      else if (cwd && cwd[0])
+         n = snprintf(target, sizeof(target), "%s/%s", cwd, file_path);
+      else
+         n = snprintf(target, sizeof(target), "%s", file_path);
+      if (n >= (int)sizeof(target))
+         return 0; /* truncated -> fail-open */
+   }
+   else if (cwd && cwd[0])
+   {
+      if (snprintf(target, sizeof(target), "%s", cwd) >= (int)sizeof(target))
+         return 0;
+   }
+   else
+      return 0; /* nothing to check -> fail-open */
+   return aimee_path_is_main_clone(target);
+}
+
+int aimee_main_clone_edits_allowed(const char *repo_cwd)
+{
+   const char *e = getenv("AIMEE_ALLOW_MAIN_CHECKOUT");
+   if (e && (strcmp(e, "1") == 0 || strcmp(e, "true") == 0 || strcmp(e, "yes") == 0))
+      return 1;
+   char cur[MAX_PATH_LEN];
+   snprintf(cur, sizeof(cur), "%s", repo_cwd ? repo_cwd : "");
+   for (;;)
+   {
+      char m[MAX_PATH_LEN + 32];
+      snprintf(m, sizeof(m), "%s/.git/aimee-allow-main-edits", cur);
+      struct stat st;
+      if (cur[0] && stat(m, &st) == 0)
+         return 1;
+      char *slash = strrchr(cur, '/');
+      if (!slash || slash == cur)
+         return 0;
+      *slash = '\0';
+   }
 }
