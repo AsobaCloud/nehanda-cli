@@ -58,4 +58,5 @@ int normalize_roundtable_brief(cJSON *req, normalized_roundtable_brief_t *out, c
 
 #define ROUNDTABLE_MAX_ROUNDS_REQUEST 16
 
+#define ROUNDTABLE_BRIEF_MAX_BYTES    (256 * 1024)
 #endif /* SERVER_COMPUTE_INTERNAL_H */

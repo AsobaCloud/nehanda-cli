@@ -30,6 +30,12 @@ int server_session_pool_submit(server_ctx_t *ctx, const char *session_id, void (
    return 0;
 }
 #include "../server/server_compute.c"
+/* server_compute.c's former .inc fragments are now sibling TUs; the white-box
+ * test pulls them into this TU the same way it used to get them via the .inc. */
+#include "../server/server_compute_mailbox.c"
+#include "../server_compute_concurrency.c"
+#include "../server_compute_episodes.c"
+#include "../server/server_compute_roundtable.c"
 #include "../server/server_compute_async.c"
 static cJSON *g_last_response = NULL;
 static char g_last_error[256];

@@ -57,7 +57,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#define ROUNDTABLE_BRIEF_MAX_BYTES    (256 * 1024)
 
 
 static int brief_append(char *buf, size_t cap, size_t *pos, const char *fmt, ...)
