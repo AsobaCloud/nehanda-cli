@@ -185,7 +185,6 @@ static void insert_agent_log_row(const char *agent_name, const char *role, int s
    assert(db1_agent_log_insert(&row) > 0);
 }
 
-
 static void test_insert_memory(void)
 {
    setup();

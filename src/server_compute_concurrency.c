@@ -57,7 +57,6 @@
 #include <time.h>
 #include <unistd.h>
 
-
 concurrency_mgr_t g_concurrency_mgr;
 static pthread_mutex_t g_concurrency_reload_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_concurrency_initialized = 0;
@@ -73,9 +72,8 @@ typedef struct
    int per_provider_count;
 } delegate_concurrency_limits_t;
 
-
 concurrency_route_key_t concurrency_key(const char *via_name, const agent_t *target_agent,
-                                               char *tier_key, size_t tier_key_len)
+                                        char *tier_key, size_t tier_key_len)
 {
    if (!via_name || !via_name[0])
    {
@@ -240,7 +238,7 @@ void concurrency_ensure_current(void)
 }
 
 void concurrency_maybe_preempt_delegate(const char *model, const char *provider,
-                                               int requester_priority, const char *requester_id)
+                                        int requester_priority, const char *requester_id)
 {
    config_t cfg;
    if (config_load(&cfg) != 0 || !cfg.concurrency_preempt_enabled || !model || !model[0])

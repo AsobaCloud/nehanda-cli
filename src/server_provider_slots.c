@@ -61,7 +61,6 @@
 #include <unistd.h>
 #include <string.h>
 
-
 /* Find or insert a slot entry for agent_name. Must be called with
  * provider_slots_mutex held. Returns the entry index, or -1 if the table
  * is full. */

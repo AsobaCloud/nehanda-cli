@@ -783,7 +783,6 @@ static int summarize_forward(agent_config_t *acfg, const config_t *cfg, const ch
    return (*artifact && *peer_notes) ? 0 : -1;
 }
 
-
 static void mark_question_gaps(const roundtable_opts_t *opts, roundtable_result_t *out)
 {
    if (!opts || !out)

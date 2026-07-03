@@ -153,7 +153,7 @@ static cJSON *build_digest(const rtp_run_t *run, const rtp_pass_t *latest, int h
 
 /* forward decls: defined later in the file. */
 void execute_gate_merge(int id, rtp_run_t *run, rtp_gate_t *gate, int gate_no, cJSON *req,
-                               cJSON *resp);
+                        cJSON *resp);
 static int resolve_panel(const config_t *cfg, rtp_panel_t *out);
 static int maybe_ttl_abandon(int id, rtp_run_t *run, const config_t *cfg);
 
@@ -1778,7 +1778,6 @@ int handle_pipeline_advance(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 }
 
 /* ----------------------------------------------------------------- gate ---- */
-
 
 static int gate_authorized(cJSON *req)
 {

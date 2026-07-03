@@ -115,7 +115,6 @@ void verify_state_path(const char *project_root, char *buf, size_t len)
  * on line 3) is parsed on read and silently upgraded on next write.
  */
 
-
 /* Parse the state file into entries[].  Returns the number of entries read
  * (0 if the file doesn't exist or is empty/corrupt). */
 int read_verify_entries(const char *project_root, verify_state_entry_t *entries, int cap)
@@ -243,7 +242,7 @@ int verify_state_step_result_lookup(const char *step_results, const char *name, 
 }
 
 int write_verify_state(const char *project_root, time_t timestamp, const char *hash,
-                              int failed_steps, int total_steps, const char *step_results)
+                       int failed_steps, int total_steps, const char *step_results)
 {
    char path[MAX_PATH_LEN], tmp_path[MAX_PATH_LEN];
    verify_state_path(project_root, path, sizeof(path));

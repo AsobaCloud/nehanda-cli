@@ -223,7 +223,7 @@ static int memory_find_index_by_id(const memory_t *matches, int count, int64_t m
 }
 
 int memory_append_linked_neighbors(memory_t *matches, int count, int max_count,
-                                          const char *allowed_relations)
+                                   const char *allowed_relations)
 {
    if (!matches || count <= 0 || count >= max_count)
       return count;
@@ -249,8 +249,8 @@ int memory_append_linked_neighbors(memory_t *matches, int count, int max_count,
 }
 
 int memory_compute_pagerank_scores(const memory_t *matches, int count,
-                                          const memory_pagerank_config_t *cfg,
-                                          memory_pagerank_score_t *out, int max_out)
+                                   const memory_pagerank_config_t *cfg,
+                                   memory_pagerank_score_t *out, int max_out)
 {
    int64_t t0 = memory_now_ns();
    int edge_count = 0;
@@ -338,7 +338,7 @@ int memory_compute_pagerank_scores(const memory_t *matches, int count,
 }
 
 double memory_pagerank_bonus_lookup(const memory_pagerank_score_t *scores, int count,
-                                           int64_t memory_id)
+                                    int64_t memory_id)
 {
    if (!scores || count <= 0 || memory_id <= 0)
       return 0.0;
@@ -874,8 +874,7 @@ void memory_maybe_run_maintenance(void)
    maintenance_running = 0;
 }
 
-void memory_alias_join_tokens(char *buf, size_t buf_len, char tokens[][64], int start,
-                                     int count)
+void memory_alias_join_tokens(char *buf, size_t buf_len, char tokens[][64], int start, int count)
 {
    size_t used = 0;
    if (!buf || buf_len == 0)
@@ -925,8 +924,7 @@ double memory_base_evidence_strength(const char *key, const char *content, doubl
    return score;
 }
 
-void memory_entity_insert(int64_t memory_id, const char *entity, const char *role,
-                                 double weight)
+void memory_entity_insert(int64_t memory_id, const char *entity, const char *role, double weight)
 {
    char norm[256];
    memory_canonicalize_term(entity, norm, sizeof(norm));
@@ -936,7 +934,7 @@ void memory_entity_insert(int64_t memory_id, const char *entity, const char *rol
 }
 
 void memory_temporal_insert(int64_t memory_id, const char *ref_key, const char *granularity,
-                                   double weight)
+                            double weight)
 {
    char norm[128];
    normalize_key(ref_key, norm, sizeof(norm));
@@ -1280,7 +1278,7 @@ int memory_extract_named_entities(const char *text, char names[][128], int max_n
  * coref_bindings output.  This is the "llm" mode path for coref resolution.
  * Returns 1 if a binding was inserted, 0 otherwise. */
 int memory_coref_llm_resolve(int64_t memory_id, const char *content, const char *session_buf,
-                                    const config_t *cfg)
+                             const config_t *cfg)
 {
    if (!cfg->memory_cognify_command[0])
       return 0;
@@ -1369,9 +1367,8 @@ void memory_coref_stats_reset(void)
 }
 
 /* Record one coref resolution attempt in the audit table. */
-void memory_coref_audit_record(int64_t memory_id, const char *session_id,
-                                      const char *outcome, const char *entity, const char *mode,
-                                      double confidence)
+void memory_coref_audit_record(int64_t memory_id, const char *session_id, const char *outcome,
+                               const char *entity, const char *mode, double confidence)
 {
    /* Update in-process counters. */
    const char *eff_outcome = outcome ? outcome : "none";
@@ -1386,4 +1383,3 @@ void memory_coref_audit_record(int64_t memory_id, const char *session_id,
 
    db2_memory_coref_audit_insert(memory_id, session_id, eff_outcome, entity, mode, confidence);
 }
-

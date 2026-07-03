@@ -930,7 +930,6 @@ cJSON *tool_list_hosts(void)
    return text_content(buf);
 }
 
-
 cJSON *smcp_tool_find_symbol(cJSON *args)
 {
    cJSON *jid = cJSON_GetObjectItemCaseSensitive(args, "identifier");
@@ -1520,7 +1519,6 @@ static cJSON *dispatch_git_tool(server_ctx_t *ctx, server_conn_t *conn, const ch
 
    return content;
 }
-
 
 /* ── Discovery meta-tools (P2) ────────────────────────────────────────────────
  * find_tools / describe_tool introspect the FULL served catalog (unfiltered by

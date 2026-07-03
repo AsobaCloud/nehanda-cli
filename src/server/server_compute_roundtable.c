@@ -57,8 +57,6 @@
 #include <time.h>
 #include <unistd.h>
 
-
-
 static int brief_append(char *buf, size_t cap, size_t *pos, const char *fmt, ...)
 {
    if (!buf || !pos || *pos >= cap)
@@ -123,7 +121,7 @@ static int brief_array_append(const char *label, cJSON *arr, char *buf, size_t c
 }
 
 int normalize_roundtable_brief(cJSON *req, normalized_roundtable_brief_t *out, char *err,
-                                      size_t err_n)
+                               size_t err_n)
 {
    memset(out, 0, sizeof(*out));
    cJSON *brief = cJSON_GetObjectItemCaseSensitive(req, "brief");

@@ -43,7 +43,6 @@
 #include <unistd.h>
 #include <stdatomic.h>
 
-
 /* Route-handler deps used below but not needed by server_http.c's own body
  * (kept here, not in server_http.c, to respect its 2000-line limit). */
 #include "git_forge_vault.h"  /* GIT_FORGE_VAULT_AGENT/SSHKEY_CRED — per-webuser ssh-key vault */
@@ -2266,7 +2265,8 @@ static const http_route_t g_v1_routes[] = {
     /* Proposal read surfaces (ownership enforced in-handler, not by the route cap):
      * the timeline and the source markdown, owner-scoped in wf_api_*. */
     {"GET", "/v1/workflow/items/", "/events", RM_PREFIX, NULL, CAP_DASHBOARD_READ, rh_wf_events},
-    {"GET", "/v1/workflow/items/", "/proposal", RM_PREFIX, NULL, CAP_DASHBOARD_READ, rh_wf_proposal},
+    {"GET", "/v1/workflow/items/", "/proposal", RM_PREFIX, NULL, CAP_DASHBOARD_READ,
+     rh_wf_proposal},
     {"GET", "/v1/workflow/items/", NULL, RM_PREFIX, NULL, CAP_DASHBOARD_READ, rh_wf_item},
 
     {"GET", "/v1/sessions", NULL, RM_EXACT, NULL, CAP_SESSION_READ, rh_sessions_list},
@@ -2436,7 +2436,7 @@ int v1_route_is_local_only(const char *method, const char *path)
  * routes carry handler == NULL and are dispatched by handle_conn before this is
  * reached, so an unhandled match here is a 404 like an unknown path. */
 int v1_route_dispatch(const char *method, const char *path, const char *body, int body_len,
-                             char *resp, int resp_cap)
+                      char *resp, int resp_cap)
 {
    if (!method || !path || !resp || resp_cap <= 0)
       return err_json(resp, resp_cap, 400, "bad request");

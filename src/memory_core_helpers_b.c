@@ -1062,8 +1062,7 @@ static void memory_lookup_time_bounds(int64_t memory_id, char *valid_at, size_t 
    db2_memory_lookup_time_bounds(memory_id, valid_at, (int)valid_len, invalid_at, (int)invalid_len);
 }
 
-void memory_refresh_episode_relations(int64_t memory_id, const char *key,
-                                             const char *content)
+void memory_refresh_episode_relations(int64_t memory_id, const char *key, const char *content)
 {
    if (memory_id <= 0)
       return;

@@ -7,7 +7,8 @@
 #include <pthread.h>
 #define DELEGATION_INPUT_TIMEOUT 60 /* seconds */
 #define MAX_ACTIVE_DELEGATIONS   32
-typedef struct {
+typedef struct
+{
    char delegation_id[64];
    pthread_mutex_t lock;
    pthread_cond_t reply_ready;
@@ -26,9 +27,9 @@ typedef struct
 /* promoted cross-TU (former .inc statics) */
 void concurrency_ensure_current(void);
 concurrency_route_key_t concurrency_key(const char *via_name, const agent_t *target_agent,
-                                               char *tier_key, size_t tier_key_len);
+                                        char *tier_key, size_t tier_key_len);
 void concurrency_maybe_preempt_delegate(const char *model, const char *provider,
-                                               int requester_priority, const char *requester_id);
+                                        int requester_priority, const char *requester_id);
 int delegate_agent_uses_mistral_path(const agent_t *agent);
 delegation_mailbox_t *mailbox_acquire(const char *delegation_id);
 delegation_mailbox_t *mailbox_find(const char *delegation_id);
@@ -54,9 +55,9 @@ typedef struct
 /* promoted cross-TU (former .inc statics) */
 void add_roundtable_arrays(cJSON *resp, const roundtable_result_t *result);
 int normalize_roundtable_brief(cJSON *req, normalized_roundtable_brief_t *out, char *err,
-                                      size_t err_n);
+                               size_t err_n);
 
 #define ROUNDTABLE_MAX_ROUNDS_REQUEST 16
 
-#define ROUNDTABLE_BRIEF_MAX_BYTES    (256 * 1024)
+#define ROUNDTABLE_BRIEF_MAX_BYTES (256 * 1024)
 #endif /* SERVER_COMPUTE_INTERNAL_H */

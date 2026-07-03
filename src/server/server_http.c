@@ -857,7 +857,7 @@ int route_runs_stop(const char *id, char *resp, int cap)
 /* Dispatch a native POST body to its handler; 503 (generic JSON error) when no
  * handler is wired in (e.g. unit tests, or kb_client not linked). */
 int route_native_post(server_http_completion_fn fn, const char *body, char *resp, int cap,
-                             const char *unavailable_msg)
+                      const char *unavailable_msg)
 {
    if (!fn)
       return err_json(resp, cap, 503, unavailable_msg);
@@ -920,8 +920,7 @@ _Thread_local uint32_t g_rpc_conn_caps = CAPS_READ_ONLY;
  * non-blocking so an oversize response can never hang the server thread; if the
  * response is truncated it fails to parse and we return an error rather than a
  * partial body. Returns an HTTP status; resp holds the JSON response body. */
-int loopback_rpc(const char *body, int body_len, char *resp, int resp_cap,
-                        uint32_t conn_caps)
+int loopback_rpc(const char *body, int body_len, char *resp, int resp_cap, uint32_t conn_caps)
 {
    int sp[2];
    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp) != 0)
@@ -972,7 +971,6 @@ int loopback_rpc(const char *body, int body_len, char *resp, int resp_cap,
    cJSON_Delete(chk);
    return 200;
 }
-
 
 int server_http_route(const char *method, const char *path, const char *body, int body_len,
                       char *resp, int resp_cap)
@@ -1752,8 +1750,6 @@ void handle_conn(int fd, int is_tcp)
  * thread/fd use; over the cap the connection is handled inline by the accept
  * thread (degrades to serial under overload, never dropped). */
 atomic_int g_conn_live = 0;
-
-
 
 /* Single accept loop over both listeners: poll the UDS (and the TCP fd when
  * bound), accept whichever is ready, and hand each connection to a per-

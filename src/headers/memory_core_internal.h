@@ -19,7 +19,6 @@ typedef enum
    MEM_QUERY_PROCEDURAL
 } memory_query_intent_t;
 
-
 typedef struct
 {
    int year;
@@ -90,12 +89,12 @@ extern memory_pagerank_runtime_stats_t s_memory_pagerank_stats;
 extern pthread_mutex_t s_memory_pagerank_stats_mu;
 /* promoted cross-TU (former .inc statics) */
 int memory_append_linked_neighbors(memory_t *matches, int count, int max_count,
-                                          const char *allowed_relations);
+                                   const char *allowed_relations);
 double memory_base_evidence_strength(const char *key, const char *content, double confidence);
 void memory_canonicalize_term(const char *input, char *out, size_t out_len);
 int memory_compute_pagerank_scores(const memory_t *matches, int count,
-                                          const memory_pagerank_config_t *cfg,
-                                          memory_pagerank_score_t *out, int max_out);
+                                   const memory_pagerank_config_t *cfg,
+                                   memory_pagerank_score_t *out, int max_out);
 double memory_content_salience(const char *content);
 double memory_content_surprise(const char *session_id, const char *content);
 const char *memory_effective_embedding_cmd(const char *command);
@@ -105,7 +104,7 @@ int memory_embed_text_runtime(const char *text, const char *command, float *out,
 int memory_env_int(const char *name, int fallback, int min_value, int max_value);
 double memory_env_weight(const char *name, double fallback);
 int memory_expand_query_terms(const char *norm_query, char base_tokens[][64], int base_count,
-                                     char expanded[][64], int max_terms);
+                              char expanded[][64], int max_terms);
 int memory_fetch_row_by_id(int64_t memory_id, memory_t *out);
 int memory_fetch_row_by_unit_id(int64_t unit_id, memory_t *out);
 void memory_fill_pagerank_stats(memory_stats_t *out);
@@ -121,22 +120,21 @@ void memory_load_pagerank_config(memory_pagerank_config_t *cfg);
 void memory_maybe_run_maintenance(void);
 int memory_month_number(const char *tok);
 double memory_pagerank_bonus_lookup(const memory_pagerank_score_t *scores, int count,
-                                           int64_t memory_id);
+                                    int64_t memory_id);
 void memory_query_embed_cache_reset(void);
 void memory_query_embed_prewarm(const char *const *texts, int n, const char *command);
 int memory_query_has_term(const char *norm_query, const char *term);
 memory_query_intent_t memory_query_intent(const char *raw_query, const char *norm_query);
 int memory_query_is_code_like(const char *query);
 memory_query_route_t memory_query_route(const char *raw_query, const char *norm_query,
-                                               memory_query_shape_t shape);
+                                        memory_query_shape_t shape);
 memory_query_shape_t memory_query_shape(const char *raw_query, const char *norm_query);
 memory_rank_weights_t memory_rank_weights(void);
 void memory_refresh_aliases(int64_t memory_id, const char *key, const char *content);
 void memory_refresh_chunks(int64_t memory_id, const char *content);
 void memory_refresh_coref_entities(int64_t memory_id, const char *content);
 void memory_refresh_derived_metadata(int64_t memory_id, const char *key, const char *content);
-void memory_refresh_episode_relations(int64_t memory_id, const char *key,
-                                             const char *content);
+void memory_refresh_episode_relations(int64_t memory_id, const char *key, const char *content);
 void memory_refresh_event_frames(int64_t memory_id, const char *key, const char *content);
 void memory_refresh_summaries(int64_t memory_id, const char *key, const char *content);
 void memory_refresh_unit_embeddings(int64_t memory_id);
@@ -164,25 +162,22 @@ extern __thread long long s_rerank_ms;
 /* promoted cross-TU (former .inc statics) */
 void memory_alias_insert(int64_t memory_id, const char *alias, double weight);
 int memory_alias_is_useful_token(const char *token);
-void memory_alias_join_tokens(char *buf, size_t buf_len, char tokens[][64], int start,
-                                     int count);
-void memory_coref_audit_record(int64_t memory_id, const char *session_id,
-                                      const char *outcome, const char *entity, const char *mode,
-                                      double confidence);
+void memory_alias_join_tokens(char *buf, size_t buf_len, char tokens[][64], int start, int count);
+void memory_coref_audit_record(int64_t memory_id, const char *session_id, const char *outcome,
+                               const char *entity, const char *mode, double confidence);
 int memory_coref_has_pronoun(const char *content);
 int memory_coref_llm_resolve(int64_t memory_id, const char *content, const char *session_buf,
-                                    const config_t *cfg);
+                             const config_t *cfg);
 const char *memory_coref_mode_effective(const config_t *cfg);
 int memory_coref_window_effective(const config_t *cfg);
-void memory_entity_insert(int64_t memory_id, const char *entity, const char *role,
-                                 double weight);
+void memory_entity_insert(int64_t memory_id, const char *entity, const char *role, double weight);
 int memory_extract_named_entities(const char *text, char names[][128], int max_names);
 void memory_format_date(char *buf, size_t buf_len, int year, int month, int day);
 int memory_parse_created_date(int64_t memory_id, int *year, int *month, int *day);
 void memory_refresh_entities(int64_t memory_id, const char *key, const char *content);
 void memory_shift_day(int *year, int *month, int *day, int delta);
 void memory_temporal_insert(int64_t memory_id, const char *ref_key, const char *granularity,
-                                   double weight);
+                            double weight);
 
 typedef struct
 {
@@ -197,81 +192,71 @@ extern int64_t s_lane_summary_ids[96];
 /* promoted cross-TU (former .inc statics) */
 int memory_add_expanded_term(char terms[][64], int count, int max_terms, const char *term);
 int memory_append_unique(memory_t *out, int count, int max, const memory_t *candidate);
-int memory_apply_lane_floor(memory_t *matches, int count, const int64_t *lane_ids,
-                                   int lane_count, int floor_n, int total);
+int memory_apply_lane_floor(memory_t *matches, int count, const int64_t *lane_ids, int lane_count,
+                            int floor_n, int total);
 int memory_build_query_decomposition(const char *norm_query, char subqueries[][128],
-                                            int max_subqueries);
+                                     int max_subqueries);
 void memory_build_semantic_query_text(const char *raw_query, memory_query_intent_t intent,
-                                             char *out, size_t out_len);
-int memory_collect_alias_matches(const char *alias, int limit, memory_t *out, int count,
-                                        int max);
-int memory_collect_chunk_matches(const char *query, int limit, memory_t *out, int count,
-                                        int max);
-int memory_collect_entity_matches(const char *term, int limit, memory_t *out, int count,
-                                         int max);
+                                      char *out, size_t out_len);
+int memory_collect_alias_matches(const char *alias, int limit, memory_t *out, int count, int max);
+int memory_collect_chunk_matches(const char *query, int limit, memory_t *out, int count, int max);
+int memory_collect_entity_matches(const char *term, int limit, memory_t *out, int count, int max);
 int memory_collect_event_frame_matches(const char *term, int limit, memory_t *out, int count,
-                                              int max);
-int memory_collect_memory_matches_via_vector(const char *query, const char *embed_cmd,
-                                                    int limit, memory_t *out, int max);
-int memory_collect_semantic_matches(const char *query, const char *command, int limit,
-                                           memory_t *out, int count, int max, int64_t *semantic_ids,
-                                           double *semantic_scores, int *semantic_hit_count,
-                                           int semantic_max);
-int memory_collect_summary_matches(const char *term, int limit, memory_t *out, int count,
-                                          int max);
-int memory_collect_temporal_matches(const char *term, int limit, memory_t *out, int count,
-                                           int max);
-int memory_collect_unit_matches(const char *query, int limit, memory_t *out, int count,
                                        int max);
-int memory_collect_unit_matches_via_vector(const char *query, const char *embed_cmd,
-                                                  int limit, memory_t *out, int max);
+int memory_collect_memory_matches_via_vector(const char *query, const char *embed_cmd, int limit,
+                                             memory_t *out, int max);
+int memory_collect_semantic_matches(const char *query, const char *command, int limit,
+                                    memory_t *out, int count, int max, int64_t *semantic_ids,
+                                    double *semantic_scores, int *semantic_hit_count,
+                                    int semantic_max);
+int memory_collect_summary_matches(const char *term, int limit, memory_t *out, int count, int max);
+int memory_collect_temporal_matches(const char *term, int limit, memory_t *out, int count, int max);
+int memory_collect_unit_matches(const char *query, int limit, memory_t *out, int count, int max);
+int memory_collect_unit_matches_via_vector(const char *query, const char *embed_cmd, int limit,
+                                           memory_t *out, int max);
 int memory_collect_unit_semantic_matches(const char *query, const char *command, int limit,
-                                                memory_t *out, int count, int max,
-                                                int64_t *semantic_ids, double *semantic_scores,
-                                                int *semantic_hit_count, int semantic_max);
+                                         memory_t *out, int count, int max, int64_t *semantic_ids,
+                                         double *semantic_scores, int *semantic_hit_count,
+                                         int semantic_max);
 int memory_collect_variant_candidates(const char *raw_query, const char *norm_variant,
-                                             memory_query_intent_t intent, int fetch_limit,
-                                             memory_t *out, int count, int max,
-                                             memory_candidate_source_t *source_stats,
-                                             int *source_stats_count);
+                                      memory_query_intent_t intent, int fetch_limit, memory_t *out,
+                                      int count, int max, memory_candidate_source_t *source_stats,
+                                      int *source_stats_count);
 void memory_compute_score_parts(const char *raw_query, const char *norm_query,
-                                       const memory_ranker_input_t *m, const int64_t *semantic_ids,
-                                       const double *semantic_scores, int semantic_hit_count,
-                                       const memory_pagerank_score_t *pagerank_scores,
-                                       int pagerank_count, memory_score_parts_t *parts);
+                                const memory_ranker_input_t *m, const int64_t *semantic_ids,
+                                const double *semantic_scores, int semantic_hit_count,
+                                const memory_pagerank_score_t *pagerank_scores, int pagerank_count,
+                                memory_score_parts_t *parts);
 double memory_entity_bonus(int64_t memory_id, char qtokens[][64], int nq);
 void memory_expand_synonyms(const char *query, char *out, size_t out_len);
 int memory_filter_scope(memory_t *matches, int count, const char *scope_type,
-                               const char *scope_value);
+                        const char *scope_value);
 int memory_find_facts_lexical_fallback(const char *query, const char *scope_type,
-                                              const char *scope_value, int limit, memory_t *out,
-                                              int max);
+                                       const char *scope_value, int limit, memory_t *out, int max);
 int memory_find_facts_like(const char *query, int limit, memory_t *out, int max);
 int memory_find_facts_visible_lexical_fallback(const char *query, const char *workspace,
-                                                      const char *project, int limit, memory_t *out,
-                                                      int max);
+                                               const char *project, int limit, memory_t *out,
+                                               int max);
 int memory_parse_temporal_constraint(const char *norm_query, char qtokens[][64], int nq,
-                                            memory_temporal_constraint_t *out);
+                                     memory_temporal_constraint_t *out);
 int memory_parse_temporal_ref_date(const char *ref_key, const char *granularity,
-                                          memory_parsed_date_t *out);
+                                   memory_parsed_date_t *out);
 double memory_query_elapsed_ms(const struct timespec *start, const struct timespec *end);
 int memory_query_wants_future(const char *norm_query);
 int memory_query_wants_past(const char *norm_query);
 int memory_query_wants_recent(const char *norm_query);
 memory_ranker_input_t memory_ranker_input_from(const memory_t *m);
 void memory_record_query_plan_metrics(const memory_query_plan_t *plan, double elapsed_ms);
-void memory_record_query_stage_metric(const memory_query_plan_t *plan,
-                                             const char *stage_name);
+void memory_record_query_stage_metric(const memory_query_plan_t *plan, const char *stage_name);
 int memory_rerank_matches(const char *raw_query, memory_t *matches, int count, int limit,
-                                 const int64_t *semantic_ids, const double *semantic_scores,
-                                 int semantic_hit_count,
-                                 const memory_candidate_source_t *source_stats,
-                                 int source_stats_count);
+                          const int64_t *semantic_ids, const double *semantic_scores,
+                          int semantic_hit_count, const memory_candidate_source_t *source_stats,
+                          int source_stats_count);
 double memory_semantic_bonus_lookup(int64_t memory_id, const int64_t *semantic_ids,
-                                           const double *semantic_scores, int semantic_hit_count);
+                                    const double *semantic_scores, int semantic_hit_count);
 double memory_speaker_bonus(int64_t memory_id, const char *raw_query);
 double memory_temporal_constraint_score(const memory_temporal_constraint_t *constraint,
-                                               const memory_parsed_date_t *candidate);
+                                        const memory_parsed_date_t *candidate);
 int memory_temporal_query_has_explicit_date(char qtokens[][64], int nq);
 int memory_temporal_ref_matches_query(const char *ref_key, char qtokens[][64], int nq);
 
@@ -292,8 +277,16 @@ enum
    MEM_SOURCE_GRAPH = 1u << 11
 };
 
-int memory_collect_memory_matches_via_vector(const char *query, const char *embed_cmd, int limit, memory_t *out, int max);
-int memory_collect_unit_matches_via_vector(const char *query, const char *embed_cmd, int limit, memory_t *out, int max);
-int memory_generate_candidates(const char *query, const char *norm_query, memory_query_intent_t intent, const memory_query_plan_t *plan, int fetch_limit, memory_t *out, int max, int64_t *semantic_ids, double *semantic_scores, int *semantic_hit_count, memory_candidate_source_t *source_stats, int *source_stats_count);
-void memory_note_candidate_sources(memory_candidate_source_t *stats, int *stats_count, int stats_max, const memory_t *matches, int start, int end, unsigned int source_mask);
+int memory_collect_memory_matches_via_vector(const char *query, const char *embed_cmd, int limit,
+                                             memory_t *out, int max);
+int memory_collect_unit_matches_via_vector(const char *query, const char *embed_cmd, int limit,
+                                           memory_t *out, int max);
+int memory_generate_candidates(const char *query, const char *norm_query,
+                               memory_query_intent_t intent, const memory_query_plan_t *plan,
+                               int fetch_limit, memory_t *out, int max, int64_t *semantic_ids,
+                               double *semantic_scores, int *semantic_hit_count,
+                               memory_candidate_source_t *source_stats, int *source_stats_count);
+void memory_note_candidate_sources(memory_candidate_source_t *stats, int *stats_count,
+                                   int stats_max, const memory_t *matches, int start, int end,
+                                   unsigned int source_mask);
 #endif /* MEMORY_CORE_INTERNAL_H */
