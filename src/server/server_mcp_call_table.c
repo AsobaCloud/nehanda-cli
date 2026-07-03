@@ -1075,6 +1075,18 @@ static cJSON *mcph_index_graph_hubs(struct mcp_call *c)
    return code_graph_passthrough(json, status, "index_graph_hubs");
 }
 
+static cJSON *mcph_index_graph_audit(struct mcp_call *c)
+{
+   cJSON *jp = cJSON_GetObjectItemCaseSensitive(c->jargs, "project");
+   if (!cJSON_IsString(jp) || !jp->valuestring[0])
+      return text_content("error: index_graph_audit requires 'project'");
+   long long mf = 0;
+   int max_findings = pdf_arg_pos_int(c->jargs, "max_findings", 200.0, &mf) ? (int)mf : 20;
+   int status = -1;
+   char *json = kb_client_code_graph_audit(jp->valuestring, max_findings, &status);
+   return code_graph_passthrough(json, status, "index_graph_audit");
+}
+
 static cJSON *mcph_index_graph_node(struct mcp_call *c)
 {
    cJSON *jp = cJSON_GetObjectItemCaseSensitive(c->jargs, "project");
@@ -1338,6 +1350,7 @@ static const struct
     {"code_span_get", mcph_code_span_get},
     {"index_hybrid", mcph_index_hybrid},
     {"index_graph_hubs", mcph_index_graph_hubs},
+    {"index_graph_audit", mcph_index_graph_audit},
     {"index_graph_surprising", mcph_index_graph_surprising},
     {"index_graph_node", mcph_index_graph_node},
     {"memory_explain_match", mcph_memory_explain_match},
