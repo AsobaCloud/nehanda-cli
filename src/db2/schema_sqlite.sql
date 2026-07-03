@@ -331,7 +331,7 @@ CREATE INDEX IF NOT EXISTS idx_lessons_ledger_project ON lessons_outcome_ledger(
 CREATE INDEX IF NOT EXISTS idx_lessons_ledger_finding ON lessons_outcome_ledger(finding_id);
 CREATE TABLE IF NOT EXISTS lessons_outcome_citations (  outcome_id INTEGER NOT NULL REFERENCES lessons_outcome_ledger(id) ON DELETE CASCADE,  node_id TEXT NOT NULL,  disposition TEXT NOT NULL DEFAULT 'unused' CHECK (disposition IN ('useful','stale','unused')),  PRIMARY KEY (outcome_id, node_id));
 CREATE TRIGGER IF NOT EXISTS trg_lessons_ledger_no_delete BEFORE DELETE ON lessons_outcome_ledger BEGIN  SELECT RAISE(ABORT, 'lessons_outcome_ledger is append-only (DELETE forbidden)');END;
-CREATE TRIGGER IF NOT EXISTS trg_lessons_ledger_immutable BEFORE UPDATE OF session_id, turn_id, project_id, generation_id, answer_outcome, correction_text, finding_id, actor_id, actor_source, ts ON lessons_outcome_ledger BEGIN  SELECT RAISE(ABORT, 'lessons_outcome_ledger is append-only (only the confirmation flag may change)');END;
+CREATE TRIGGER IF NOT EXISTS trg_lessons_ledger_immutable BEFORE UPDATE OF id, session_id, turn_id, project_id, generation_id, answer_outcome, correction_text, finding_id, actor_id, actor_source, ts ON lessons_outcome_ledger BEGIN  SELECT RAISE(ABORT, 'lessons_outcome_ledger is append-only (only the confirmation flag may change)');END;
 CREATE INDEX IF NOT EXISTS idx_ee_source_relation ON entity_edges(source, relation);
 CREATE INDEX IF NOT EXISTS idx_ee_target_relation ON entity_edges(target, relation);
 CREATE INDEX IF NOT EXISTS idx_ee_origin_source ON entity_edges(edge_origin, source);
