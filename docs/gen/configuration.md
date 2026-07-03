@@ -610,13 +610,14 @@ Beyond the config store, aimee reads a few standalone JSON/policy files (paths u
 | `name` | Agent identifier. |
 | `network` | Network mode (backend sandbox). |
 | `networks` | Allowed networks. |
+| `personas` | Personas this agent may be dispatched AS (engineer, architect, …); `"all"` or omitted = every persona. |
 | `port` | Target port (relay / tunnel). |
 | `provider` | Provider name. |
 | `recommended_sampling` | Provider-recommended sampling parameters. |
 | `reconnect_delay` | Delay between reconnects (ms). |
 | `relay_key` | Relay auth key. |
 | `relay_ssh` | SSH relay config. |
-| `roles` | Roles this agent serves (review, plan, …). |
+| `roles` | Roles this agent serves (review, plan, …); `"all"` = every role. |
 | `session_reuse` | Reuse a session across calls. |
 | `ssh_entry` | SSH entry point (ssh backend). |
 | `ssh_key` | SSH key path (ssh backend). |
