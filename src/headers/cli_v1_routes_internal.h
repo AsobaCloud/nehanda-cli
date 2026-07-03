@@ -2,6 +2,7 @@
 #define CLI_V1_ROUTES_INTERNAL_H
 /* INTERNAL: cross-segment decls for the split cli_v1_routes*.c TUs. Private. */
 #include "cli_client.h"
+#include "aimee_home.h" /* aimee_home() — cross-platform, used outside the _WIN32 guard */
 #include "cli_v1_routes.h"
 #define V1_MAX_POS   16
 #define V1_MAX_FLAGS 32
