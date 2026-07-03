@@ -1,6 +1,9 @@
 /* server_http_response.c: split from server_http.c into a real translation unit
  * (was server_http_response.inc, textually included only to stay under the
  * line-check ceiling). Cross-TU declarations live in the module header. */
+#ifndef _GNU_SOURCE /* strcasestr/memmem are GNU extensions (container gcc) */
+#define _GNU_SOURCE
+#endif
 #include "server_http_internal.h"
 #include "server_http.h"
 #include "server.h"         /* CAP_* / CAPS_* capability bits, server_capability_for_method */
