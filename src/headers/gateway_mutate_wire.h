@@ -72,6 +72,28 @@ extern "C"
    gw_post_action_t gw_buffered_after_status(cJSON *container, const char *key, int http_status,
                                              gw_mutate_ctx_t *ctx);
 
+   /* Streaming disposition (§2.5 streaming): a mutated stream CANNOT restore/resend —
+    * the HTTP 200 is committed to the client before the upstream status is known, so
+    * only SUBSEQUENT turns are protected. gw_stream_disable circuit-breaks the session
+    * for subsequent turns (records gateway_stream_error_disable + the reason), clears
+    * provenance, and is idempotent within a turn (it flips ctx->mutated off so a second
+    * call no-ops). No-op for a non-mutated / keyless request. `reason` is a stable
+    * static label ("stream_invalid_request" | "stream_decoder_error"). */
+   void gw_stream_disable(gw_mutate_ctx_t *ctx, const char *reason);
+
+   /* Classify an Anthropic SSE error-frame `data` (the JSON body of an `event: error`
+    * frame). Returns 1 for an invalid-request-class error (invalid_request_error /
+    * request_too_large — a reduced-payload bug => disable), 0 for rate-limit /
+    * overloaded / api_error / auth frames (transient or unrelated => forward WITHOUT
+    * disabling, so the breaker is not false-tripped). NULL/garbage-safe. */
+   int gw_stream_anthropic_error_is_invalid_request(const char *data);
+
+   /* Whether an upstream HTTP status is the invalid-request class a bad reduced
+    * payload can produce (400/413/422). Used by the buffered-replay streaming path to
+    * disable ONLY on a payload-class 4xx — never on 401/403/404/429 (auth/rate-limit,
+    * which the streaming contract forwards without disabling). */
+   int gw_status_is_invalid_request(int http_status);
+
 #ifdef __cplusplus
 }
 #endif
