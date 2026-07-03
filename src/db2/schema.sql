@@ -1336,6 +1336,23 @@ CREATE TABLE IF NOT EXISTS code_projection_edges (
 CREATE INDEX IF NOT EXISTS idx_cpe_project_triple
     ON code_projection_edges(project, source, relation, target);
 
+-- graph-feedback S-community: deterministic community membership per generation.
+-- Persisted for EVERY generated projection (keyed by generation_id, not only the
+-- visible one) so a later slice can diff arbitrary generations. community_id is
+-- the min-member node id (lex) and is GENERATION-LOCAL by contract (cross-gen
+-- stable remap is a later slice). Retention follows the generation cleanup
+-- schedule via ON DELETE CASCADE.
+CREATE TABLE IF NOT EXISTS code_projection_communities (
+    generation_id BIGINT NOT NULL REFERENCES code_projection_generations(id)
+        ON DELETE CASCADE,
+    project       TEXT NOT NULL,
+    node_id       TEXT NOT NULL,
+    community_id  TEXT NOT NULL,
+    PRIMARY KEY (generation_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cpc_gen_community
+    ON code_projection_communities(generation_id, community_id);
+
 -- Phase 3: projection_generation_id on entity_edges links each code-origin
 -- edge to its owning generation so recall can filter by visible generation.
 ALTER TABLE entity_edges
