@@ -1,6 +1,9 @@
 #if defined(AIMEE_DB2_DISABLED)
 #error "memory_core KB-real TU must not be compiled into the AIMEE_DB2_DISABLED (server) build"
 #endif
+#ifndef _GNU_SOURCE /* strcasestr/memmem are GNU extensions (container gcc) */
+#define _GNU_SOURCE
+#endif
 #include "memory_core_internal.h"
 /* memory_core_crud.c: split from memory_core.c into a real translation unit
  * (was memory_core_crud.inc, textually included only to stay under the

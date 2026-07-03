@@ -1,6 +1,9 @@
 /* server_compute_roundtable.c: split from server_compute.c into a real translation unit
  * (was server_compute_roundtable.inc, textually included only to stay under the
  * line-check ceiling). Cross-TU declarations live in the module header. */
+#ifndef _GNU_SOURCE /* strcasestr/memmem are GNU extensions (container gcc) */
+#define _GNU_SOURCE
+#endif
 #include "server_compute_internal.h"
 #include "aimee.h"
 #include "json_fluent.h" /* jo_ok */
