@@ -41,6 +41,7 @@ const TSLanguage *tree_sitter_css(void);
 const TSLanguage *tree_sitter_scala(void);
 const TSLanguage *tree_sitter_groovy(void);
 const TSLanguage *tree_sitter_objc(void);
+const TSLanguage *tree_sitter_elixir(void);
 
 typedef enum
 {
@@ -63,7 +64,8 @@ typedef enum
    TSL_CSS,
    TSL_SCALA,
    TSL_GROOVY,
-   TSL_OBJC
+   TSL_OBJC,
+   TSL_ELIXIR
 } ts_lang_t;
 
 static const TSLanguage *ts_language_for_ext(const char *ext, ts_lang_t *which)
@@ -115,6 +117,8 @@ static const TSLanguage *ts_language_for_ext(const char *ext, ts_lang_t *which)
         * target; a MATLAB .m simply won't parse cleanly and falls through). */
        {".m", TSL_OBJC, tree_sitter_objc},
        {".mm", TSL_OBJC, tree_sitter_objc},
+       {".ex", TSL_ELIXIR, tree_sitter_elixir},
+       {".exs", TSL_ELIXIR, tree_sitter_elixir},
    };
    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++)
       if (strcmp(ext, map[i].ext) == 0)
@@ -602,7 +606,60 @@ static int classify_objc(TSNode node, const char **kind, TSNode *name_root)
    return 0;
 }
 
-static int classify(ts_lang_t lang, TSNode node, const char **kind, TSNode *name_root)
+/* Elixir: def/defmodule are MACRO CALLS, not definition nodes. A `call` whose head
+ * identifier is def/defp/defmacro(p) defines a function; defmodule/defprotocol/defimpl
+ * defines a module (type). Unlike every other classifier this needs the source text
+ * (to read the macro keyword), so classify() threads `content` through to here. The
+ * defined name lives in the first `arguments` child: an alias for a module, a nested
+ * call's identifier for `def foo(x)`, or a bare identifier for a no-arg `def foo`. */
+static int classify_elixir(TSNode node, const char *content, const char **kind, TSNode *name_root)
+{
+   if (strcmp(ts_node_type(node), "call") != 0 || ts_node_named_child_count(node) == 0)
+      return 0;
+   TSNode head = ts_node_named_child(node, 0);
+   if (strcmp(ts_node_type(head), "identifier") != 0)
+      return 0;
+   char macro[16];
+   node_text(head, content, macro, (int)sizeof(macro));
+   int is_fn = strcmp(macro, "def") == 0 || strcmp(macro, "defp") == 0 ||
+               strcmp(macro, "defmacro") == 0 || strcmp(macro, "defmacrop") == 0;
+   int is_mod = strcmp(macro, "defmodule") == 0 || strcmp(macro, "defprotocol") == 0 ||
+                strcmp(macro, "defimpl") == 0;
+   if (!is_fn && !is_mod)
+      return 0;
+   TSNode args;
+   if (!child_of_type(node, "arguments", &args) || ts_node_named_child_count(args) == 0)
+      return 0;
+   TSNode first = ts_node_named_child(args, 0);
+   const char *ft = ts_node_type(first);
+   if (is_mod)
+   {
+      /* module name is an alias (Foo, Foo.Bar) */
+      *name_root = first;
+      *kind = "type";
+      return 1;
+   }
+   /* function: `def foo(x)` -> nested call whose first id is the name; `def foo` -> id */
+   if (strcmp(ft, "call") == 0)
+   {
+      if (ts_node_named_child_count(first) == 0)
+         return 0;
+      *name_root = ts_node_named_child(first, 0);
+   }
+   else if (strcmp(ft, "identifier") == 0)
+   {
+      *name_root = first;
+   }
+   else
+   {
+      return 0; /* guarded defs (when clauses) etc. — a known gap */
+   }
+   *kind = "function";
+   return 1;
+}
+
+static int classify(ts_lang_t lang, TSNode node, const char *content, const char **kind,
+                    TSNode *name_root)
 {
    switch (lang)
    {
@@ -645,6 +702,8 @@ static int classify(ts_lang_t lang, TSNode node, const char **kind, TSNode *name
       return classify_groovy(node, kind, name_root);
    case TSL_OBJC:
       return classify_objc(node, kind, name_root);
+   case TSL_ELIXIR:
+      return classify_elixir(node, content, kind, name_root);
    }
    return 0;
 }
@@ -682,7 +741,11 @@ static int is_descendable(const char *t)
        "closure",
        /* Objective-C: @interface/@implementation/@protocol bodies */
        "class_interface", "class_implementation", "implementation_definition",
-       "protocol_declaration", NULL};
+       "protocol_declaration",
+       /* Elixir: a module is a `call` (defmodule …) whose members live in its do_block;
+        * both must be descended. Safe: visit() halts on any matched function, so a
+        * `def`'s body (also a do_block) is never descended. */
+       "call", "do_block", NULL};
    for (int i = 0; set[i]; i++)
       if (strcmp(t, set[i]) == 0)
          return 1;
@@ -698,7 +761,7 @@ static void visit(ts_lang_t lang, TSNode node, const char *content, definition_t
       return;
    const char *kind = NULL;
    TSNode name_root;
-   int matched = classify(lang, node, &kind, &name_root);
+   int matched = classify(lang, node, content, &kind, &name_root);
    if (matched && !ts_node_is_null(name_root))
    {
       node_text(name_root, content, out[*count].name, (int)sizeof(out[*count].name));
@@ -832,14 +895,16 @@ static void walk_calls(ts_lang_t lang, TSNode node, const char *content, const c
    TSNode nm;
    const char *child_caller = caller;
    char buf[sizeof(out->caller)];
-   if (classify(lang, node, &kind, &nm) && kind && strcmp(kind, "function") == 0 &&
-       !ts_node_is_null(nm))
+   int is_def = classify(lang, node, content, &kind, &nm);
+   if (is_def && kind && strcmp(kind, "function") == 0 && !ts_node_is_null(nm))
    {
       node_text(nm, content, buf, (int)sizeof(buf));
       if (buf[0])
          child_caller = buf; /* calls in this subtree are attributed to this function */
    }
-   if (is_call_node(ts_node_type(node)))
+   /* !is_def: an Elixir `def foo` is itself a `call` node — never emit a definition as a
+    * call (its signature's inner call is skipped for the same reason). */
+   if (is_call_node(ts_node_type(node)) && !is_def)
    {
       char callee[sizeof(out->callee)];
       if (call_callee_name(node, content, callee, (int)sizeof(callee)) && callee[0])
