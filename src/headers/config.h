@@ -1373,6 +1373,10 @@ typedef struct config
    double code_hybrid_weight_vector;
    double code_hybrid_weight_memory;
    double code_hybrid_rrf_k;
+   /* graph-feedback §3 actuation (default off): when set, the /v1/code/hybrid fusion
+    * applies the project's earned-trust lessons as an RRF TIE-BREAK ONLY (never moves a
+    * candidate across a real score gap). Off ⇒ identical to the pre-§3 ranking. */
+   int code_trust_actuation_enabled;
    /* §4: when the LLM-judge-sampled precision of surprising-link structural candidates
     * falls below this floor, an unjudged /v1/code/graph/surprising request suppresses
     * its candidates (they're mostly false positives). 0 (default) disables it. */
