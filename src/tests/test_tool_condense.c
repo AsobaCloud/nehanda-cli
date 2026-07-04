@@ -202,6 +202,49 @@ int main(void)
       /* non-zero exit with NO failure signal -> passthrough (NULL) */
       char *r2 = tc_family_test_runner(1, "building...\nlinking...\nnothing useful here\n");
       assert(r2 == NULL);
+
+      /* NO-OVER-REDUCTION (P1a): the failure DETAIL (a separate line from its `--- FAIL:`
+       * marker, `go test` style) must survive in the CONDENSED output, not just the spill.
+       * 60 passes + a failure whose message is the line ABOVE the marker. */
+      char gt[8192];
+      size_t o = 0;
+      for (int k = 0; k < 60; k++)
+      {
+         o += (size_t)snprintf(gt + o, sizeof gt - o, "=== RUN   TestPass%02d\n", k);
+         o += (size_t)snprintf(gt + o, sizeof gt - o, "--- PASS: TestPass%02d (0.00s)\n", k);
+      }
+      o += (size_t)snprintf(gt + o, sizeof gt - o, "=== RUN   TestBoom\n");
+      o += (size_t)snprintf(gt + o, sizeof gt - o, "    x_test.go:63: boom: expected 5 got 4\n");
+      snprintf(gt + o, sizeof gt - o, "--- FAIL: TestBoom (0.00s)\nFAIL\n");
+      char *r3 = tc_family_test_runner(1, gt);
+      assert(r3);
+      assert(strstr(r3, "--- FAIL: TestBoom"));     /* the marker */
+      assert(strstr(r3, "boom: expected 5 got 4")); /* the DETAIL — must NOT be elided */
+      assert(!strstr(r3, "TestPass30"));            /* middle passes still dropped */
+      assert(strlen(r3) < strlen(gt));              /* still materially shrank */
+      free(r3);
+
+      /* multi-line detail block (pytest-style traceback BELOW the failure line) — every
+       * line of the block survives, not just the first. */
+      char py[8192];
+      size_t p = 0;
+      for (int k = 0; k < 50; k++)
+         p += (size_t)snprintf(py + p, sizeof py - p, "test_mod.py::test_ok%02d PASSED\n", k);
+      snprintf(py + p, sizeof py - p,
+               "test_mod.py::test_div FAILED\n"
+               "=================== FAILURES ===================\n"
+               "    def test_div():\n"
+               ">       assert divide(1, 0) == 1\n"
+               "E       ZeroDivisionError: division by zero\n"
+               "test_mod.py:7: ZeroDivisionError\n"
+               "=========== 1 failed, 50 passed ===========\n");
+      char *r4 = tc_family_test_runner(1, py);
+      assert(r4);
+      assert(strstr(r4, "test_div FAILED"));
+      assert(strstr(r4, "ZeroDivisionError: division by zero")); /* the assertion cause */
+      assert(strstr(r4, "assert divide(1, 0)"));                 /* the asserting line */
+      assert(!strstr(r4, "test_ok20 PASSED"));                   /* passes dropped */
+      free(r4);
    }
 
    /* ---- tool_condense_apply (S3) ---- */
