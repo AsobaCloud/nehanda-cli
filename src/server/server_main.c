@@ -3,6 +3,7 @@
 #include "cli_client.h"
 #include "commands.h"
 #include "config.h"
+#include "config_sections.h"
 #include "forge_app_token.h"
 #include "forge_credentials.h"
 #include "git_host_cred.h"
@@ -163,6 +164,11 @@ static int run_server(const char *socket_path, log_level_t log_level)
 
    config_t cfg;
    config_load(&cfg);
+
+   /* Bridge the autonomy config knobs to their AIMEE_AUTONOMY_* env vars as early as
+    * possible — before any consumer (plugin discovery, the wfe engine) could read them
+    * via getenv. An explicitly-set env var still overrides (setenv no-overwrite). */
+   autonomy_config_to_env(&cfg);
 
    /* Startup-fatal validation for the live gateway-mutation path: an invalid
     * session-disable TTL (<=0) must refuse to bring up the /v1 server rather than
