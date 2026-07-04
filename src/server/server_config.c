@@ -87,8 +87,10 @@ int handle_config_set(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    if (!f)
       return server_send_error(conn, "config: unknown key", NULL);
 
+   /* Read from DISK (not the live snapshot) for the read-modify-save so a config.set never
+    * clobbers an external edit made to the file since the last reload (live-config-reload P1b). */
    config_t cfg;
-   if (config_load(&cfg) != 0)
+   if (config_load_file(&cfg) != 0)
       return server_send_error(conn, "config: could not load configuration", NULL);
 
    if (config_field_set_value(&cfg, f, value) != 0)
@@ -96,6 +98,10 @@ int handle_config_set(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 
    if (config_save(&cfg) != 0)
       return server_send_error(conn, "config: could not save configuration", NULL);
+
+   /* Push the change into the live snapshot NOW so it takes effect immediately for every
+    * config_load reader, instead of waiting for an mtime-cache miss (live-config-reload P1b). */
+   (void)config_reload();
 
    cJSON *resp = jo_ok();
    cJSON_AddStringToObject(resp, "key", key);
