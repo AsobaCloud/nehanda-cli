@@ -1,9 +1,14 @@
 # Proposal: Gateway mutation — primary-agent context reduction
 
-- **State:** PROPOSED — not started. Extends the unified context economizer
-  (`context_reduce`/`context_fold`/`compact_body`, now default-ON at the delegate seam).
-  Design roundtable-reviewed (3 rounds; all decisions D1–D6 + the
-  `should_apply`/snapshot/hard-bypass refinements incorporated below).
+- **State:** done — implemented + merged to `testing` behind `reduce_gateway_mutate`
+  (default OFF, zero behavior change when off), across 7 roundtable-reviewed PRs
+  (#1015 config, #1017 session-breaker+telemetry, #1018 decision helpers, #1019
+  Anthropic buffered, #1021 Anthropic streaming, #1022 OpenAI `/v1/responses` buffered,
+  #1023 telemetry+docs). See **Close-out** below for the acceptance mapping, the
+  runtime `.253` validation, the OpenAI-streaming finding, and the carried gates.
+  Extends the unified context economizer (`context_reduce`/`context_fold`/`compact_body`,
+  default-ON at the delegate seam). Design roundtable-reviewed (3 rounds; all decisions
+  D1–D6 + the `should_apply`/snapshot/hard-bypass refinements incorporated below).
 - **Thesis:** the economizer reduces the **delegate** (sub-agent) turn loop, but the
   inbound `/v1` **gateway** — the path that serves the **primary** agent (including
   Claude-Code-through-aimee) — runs the economizer in **shadow** (`measure_only=1`
@@ -284,3 +289,60 @@ refcount/COW snapshots (correctness-first); the global flood-disable (§9 O1).
 - {id: 7, tier: deployment, check: ".254 with reduce_gateway_mutate=1 over >=7 days, >=10k mutated requests/provider/stream-mode: upstream 4xx within +/-0.5% abs vs parallel shadow on same payloads, gateway_5xx_disable within +/-0.5%, session-disable <5%, hard_bypass <1%, 4xx-restore-resend <2%, stream_error_disable <2%, ZERO user-visible stream-aborts, sampled token delta monotone-reduction, buffered p99 <+10ms vs shadow"}
 - {id: 8, tier: hardware, check: "snapshot_messages() bench at 200k/500k/1M tokens (deep-copy vs COW), both providers AND both buffered + streaming snapshot paths: p99 <+15ms at 1M tokens vs no-snapshot baseline on target hardware (O2, before .254)"}
 ```
+
+## Close-out
+
+Implemented as 8 planned slices (S7 subsumed — see below), each roundtable-reviewed and
+merged to `testing` behind `reduce_gateway_mutate` (default OFF). Operator guide:
+`docs/features/economizer-gateway-mutation.md`.
+
+**Slice → PR:** S1 config flags + startup-fatal ttl + mutate⇒seam auto-enable (#1015);
+S2 `msg_session_disable` breaker + `gw_mutate_stats` sink (#1017); S3 `gateway_mutate`
+decision/snapshot/replace/provenance helpers + additive `reduce_error_t` (#1018);
+S4 Anthropic buffered wiring + `gateway_mutate_wire` + identity capture (#1019);
+S5 Anthropic streaming (SSE decoder-layer inspect-as-forward + disable) (#1021);
+S6 OpenAI `/v1/responses` buffered via reference-boxing (#1022); S8 sampled token-delta
+telemetry + no-behavior-change test + docs (#1023).
+
+**Inbound endpoint coverage** (the gateway-mutation seam extends the existing economizer
+*shadow* seam, which lives only on the two primary-agent endpoints):
+
+| Endpoint | Handler | Upstream | Mutation |
+|---|---|---|---|
+| `/v1/messages` buffered | `anthropic_http.c messages_buffered` | buffered | S4 (restore-resend / 5xx-disable) |
+| `/v1/messages` streaming | `anthropic_http.c messages_stream` | true SSE stream | S5 (disable-subsequent-turns) |
+| `/v1/responses` buffered + streaming | `openai_chat.c agent_execute_messages` | buffered (streaming replays) | S6 (restore-resend / 5xx-disable) |
+| `/v1/chat/completions`, `/v1/completions` | `chat_stream_handler`, `completion_stream_handler` | — | **out of scope** (no economizer shadow seam; not a primary-agent reduction path) |
+
+**S7 (OpenAI streaming) — subsumed by S6 (verified repo-wide).** A repo-wide search
+confirms `agent_http_post_stream` (true token-by-token upstream streaming) exists **only**
+in `anthropic_http.c` — there is no OpenAI-family true upstream streaming anywhere in the
+server. The `/v1/responses` streaming handler (`responses_stream_handler`) buffers upstream
+via `agent_execute_messages` then replays as SSE, so it inherits S6's full buffered
+mutation including the 4xx restore-resend — strictly better than the streaming
+disable-only contract — so no separate S7 code was written. A code comment in
+`responses_stream_handler` records this as a regression guard.
+
+**Acceptance:**
+- **#1–#6 (mechanical + integration): met.** Unit tests: `test_config_economizer`
+  (flags, mutate-auto-enable-not-persisted, ttl≤0 rejected), `test_msg_session_disable`
+  (LRU/TTL/sweep/eviction + key resolve + 4-case cross-tenant matrix),
+  `test_gateway_mutate` (should_apply every bypass class, snapshot OOM-safety, replace
+  ownership, provenance), `test_gateway_mutate_wire` (4xx-restore-resend / 5xx-disable /
+  streaming disable / error-frame + status classification / token-delta sampling /
+  no-behavior-change byte-identical). Full `unit-tests` + CI `build`/`build-integrity`
+  green. Provenance §2.6 matrix covered across `test_gateway_mutate` +
+  `test_gateway_mutate_wire` + `test_context_reduce` (gateway→delegate hand-off).
+- **Runtime `.253` smoke:** the production `aimee-server` binary was run on the `.253`
+  deployment host: `reduce.gateway_mutate=1` + `ttl=0` → **startup-fatal** (exit 1 + the
+  config error); `reduce.gateway_mutate=1` + valid ttl → **clean start** (server stayed
+  up, the auto-enable-seam WARN fired, no fatal). Validates the config/startup wiring on
+  the real binary.
+- **#7 (`.254` ≥7-day ≥10k/provider/mode live validation) — carried.** Deployment tier;
+  gates the separate **default-ON** decision (R6, out of scope), and needs a priced
+  provider + real workload for the net-token and 4xx-parity gates.
+- **#8 (snapshot-cost benchmark) — carried.** Hardware tier (O2, perf-owned).
+- **O1 global flood-disable — deferred by design** (§9).
+
+Everything is **default-OFF** with a proven zero-behavior-change gate, so this ships the
+mechanism; the default-ON flip is a separate, data-gated decision.
