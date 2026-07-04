@@ -130,4 +130,57 @@ Additional adopted refinements: verdict aggregation must distinguish
 partial-success from total-failure and log partial commits; patch-coordinator
 actions audited + attributed to the work item.
 
-**Plan status: roundtable-approved.** Ready to implement Phase A.
+**Plan status: done — implemented.** Filed alongside the (already-closed) proposal
+`full-autonomous-development.md`. See **Implementation status** below.
+
+## Implementation status
+
+Phases A/B and the Phase-C *floor* shipped with the proposal itself (closed to `done/`
+via **PR #874**, 2026-06-29): the delegate seam + live provider, per-work-item worktree
+isolation, the server-owned scheduler, authed intake (`POST /v1/dev/submit`), the
+mechanical verify gate, the WP-5 budget/merge-target rails, and the live forge behind
+`wfe_live_forge_enabled` (default-OFF).
+
+The three ratified-deferred **Phase-C DEPTH** items (this closeout) are now implemented +
+merged to `testing`, each roundtable-reviewed, all **default-safe / opt-in**:
+
+- **Q4 — richer failure taxonomy (PC1, PR #1026).** `wfe_failure_class_t` classifies a
+  `WFE_STEP_FAILED` into a retry (LOOPED, only with new input) / terminal-reject /
+  park-human / park-stuck disposition. Core invariant: **never auto-retry without new
+  input**. Additive + inert for existing executors.
+- **Q3 — CI-webhook resume + red-CI retry cap (PC2, PR #1028).** HMAC-signed
+  `POST /v1/dev/ci-event` (fail-closed if `AIMEE_CI_WEBHOOK_SECRET` unset) records the CI
+  outcome + resumes the scheduler immediately; `exec_gate_ci` bounds the red-CI loop
+  per-work-item by `AIMEE_AUTONOMY_CI_RETRY_MAX` → then parks (PC1 DEGRADED). Validated by
+  a `.253` runtime smoke (400/401/404/503 + fail-closed).
+- **Q2 — N-skeptic adversarial fan-out + patch-coordinator (PC3a #1028, PC3b #1029).**
+  A `wfe_judge_provider` seam + `wfe_implement_adversarial_ok` (reviewer + N skeptics,
+  accept iff `refutes*2 < K`, even-K tie rejects) gated by `AIMEE_AUTONOMY_SKEPTICS`; a
+  live read-only judge provider (worktree-reset-enforced); and an engine-level fan-out
+  manager loop (`AIMEE_AUTONOMY_FANOUT`): coordinator decompose → per-unit engineer +
+  verify + retry-different-delegate → sequential-commit patch-coordinator → **mandatory
+  aggregate verify** → **no silent partial advance** (any unit fail → park).
+
+Clarifications (from the closeout verification roundtable):
+- `DEGRADED` is a failure **class** that maps to the **park-human** disposition (the CI
+  retry-cap exhaustion parks for a human). `AIMEE_AUTONOMY_SKEPTICS=0` short-circuits the
+  adversarial gate to *pass* before the `refutes*2 < K` rule (so K=0 is "no review", never
+  a silent block).
+- **Aggregate verify** = the same mechanical `git_verify` (format=json, top-level
+  `verdict:passed`) run on the whole merged worktree after fan-out — plus the opt-in
+  adversarial gate. Fan-out is **sequential** (scheduler concurrency=1): units land as
+  successive commits on one branch, so there is no parallel-merge conflict; any
+  integration breakage is caught by the aggregate verify → loop/park, never a silent
+  partial advance.
+- The **live judge is fail-closed**: a missing/unreachable agent, a dispatch error, or an
+  unparseable verdict is treated as REFUTED (the gate blocks), mirroring the webhook's
+  fail-closed posture; and the judge worktree is hard-reset after each judgment so it
+  cannot mutate the change. The CI webhook dedupes on `(status, head_sha)` and the
+  scheduler's existing per-work-item single-flight serializes concurrent resumes.
+
+**Carried (ratified GA gates — NOT code I land autonomously):** the real
+seccomp/namespace/cgroup execution sandbox (hardware tier); branch protection on the
+forge; scoped/rotated forge creds + break-glass; multi-forge; the default-ON of the live
+forge; a production live-forge round-trip. These gate operator/GA enablement, not the code
+floor + depth shipped here. The fan-out + live-judge tiers are integration-gated (like the
+existing live providers) and default-OFF.
