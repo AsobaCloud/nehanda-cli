@@ -8,6 +8,7 @@
 #include "harness_memory_audit.h"  /* hmem_audit */
 #include "harness_memory_common.h" /* hmem_resolve_project / hmem_project_key_ok */
 #include "harness_memory_scope.h"  /* hmem_scope_for_client */
+#include "harness_memory_spill.h"  /* hmem_spill_write (retirement db1-outage fail-open) */
 #include "json_fluent.h"           /* jo_ok */
 #include "memory_redirect.h"       /* memory_redirect_classify / _bash_targets / _rematerialize */
 #include "primary_cli_ingestor.h"
@@ -826,6 +827,38 @@ static int server_memory_intercept(const char *tool, const char *tool_input, con
    {
       cJSON_Delete(ti); /* can't identify the project — fail open */
       return 0;
+   }
+
+   /* .md retirement (AIMEE_MEMORY_MD_RETIRE, default-off): store the intercepted
+    * write into db1 as a private, non-recallable archive row (kind='archive',
+    * tier L1 — outside the recall selectors) and do NOT re-materialize the .md —
+    * the file never exists; content lives only in aimee. The agent is steered to
+    * `aimee memory` by the session brief. Server owns db1, so write directly. */
+   {
+      const char *mr = getenv("AIMEE_MEMORY_MD_RETIRE");
+      if (mr && (mr[0] == '1' || mr[0] == 't' || mr[0] == 'T' || mr[0] == 'y'))
+      {
+         /* Project-qualified so identically-named memories from different
+          * projects don't collide under this user's UNIQUE(kind,key). */
+         char akey[HMEM_PROJECT_KEY_MAX + 600];
+         snprintf(akey, sizeof(akey), "archive:%s/%s", project, name);
+         if (db1_user_memory_upsert("archive", "L1", akey, content, 1.0, client) != 0)
+         {
+            /* db1 outage: spill for the next reconcile (matches the non-retire
+             * path + the client fallback), then fail-open so the agent isn't
+             * blocked on our store. */
+            int sp = hmem_spill_write(project, name, "archive", content);
+            hmem_audit(sp == 0 ? "spill" : "spill-failed", project, name, "db1 store unreachable");
+            cJSON_Delete(ti);
+            return 0;
+         }
+         hmem_audit("redirect-db1", project, name, NULL);
+         snprintf(msg, msg_len,
+                  "Saved to aimee memory. Memory files are retired — retrieve with "
+                  "`aimee memory search` and use `aimee memory store` going forward.");
+         cJSON_Delete(ti);
+         return 2;
+      }
    }
 
    hmem_row_t row;
