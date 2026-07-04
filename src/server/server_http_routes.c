@@ -63,6 +63,8 @@
 #include <math.h>             /* isfinite — validate the /v1/dev/submit budget cap */
 #include <errno.h>            /* strtol overflow detection for /v1/dev/submit caps */
 #include "wfe_engine.h"       /* wfe_work_item_create — POST /v1/dev/submit intake */
+#include "json_fluent.h"      /* jo_cstr — parse the CI-event webhook body */
+#include <openssl/hmac.h>     /* HMAC-SHA256 for the CI-event webhook (server links -lcrypto) */
 #include "router_advise.h"    /* S4: router_autonomous_pick/_audit for dev-submit parity */
 #include "wfe_scheduler.h"    /* wfe_scheduler_notify — resume the autonomy driver */
 #include "wfe_approval.h"     /* wfe_approval_record/present — human-gate approval */
@@ -70,20 +72,8 @@
 #include <sys/stat.h>         /* mkdir for the proposal artifact dir */
 #include <time.h>             /* unique proposal artifact filename */
 
-/* Per-request context handed to a route handler. `id` holds the extracted
- * dynamic path segment (persona / role-template name, session id, run id) for
- * RM_PREFIX routes, or "" for fixed routes. */
-typedef struct
-{
-   const char *method;
-   const char *path;
-   const char *body;
-   int body_len;
-   const char *id;
-   const char *op; /* matched row's NDJSON method twin (for rh_dispatch_op), or NULL */
-} route_req_t;
-
-typedef int (*route_handler_fn)(const route_req_t *rq, char *resp, int cap);
+/* route_req_t + route_handler_fn now live in server_http_internal.h (shared so
+ * server_ci_route.c can define its own handler). */
 
 typedef enum
 {
@@ -2273,6 +2263,9 @@ static const http_route_t g_v1_routes[] = {
      * (CAP_DELEGATE — it spawns delegate work). The only way an autonomous run
      * begins; aimee never self-initiates. */
     {"POST", "/v1/dev/submit", NULL, RM_EXACT, NULL, CAP_DELEGATE, rh_dev_submit},
+    /* CI webhook: HMAC-signed (own integrity), so it needs no capability bit — a
+     * machine caller has no attested principal. */
+    {"POST", "/v1/dev/ci-event", NULL, RM_EXACT, NULL, 0, rh_dev_ci_event},
     {"POST", "/v1/runs", NULL, RM_EXACT, NULL, CAP_CHAT, rh_runs_post},
     {"POST", "/v1/runs/", "/stop", RM_PREFIX, NULL, CAP_CHAT, rh_runs_stop},
     {"GET", "/v1/runs/", "/events", RM_PREFIX, NULL, CAP_SESSION_READ, NULL},
