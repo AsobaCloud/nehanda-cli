@@ -14,8 +14,12 @@
 
 #define V1_PROTOCOL_VERSION 1
 
-/* Include the route implementation directly so static marshal helpers are testable. */
-#include "../cli_v1_routes.inc"
+/* Include the route implementation directly so static marshal helpers are
+ * testable. It was one .inc; it is now four sibling TUs, pulled in together. */
+#include "../cli_v1_routes.c"
+#include "../cli_v1_routes_b.c"
+#include "../cli_v1_routes_c.c"
+#include "../cli_v1_routes_d.c"
 
 static void test_delegate_max_turns_marshaled(void)
 {

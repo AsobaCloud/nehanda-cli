@@ -55,3 +55,37 @@ every client's settings, location-independently via `resolved_aimee_bin_path()`)
 Then `aimee`'s standard client setup installs the ban for everyone, regardless of
 where the `aimee` binary lives, with no gitignored-settings dependency. This script
 remains the zero-dependency fallback that works straight from a checkout.
+
+## `enforce_worktree.py` — keep edits out of the shared main clone
+
+aimee already isolates its **own** work in worktrees (every delegate / work item
+runs in a locked `aimee/wi/<id>` worktree — `src/server/delegate_checkout.c`,
+`src/workflow/wfe_blocks.c`). But the **primary** session (Claude Code in a tmux
+TUI) edits files with the harness's `Edit`/`Write` tools, which never traverse
+aimee's `/v1` gateway — the same blind spot the sub-agent ban describes. So nothing
+stopped the primary from editing the **shared main clone** directly, and concurrent
+sessions piled uncommitted changes onto one branch.
+
+Detection primitive: a main clone's `.git` is a **directory**; a linked worktree's
+`.git` is a **file**. So "am I in the shared checkout?" is a one-line filesystem
+test — no git subprocess.
+
+This PreToolUse hook blocks `Edit`/`Write`/`MultiEdit`/`NotebookEdit` whose target
+lives in a main clone, with a redirect to create/use a worktree. Escape hatch for
+the human who owns the main-clone branch: `AIMEE_ALLOW_MAIN_CHECKOUT=1` or a
+`<repo>/.git/aimee-allow-main-edits` marker.
+
+### Two layers (belt + suspenders)
+1. **Native (installer-wired, primary):** the same policy lives in `aimee hooks pre`
+   (`src/cmd_hooks.c`: `path_is_main_clone` + `main_clone_edits_allowed`), which
+   aimee's installer already wires as a PreToolUse hook — so it enforces on every
+   client with no gitignored-settings dependency.
+2. **Script (zero-dependency fallback):** `enforce_worktree.py`, wired the same way
+   as `block_subagent.py`:
+   ```jsonc
+   // .claude/settings.local.json
+   { "hooks": { "PreToolUse": [{
+       "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+       "hooks": [{ "type": "command",
+                   "command": "<repo>/.claude/hooks/enforce_worktree.py" }] }] } }
+   ```

@@ -607,8 +607,6 @@ int verify_load_config(const char *project_root, verify_config_t *cfg)
    return (cfg->enforce || cfg->count > 0 || cfg->env_count > 0) ? 0 : -1;
 }
 
-#include "git_verify_state.inc"
-
 /* Per-step state shared between the dispatcher thread and the worker
  * threads on the compute pool: 0=pending, 1=submitted/running, 2=done. */
 typedef struct
@@ -699,7 +697,8 @@ static void verify_run_waves_on_pool(compute_pool_t *external_pool, verify_confi
          {
             int saved_rc = -1;
             if (step_state[i] == 0 &&
-                step_result_lookup(ents[eidx].step_results, cfg->steps[i].name, &saved_rc) &&
+                verify_state_step_result_lookup(ents[eidx].step_results, cfg->steps[i].name,
+                                                &saved_rc) &&
                 saved_rc == 0)
             {
                contexts[i].rc = 0;
@@ -923,7 +922,8 @@ int verify_check(const char *project_root, const char *expected_commit, char *ms
       for (int i = 0; i < cfg.count; i++)
       {
          int rc = -1;
-         if (!step_result_lookup(entries[idx].step_results, cfg.steps[i].name, &rc) || rc != 0)
+         if (!verify_state_step_result_lookup(entries[idx].step_results, cfg.steps[i].name, &rc) ||
+             rc != 0)
          {
             if (msg_buf)
                snprintf(msg_buf, msg_len, "step '%s' not verified. Run 'aimee git verify'.",
@@ -1670,7 +1670,8 @@ cJSON *handle_git_verify(server_ctx_t *server_ctx, cJSON *args, const char *sess
             for (int i = 0; i < cfg.count; i++)
             {
                int saved_rc = -1;
-               if (step_result_lookup(ents[eidx].step_results, cfg.steps[i].name, &saved_rc) &&
+               if (verify_state_step_result_lookup(ents[eidx].step_results, cfg.steps[i].name,
+                                                   &saved_rc) &&
                    saved_rc == 0)
                {
                   coord->contexts[i].rc = 0;

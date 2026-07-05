@@ -289,8 +289,13 @@ static const char *config_save_default_db1_path(void)
 static int reduce_has_non_default(const config_t *cfg)
 {
    return !cfg->reduce_measure_enabled || !cfg->reduce_delegate_seam || !cfg->reduce_history_fold ||
-          !cfg->reduce_compress || cfg->reduce_gateway_seam || !cfg->reduce_freeze_guard_enabled ||
-          (cfg->reduce_freeze_guard_horizon > 0 && cfg->reduce_freeze_guard_horizon != 1);
+          !cfg->reduce_compress ||
+          (cfg->reduce_gateway_seam && cfg->reduce_gateway_seam_explicit) ||
+          !cfg->reduce_freeze_guard_enabled ||
+          (cfg->reduce_freeze_guard_horizon > 0 && cfg->reduce_freeze_guard_horizon != 1) ||
+          cfg->reduce_gateway_mutate || !cfg->reduce_command_filter /* default-ON (P1c) */ ||
+          (cfg->reduce_gateway_session_disable_ttl_ms != 3600000 &&
+           cfg->reduce_gateway_session_disable_ttl_ms > 0);
 }
 
 int config_save(const config_t *cfg)
@@ -1026,12 +1031,54 @@ int config_save(const config_t *cfg)
          cJSON_AddBoolToObject(reduce, "history_fold", 0);
       if (!cfg->reduce_compress)
          cJSON_AddBoolToObject(reduce, "compress", 0);
-      if (cfg->reduce_gateway_seam)
+      /* gateway_seam: persist ONLY when the operator set it explicitly, never when
+       * config_load synthesized it from gateway_mutate=1 (that stays an in-memory
+       * normalization, re-applied each load). */
+      if (cfg->reduce_gateway_seam && cfg->reduce_gateway_seam_explicit)
          cJSON_AddBoolToObject(reduce, "gateway_seam", cfg->reduce_gateway_seam);
       if (!cfg->reduce_freeze_guard_enabled) /* default-on -> persist only when disabled */
          cJSON_AddBoolToObject(reduce, "freeze_guard", 0);
       if (cfg->reduce_freeze_guard_horizon > 0 && cfg->reduce_freeze_guard_horizon != 1)
          cJSON_AddNumberToObject(reduce, "freeze_guard_horizon", cfg->reduce_freeze_guard_horizon);
+      /* gateway_mutate defaults OFF -> persist only when enabled. TTL defaults 1h ->
+       * persist only a non-default positive override (a bad <=0 is never written). */
+      if (cfg->reduce_gateway_mutate)
+         cJSON_AddBoolToObject(reduce, "gateway_mutate", cfg->reduce_gateway_mutate);
+      if (!cfg->reduce_command_filter) /* default-ON (P1c) -> persist only the opt-out */
+         cJSON_AddBoolToObject(reduce, "command_filter", 0);
+      if (cfg->reduce_gateway_session_disable_ttl_ms != 3600000 &&
+          cfg->reduce_gateway_session_disable_ttl_ms > 0)
+         cJSON_AddNumberToObject(reduce, "gateway_session_disable_ttl_ms",
+                                 cfg->reduce_gateway_session_disable_ttl_ms);
+   }
+
+   /* Two-tier economizer switches (P3): enabled default-ON -> persist only the opt-out;
+    * aggressive default-OFF -> persist only when opted in. */
+   if (!cfg->economizer_enabled || cfg->economizer_aggressive)
+   {
+      cJSON *econ = cJSON_AddObjectToObject(root, "economizer");
+      if (!cfg->economizer_enabled)
+         cJSON_AddBoolToObject(econ, "enabled", 0);
+      if (cfg->economizer_aggressive)
+         cJSON_AddBoolToObject(econ, "aggressive", 1);
+   }
+
+   /* Autonomous-dev knobs — persist only non-defaults (defaults: skeptics 0, fanout off,
+    * unit_retry 2, unit_max 16, ci_retry_max 2). */
+   if (cfg->autonomy_skeptics != 0 || cfg->autonomy_fanout != 0 || cfg->autonomy_unit_retry != 2 ||
+       cfg->autonomy_unit_max != 16 || cfg->autonomy_ci_retry_max != 2)
+   {
+      cJSON *autonomy = cJSON_AddObjectToObject(root, "autonomy");
+      if (cfg->autonomy_skeptics != 0)
+         cJSON_AddNumberToObject(autonomy, "skeptics", cfg->autonomy_skeptics);
+      if (cfg->autonomy_fanout != 0)
+         cJSON_AddBoolToObject(autonomy, "fanout", cfg->autonomy_fanout);
+      if (cfg->autonomy_unit_retry != 2)
+         cJSON_AddNumberToObject(autonomy, "unit_retry", cfg->autonomy_unit_retry);
+      if (cfg->autonomy_unit_max != 16)
+         cJSON_AddNumberToObject(autonomy, "unit_max", cfg->autonomy_unit_max);
+      if (cfg->autonomy_ci_retry_max != 2)
+         cJSON_AddNumberToObject(autonomy, "ci_retry_max", cfg->autonomy_ci_retry_max);
    }
 
    /* Session/worktree cleanup policy (only save if non-default) */

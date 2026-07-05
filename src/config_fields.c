@@ -11,8 +11,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Entries omit the trailing reload_class -> RELOAD_HOT (0) by C zero-fill; suppress the
+ * pedantic missing-field-initializer warning for the whole intentional table (P2). */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 const config_field_t config_fields[] = {
-    {"db2_url", offsetof(config_t, db2_url), sizeof(((config_t *)0)->db2_url), 0, CFG_STRING},
+    {"db2_url", offsetof(config_t, db2_url), sizeof(((config_t *)0)->db2_url), 0, CFG_STRING,
+     RELOAD_RESTART}, /* the postgres pool is opened at startup */
     {"provider", offsetof(config_t, provider), sizeof(((config_t *)0)->provider), 0, CFG_STRING},
     {"claude_model", offsetof(config_t, claude_model), sizeof(((config_t *)0)->claude_model), 0,
      CFG_STRING},
@@ -149,6 +154,8 @@ const config_field_t config_fields[] = {
     {"code_hybrid_weight_memory", offsetof(config_t, code_hybrid_weight_memory), sizeof(double), 0,
      CFG_FLOAT},
     {"code_hybrid_rrf_k", offsetof(config_t, code_hybrid_rrf_k), sizeof(double), 0, CFG_FLOAT},
+    {"code_trust_actuation_enabled", offsetof(config_t, code_trust_actuation_enabled), sizeof(int),
+     0, CFG_BOOL},
     {"code_surprising_precision_floor", offsetof(config_t, code_surprising_precision_floor),
      sizeof(double), 0, CFG_FLOAT},
     {"memory_semantic_weight", offsetof(config_t, memory_semantic_weight), sizeof(double), 0,
@@ -236,9 +243,10 @@ const config_field_t config_fields[] = {
      sizeof(double), 0, CFG_FLOAT},
     {"guardrails_semantic_allow_ml_only_block",
      offsetof(config_t, guardrails_semantic_allow_ml_only_block), sizeof(int), 0, CFG_BOOL},
-    {"kb_api_http_port", offsetof(config_t, kb_api_http_port), sizeof(int), 0, CFG_INT},
+    {"kb_api_http_port", offsetof(config_t, kb_api_http_port), sizeof(int), 0, CFG_INT,
+     RELOAD_RESTART},
     {"kb_api_bearer_token", offsetof(config_t, kb_api_bearer_token),
-     sizeof(((config_t *)0)->kb_api_bearer_token), 0, CFG_STRING},
+     sizeof(((config_t *)0)->kb_api_bearer_token), 0, CFG_STRING, RELOAD_RESTART},
     {"kb_mining_enabled", offsetof(config_t, kb_mining_enabled), sizeof(int), 0, CFG_BOOL},
     {"kb_mining_min_poll_s", offsetof(config_t, kb_mining_min_poll_s), sizeof(int), 0, CFG_INT},
     {"verify_enabled", offsetof(config_t, verify_enabled), sizeof(int), 1, CFG_BOOL},
@@ -271,8 +279,36 @@ const config_field_t config_fields[] = {
      offsetof(config_t, roundtable_pipeline_parked_releases_slot), sizeof(int), 1, CFG_BOOL},
     {"roundtable.pipeline_unknown_context_tokens",
      offsetof(config_t, roundtable_pipeline_unknown_context_tokens), sizeof(int), 0, CFG_INT},
+    /* Context economizer (context_reduce). Already config_t fields, parsed + saved under
+     * the "reduce" yaml object; exposed here so the typed config surface + web Settings
+     * can toggle them. gateway_seam is intentionally omitted (it is synthesized from
+     * gateway_mutate and its persistence is explicit-gated — gateway_mutate is the
+     * user-facing toggle). */
+    {"reduce.measure", offsetof(config_t, reduce_measure_enabled), sizeof(int), 1, CFG_BOOL},
+    {"reduce.delegate_seam", offsetof(config_t, reduce_delegate_seam), sizeof(int), 1, CFG_BOOL},
+    {"reduce.history_fold", offsetof(config_t, reduce_history_fold), sizeof(int), 1, CFG_BOOL},
+    {"reduce.compress", offsetof(config_t, reduce_compress), sizeof(int), 1, CFG_BOOL},
+    {"reduce.gateway_mutate", offsetof(config_t, reduce_gateway_mutate), sizeof(int), 1, CFG_BOOL},
+    {"reduce.command_filter", offsetof(config_t, reduce_command_filter), sizeof(int), 1, CFG_BOOL},
+    {"economizer.enabled", offsetof(config_t, economizer_enabled), sizeof(int), 1, CFG_BOOL},
+    {"economizer.aggressive", offsetof(config_t, economizer_aggressive), sizeof(int), 1, CFG_BOOL},
+    {"reduce.gateway_session_disable_ttl_ms",
+     offsetof(config_t, reduce_gateway_session_disable_ttl_ms), sizeof(int), 0, CFG_INT},
+    {"reduce.freeze_guard", offsetof(config_t, reduce_freeze_guard_enabled), sizeof(int), 1,
+     CFG_BOOL},
+    {"reduce.freeze_guard_horizon", offsetof(config_t, reduce_freeze_guard_horizon), sizeof(int), 0,
+     CFG_INT},
+    /* Autonomous-development pipeline knobs (Phase-C). New config_t fields bridged to the
+     * AIMEE_AUTONOMY_* env vars at startup (a set env var still overrides); a change
+     * applies on the next server start. */
+    {"autonomy.skeptics", offsetof(config_t, autonomy_skeptics), sizeof(int), 0, CFG_INT},
+    {"autonomy.fanout", offsetof(config_t, autonomy_fanout), sizeof(int), 1, CFG_BOOL},
+    {"autonomy.unit_retry", offsetof(config_t, autonomy_unit_retry), sizeof(int), 0, CFG_INT},
+    {"autonomy.unit_max", offsetof(config_t, autonomy_unit_max), sizeof(int), 0, CFG_INT},
+    {"autonomy.ci_retry_max", offsetof(config_t, autonomy_ci_retry_max), sizeof(int), 0, CFG_INT},
     {NULL, 0, 0, 0, CFG_STRING},
 };
+#pragma GCC diagnostic pop
 
 const config_field_t *config_field_lookup(const char *key)
 {
@@ -282,6 +318,20 @@ const config_field_t *config_field_lookup(const char *key)
       if (strcmp(key, config_fields[i].key) == 0)
          return &config_fields[i];
    return NULL;
+}
+
+const char *config_field_reload_verdict(const config_field_t *f)
+{
+   switch (f ? f->reload_class : RELOAD_HOT)
+   {
+   case RELOAD_RESTART:
+      return "saved — restart the server for this to take effect";
+   case RELOAD_REAPPLIABLE:
+      return "applied live";
+   case RELOAD_HOT:
+   default:
+      return "applied live";
+   }
 }
 
 cJSON *config_field_value_json(const config_t *cfg, const config_field_t *f)

@@ -684,6 +684,90 @@ static void test_served_model_and_duration(void)
    sqlite3_finalize(st);
 }
 
+static void test_session_split_supervisor_vs_worker(void)
+{
+   /* The supervised-benchmark readout: within ONE session, split token spend by
+    * delegation_id — empty = the primary/supervisor's own turns, non-empty =
+    * delegate workers. This is what lets the harness measure "supervisor tokens
+    * offloaded" vs the free workers that did the work. */
+   db1_token_audit_row_t sup1 = {.session_id = "split-sess",
+                                 .delegation_id = "", /* supervisor turn */
+                                 .tool_name = "delegate",
+                                 .role = "manage",
+                                 .model = "gpt-5.5",
+                                 .prompt_tokens = 1000,
+                                 .completion_tokens = 200,
+                                 .cache_read_tokens = 50,
+                                 .estimated_cost_usd = 0.30};
+   db1_token_audit_row_t sup2 = {.session_id = "split-sess",
+                                 .delegation_id = "", /* another supervisor turn */
+                                 .tool_name = "delegate",
+                                 .role = "review",
+                                 .model = "gpt-5.5",
+                                 .prompt_tokens = 500,
+                                 .completion_tokens = 100,
+                                 .estimated_cost_usd = 0.15};
+   db1_token_audit_row_t worker1 = {.session_id = "split-sess", /* SAME session */
+                                    .delegation_id = "dg-worker-1",
+                                    .tool_name = "minimax",
+                                    .role = "implement",
+                                    .model = "MiniMax-M3",
+                                    .prompt_tokens = 8000,
+                                    .completion_tokens = 3000,
+                                    .estimated_cost_usd = 0.0}; /* free worker */
+   db1_token_audit_row_t worker2 = {.session_id = "split-sess",
+                                    .delegation_id = "dg-worker-2",
+                                    .tool_name = "mistral",
+                                    .role = "implement",
+                                    .model = "mistral-medium-3.5",
+                                    .prompt_tokens = 6000,
+                                    .completion_tokens = 2000,
+                                    .estimated_cost_usd = 0.0};
+   /* An estimated supervisor row that MUST be excluded (realized-only). */
+   db1_token_audit_row_t sup_estimated = {.session_id = "split-sess",
+                                          .delegation_id = "",
+                                          .tool_name = "delegate",
+                                          .role = "manage",
+                                          .model = "gpt-5.5",
+                                          .usage_kind = "estimated",
+                                          .prompt_tokens = 99999,
+                                          .completion_tokens = 99999,
+                                          .estimated_cost_usd = 50.0};
+   assert(db1_token_audit_insert(&sup1) == 0);
+   assert(db1_token_audit_insert(&sup2) == 0);
+   assert(db1_token_audit_insert(&worker1) == 0);
+   assert(db1_token_audit_insert(&worker2) == 0);
+   assert(db1_token_audit_insert(&sup_estimated) == 0);
+
+   db1_token_audit_session_split_t split;
+   assert(db1_token_audit_session_split("split-sess", &split) == 0);
+
+   /* Supervisor bucket: the two realized empty-delegation rows only; the
+    * estimated row is excluded. */
+   assert(split.supervisor_calls == 2);
+   assert(split.supervisor_prompt_tokens == 1500);
+   assert(split.supervisor_completion_tokens == 300);
+   assert(split.supervisor_cache_read_tokens == 50);
+   assert(split.supervisor_cost_usd > 0.449 && split.supervisor_cost_usd < 0.451);
+
+   /* Worker bucket: the two delegate rows, shared session but non-empty
+    * delegation_id, priced $0. */
+   assert(split.worker_calls == 2);
+   assert(split.worker_prompt_tokens == 14000);
+   assert(split.worker_completion_tokens == 5000);
+   assert(split.worker_cost_usd == 0.0);
+
+   /* An unknown session -> all-zero, success. */
+   db1_token_audit_session_split_t empty;
+   assert(db1_token_audit_session_split("no-such-session", &empty) == 0);
+   assert(empty.supervisor_calls == 0 && empty.worker_calls == 0);
+   assert(empty.supervisor_prompt_tokens == 0 && empty.worker_prompt_tokens == 0);
+
+   /* Empty / NULL session_id is an error, not a wildcard. */
+   assert(db1_token_audit_session_split("", &empty) == -1);
+   assert(db1_token_audit_session_split(NULL, &empty) == -1);
+}
+
 static void test_dashboard_rows(void)
 {
    db1_token_audit_dashboard_row_t rows[4];
@@ -720,6 +804,7 @@ int main(void)
    test_trusted_source_overrides_ingress();
    test_ingress_session_attribution();
    test_delegation_cost_realized_only();
+   test_session_split_supervisor_vs_worker();
    db1_shutdown();
    printf("test_token_audit: ok\n");
    return 0;

@@ -105,6 +105,54 @@ static void test_mcp_config_uses_resolved_command(void)
    cJSON_Delete(server);
 }
 
+/* 1 if hooks[event] has an entry whose command contains `needle`. */
+static int hook_event_has_cmd(cJSON *hooks, const char *event, const char *needle)
+{
+   cJSON *arr = cJSON_GetObjectItemCaseSensitive(hooks, event);
+   if (!cJSON_IsArray(arr))
+      return 0;
+   for (int i = 0; i < cJSON_GetArraySize(arr); i++)
+   {
+      cJSON *ha = cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(arr, i), "hooks");
+      for (int j = 0; cJSON_IsArray(ha) && j < cJSON_GetArraySize(ha); j++)
+      {
+         cJSON *c = cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(ha, j), "command");
+         if (cJSON_IsString(c) && strstr(c->valuestring, needle))
+            return 1;
+      }
+   }
+   return 0;
+}
+
+/* Assert ensure_claude_code_hooks registered EVERY hook aimee relies on. This
+ * required set is INDEPENDENT of the production code's registration order/table
+ * on purpose -- so if any registration is ever dropped (as the SessionStart hook
+ * silently was, leaving the primary with no aimee session brief: the configured
+ * persona [default `engineer`, but operator-selectable via AIMEE_MODE / the mode
+ * file] + MCP-skill index + Rules + Key Facts, rendered by `aimee session-start`
+ * -> session_start_emit -> build_session_context), this fails. Adding a new client
+ * hook means adding it here too. Each entry: {settings.json event, the
+ * `aimee <subcommand>` it invokes}. Asserted for BOTH the fresh-settings and the
+ * add-to-an-existing-settings.json paths (the latter is the exact shape of the
+ * live regression: a settings.json that already had the other hooks but not
+ * SessionStart). */
+static void assert_required_hooks_present(cJSON *hooks)
+{
+   static const struct
+   {
+      const char *event;
+      const char *subcommand;
+   } required[] = {
+       {"SessionStart", "session-start"},          /* session brief: persona + skills + rules */
+       {"UserPromptSubmit", "user-prompt-submit"}, /* per-turn recall envelope */
+       {"PreCompact", "pre-compact"},              /* post-compact recall re-prime */
+       {"PreToolUse", "attention-guard"},          /* per-file attention + destructive-op guard */
+       {"PostToolUse", "hooks post"},              /* post-edit hook */
+   };
+   for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); i++)
+      assert(hook_event_has_cmd(hooks, required[i].event, required[i].subcommand));
+}
+
 /* --- Test read_json_file --- */
 
 static void test_read_json_file_missing(void)
@@ -310,6 +358,9 @@ static void test_claude_hooks_create_post_hook_on_fresh_settings(void)
          break;
    }
    assert(found);
+
+   /* Regression: from an empty settings.json, EVERY required hook is registered. */
+   assert_required_hooks_present(hooks);
    cJSON_Delete(root);
 
    char cmd[512];
@@ -348,6 +399,11 @@ static void test_claude_hooks_patch_existing_matcher(void)
    assert(strstr(matcher->valuestring, "Edit|Write|MultiEdit") != NULL);
    assert(strstr(matcher->valuestring, "EnterWorktree") != NULL);
    assert(strstr(matcher->valuestring, "ExitWorktree") != NULL);
+
+   /* Regression (the live shape of the SessionStart bug): a settings.json that
+    * already had SOME hooks must still get the MISSING ones added -- SessionStart
+    * in particular. Merging into an existing file must not skip a hook. */
+   assert_required_hooks_present(hooks);
    cJSON_Delete(root);
 
    char cmd[512];

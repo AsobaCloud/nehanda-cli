@@ -388,6 +388,7 @@ set(DB2_SRCS
     ${AIMEE_SRC_DIR}/db2/collab_rules.c
     ${AIMEE_SRC_DIR}/db2/curiosity.c
     ${AIMEE_SRC_DIR}/db2/decision_log.c
+    ${AIMEE_SRC_DIR}/db2/enrollments.c
     ${AIMEE_SRC_DIR}/db2/entity_edges.c
     ${AIMEE_SRC_DIR}/db2/entity_profiles.c
     ${AIMEE_SRC_DIR}/db2/epistemic_directives.c
@@ -533,11 +534,13 @@ set(CORE_SRCS
     ${AIMEE_SRC_DIR}/workflow/wfe_custom.c
     ${AIMEE_SRC_DIR}/workflow/wfe_manager_artifacts.c
     ${AIMEE_SRC_DIR}/workflow/wfe_externalization.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_native_gate.c
     ${AIMEE_SRC_DIR}/workflow/wfe_enforce.c
     ${AIMEE_SRC_DIR}/workflow/wfe_deliver.c
     ${AIMEE_SRC_DIR}/workflow/wfe_advance.c
     ${AIMEE_SRC_DIR}/workflow/wfe_router.c
     ${AIMEE_SRC_DIR}/workflow/wfe_router_catalog.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_autonomous_route.c
     ${AIMEE_SRC_DIR}/vendor/cJSON.c
     ${PLATFORM_CORE_SRCS}
 )
@@ -704,6 +707,7 @@ set(GIT_SRCS
     ${AIMEE_SRC_DIR}/mcp_git_branch.c
     ${AIMEE_SRC_DIR}/mcp_git_pr.c
     ${AIMEE_SRC_DIR}/git_verify.c
+    ${AIMEE_SRC_DIR}/git_verify_state.c
     ${AIMEE_SRC_DIR}/git_verify_config.c
     ${AIMEE_SRC_DIR}/git_verify_hook.c
     ${AIMEE_SRC_DIR}/git_verify_jobs.c
@@ -741,6 +745,7 @@ set(CMD_SRCS
     ${AIMEE_SRC_DIR}/cmd_agent_setup.c
     ${AIMEE_SRC_DIR}/cmd_agent_trace.c
     ${AIMEE_SRC_DIR}/cmd_agent_delegate.c
+    ${AIMEE_SRC_DIR}/cmd_agent_delegate_toolset.c
     ${AIMEE_SRC_DIR}/server/delegate_prompt_stdin.c
     ${AIMEE_SRC_DIR}/server/delegate_depth.c
     ${AIMEE_SRC_DIR}/server/delegate_plan.c
@@ -799,7 +804,14 @@ set(CLI_SRCS
     ${AIMEE_SRC_DIR}/cli_code_audit.c
     ${AIMEE_SRC_DIR}/cli_css.c
     ${AIMEE_SRC_DIR}/cli_tui.c
+    ${AIMEE_SRC_DIR}/cli_tui_opencode_v2b.c
+    ${AIMEE_SRC_DIR}/cli_tui_opencode_v2.c
+    ${AIMEE_SRC_DIR}/cli_tui_misc.c
     ${AIMEE_SRC_DIR}/cli_client.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes_d.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes_c.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes_b.c
     ${AIMEE_SRC_DIR}/cli_launch.c
     ${AIMEE_SRC_DIR}/cli_mcp_serve.c
     ${AIMEE_SRC_DIR}/cli_profile.c
@@ -825,6 +837,13 @@ set(CLI_SRCS
 set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/server/server_main.c
     ${AIMEE_SRC_DIR}/server/server.c
+    ${AIMEE_SRC_DIR}/server/s2_native_gate_hook.c
+    ${AIMEE_SRC_DIR}/server_provider.c
+    ${AIMEE_SRC_DIR}/server_insights.c
+    ${AIMEE_SRC_DIR}/server_eval.c
+    ${AIMEE_SRC_DIR}/server_provider_slots.c
+    ${AIMEE_SRC_DIR}/server/server_api_status.c
+    ${AIMEE_SRC_DIR}/server/server_seed_config.c
     ${AIMEE_SRC_DIR}/server/server_auth.c
     ${AIMEE_SRC_DIR}/server/server_hooks.c
     ${AIMEE_SRC_DIR}/server/server_session.c
@@ -842,6 +861,19 @@ set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/server/vault_capability.c
     ${AIMEE_SRC_DIR}/server/server_vault.c
     ${AIMEE_SRC_DIR}/server/server_state.c
+    ${AIMEE_SRC_DIR}/server/server_runner_endpoints.c
+    ${AIMEE_SRC_DIR}/server/server_state_audit.c
+    ${AIMEE_SRC_DIR}/server/server_css_query.c
+    ${AIMEE_SRC_DIR}/server/server_runner_endpoints.c
+    ${AIMEE_SRC_DIR}/server/server_state_audit.c
+    ${AIMEE_SRC_DIR}/server/server_css_query.c
+    ${AIMEE_SRC_DIR}/server/server_state.c
+    ${AIMEE_SRC_DIR}/server/server_runner_endpoints.c
+    ${AIMEE_SRC_DIR}/server/server_state_audit.c
+    ${AIMEE_SRC_DIR}/server/server_css_query.c
+    ${AIMEE_SRC_DIR}/server/server_runner_endpoints.c
+    ${AIMEE_SRC_DIR}/server/server_state_audit.c
+    ${AIMEE_SRC_DIR}/server/server_css_query.c
     ${AIMEE_SRC_DIR}/server/server_state_index.c
     ${AIMEE_SRC_DIR}/server/harness_memory_routes.c
     ${AIMEE_SRC_DIR}/server/server_plugin.c
@@ -850,6 +882,10 @@ set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/server/server_coord_dispatcher.c
     ${AIMEE_SRC_DIR}/server/server_agent.c
     ${AIMEE_SRC_DIR}/server/server_compute.c
+    ${AIMEE_SRC_DIR}/server/server_compute_roundtable.c
+    ${AIMEE_SRC_DIR}/server/server_compute_mailbox.c
+    ${AIMEE_SRC_DIR}/server_compute_concurrency.c
+    ${AIMEE_SRC_DIR}/server_compute_episodes.c
     ${AIMEE_SRC_DIR}/server/server_delegate_ondemand.c
     ${AIMEE_SRC_DIR}/server/server_delegate_status.c
     ${AIMEE_SRC_DIR}/server/server_compute_async.c
@@ -857,6 +893,8 @@ set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/server/server_skill.c
     ${AIMEE_SRC_DIR}/server/server_skill_jobs.c
     ${AIMEE_SRC_DIR}/server/server_mcp.c
+    ${AIMEE_SRC_DIR}/server/server_mcp_call_table.c
+    ${AIMEE_SRC_DIR}/server/server_mcp_ast_grep.c
     ${AIMEE_SRC_DIR}/server/server_mcp_tools.c
     ${AIMEE_SRC_DIR}/server/server_mcp_delegate.c
     ${AIMEE_SRC_DIR}/server/server_mcp_process.c
@@ -868,6 +906,10 @@ set(SERVER_SRCS
     ${AIMEE_SRC_DIR}/server/session_search_tool.c
     ${AIMEE_SRC_DIR}/server/compute_pool.c
     ${AIMEE_SRC_DIR}/cli_client.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes_d.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes_c.c
+    ${AIMEE_SRC_DIR}/cli_v1_routes_b.c
     ${AIMEE_SRC_DIR}/server/compute_concurrency.c
     ${AIMEE_SRC_DIR}/server/provider_catalog.c
     ${AIMEE_SRC_DIR}/server/dashboard_server.c
@@ -949,6 +991,10 @@ set(KB_SRCS
     ${AIMEE_SRC_DIR}/kb/kb_curator_version.c
     ${AIMEE_SRC_DIR}/kb/kb_mining.c
     ${AIMEE_SRC_DIR}/kb/http/kb_http.c
+    ${AIMEE_SRC_DIR}/kb/http/kb_route_acl.c
+    ${AIMEE_SRC_DIR}/kb/http/kb_http_console.c
+    ${AIMEE_SRC_DIR}/kb/http/kb_http_accounts.c
+    ${AIMEE_SRC_DIR}/kb/http/kb_http_governance.c
     ${AIMEE_SRC_DIR}/kb/http/kb_http_code.c
     ${AIMEE_SRC_DIR}/kb/http/kb_http_ingest.c
     ${AIMEE_SRC_DIR}/kb/http/kb_http_jobs.c
@@ -1229,11 +1275,13 @@ add_executable(aimee
     ${AIMEE_SRC_DIR}/workflow/wfe_custom.c
     ${AIMEE_SRC_DIR}/workflow/wfe_manager_artifacts.c
     ${AIMEE_SRC_DIR}/workflow/wfe_externalization.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_native_gate.c
     ${AIMEE_SRC_DIR}/workflow/wfe_enforce.c
     ${AIMEE_SRC_DIR}/workflow/wfe_deliver.c
     ${AIMEE_SRC_DIR}/workflow/wfe_advance.c
     ${AIMEE_SRC_DIR}/workflow/wfe_router.c
     ${AIMEE_SRC_DIR}/workflow/wfe_router_catalog.c
+    ${AIMEE_SRC_DIR}/workflow/wfe_autonomous_route.c
 )
 target_include_directories(aimee PRIVATE ${AIMEE_SRC_DIR} ${AIMEE_SRC_DIR}/headers ${AIMEE_SRC_DIR}/vendor/headers ${AIMEE_SRC_DIR}/db1 ${AIMEE_SRC_DIR}/db2 ${AIMEE_SRC_DIR}/workflow)
 target_compile_options(aimee PRIVATE ${AIMEE_COMMON_WARNINGS})

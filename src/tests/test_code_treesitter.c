@@ -54,9 +54,11 @@ int main(void)
    printf("test_code_treesitter:\n");
 
    /* availability gates the dispatch (a representative extension per language). */
-   const char *avail[] = {".c",   ".h",   ".cpp", ".cc",   ".hpp",   ".cs", ".py",   ".go",
-                          ".js",  ".mjs", ".jsx", ".ts",   ".tsx",   ".rs", ".java", ".rb",
-                          ".php", ".lua", ".sh",  ".bash", ".swift", ".kt", ".dart", ".css"};
+   const char *avail[] = {".c",    ".h",    ".cpp", ".cc",    ".hpp", ".cs",     ".py",
+                          ".go",   ".js",   ".mjs", ".jsx",   ".ts",  ".tsx",    ".rs",
+                          ".java", ".rb",   ".php", ".lua",   ".sh",  ".bash",   ".swift",
+                          ".kt",   ".dart", ".css", ".scala", ".sc",  ".groovy", ".gradle",
+                          ".m",    ".mm",   ".kts", ".ex",    ".exs", ".ps1",    ".psm1"};
    for (size_t i = 0; i < sizeof(avail) / sizeof(avail[0]); i++)
       assert(code_treesitter_available(avail[i]));
    assert(!code_treesitter_available(".txt"));
@@ -192,6 +194,11 @@ int main(void)
    const char *sh = "foo() { echo hi; }\nfunction bar { echo yo; }\n";
    want(".sh", sh, "foo", "function");
    want(".sh", sh, "bar", "function");
+   /* Bash also has `command`/`command_name`/`statement_list` node types (shared with
+    * PowerShell's additions), but bash defs stay clean (a command is not a def) and
+    * bash CALL extraction is gated off entirely (code_treesitter_calls returns -1 for
+    * TSL_BASH), so the PowerShell node-type additions do not affect bash. */
+   want(".sh", "foo() { helper arg; }\n", "foo", "function"); /* command != spurious def */
 
    /* --- Swift --- */
    const char *swift = "func f(){}\nclass C{}\nstruct S{}\nprotocol P{}\n";
@@ -214,6 +221,15 @@ int main(void)
    want(".kt", kt, "shouldWork", "function");
    want(".kt", kt, "identity", "function");
    want(".kt", kt, "shout", "function");
+   /* Kotlin Script (.kts, incl. build.gradle.kts — the trailing .kts extension maps
+    * to the Kotlin grammar): top-level declarations extract even when interleaved
+    * with script-level statements (a val binding + a bare call). */
+   const char *kts = "val cfg = load()\nfun greet() = println(\"hi\")\n"
+                     "class Task { fun run() {} }\n";
+   want(".kts", kts, "greet", "function");
+   want(".kts", kts, "Task", "type");
+   want(".kts", kts, "run", "function"); /* method inside a script-level class */
+   wantcall(".kts", "fun deploy() { publish() }\n", "deploy", "publish");
 
    /* --- Dart (annotated mixin: name survives the leading annotation) --- */
    const char *dart = "void f(){}\nclass C{}\nenum E{a}\n@sealed mixin Foo {}\n";
@@ -223,6 +239,59 @@ int main(void)
 
    /* --- CSS (@keyframes name) --- */
    want(".css", "@keyframes spin { from {} to {} }\n.cls { color: red }\n", "spin", "type");
+
+   /* --- Scala (object/class/trait → type; def → function, incl. members in a
+    * template_body; def also works as a top-level .sc script member) --- */
+   const char *scala = "object M {\n  def greet(): Unit = println(\"hi\")\n}\n"
+                       "class C { def m(): Int = 1 }\n"
+                       "trait T { def t(): Unit }\n";
+   want(".scala", scala, "M", "type");
+   want(".scala", scala, "greet", "function");
+   want(".scala", scala, "C", "type");
+   want(".scala", scala, "m", "function");
+   want(".scala", scala, "T", "type");
+   want(".scala", "enum Color { case Red, Green }\n", "Color", "type"); /* Scala 3 enum */
+   want(".scala", "type Id = Int\n", "Id", "type");                     /* type_definition */
+   want(".sc", "def top(): Int = 1\n", "top", "function");              /* .sc script member */
+
+   /* --- Groovy (name in the `function` field; class methods live in a closure
+    * body; .gradle build files share the grammar) --- */
+   const char *groovy = "class Build {\n  def compile() { javac() }\n}\n"
+                        "def task() { println 'hi' }\n";
+   want(".groovy", groovy, "Build", "type");
+   want(".groovy", groovy, "compile", "function"); /* method inside a class closure */
+   want(".groovy", groovy, "task", "function");    /* top-level def */
+   want(".gradle", "def clean() {}\n", "clean", "function");
+
+   /* --- Objective-C (@interface/@implementation/@protocol → type; a C function and
+    * a simple method → function; members inside the @implementation body) --- */
+   const char *objc = "@interface Widget : NSObject\n@end\n"
+                      "@implementation Widget\n- (void)refresh { redraw(); }\n@end\n"
+                      "void helper(void) {}\n";
+   want(".m", objc, "Widget", "type");
+   want(".m", objc, "refresh", "function"); /* simple (no-arg) method selector */
+   want(".m", objc, "helper", "function");  /* plain C function */
+   want(".mm", "@protocol Drawable\n@end\n", "Drawable", "type");
+
+   /* --- Elixir (def/defmodule are MACRO CALLS): defmodule → type; def/defp →
+    * function; members live in the module's do_block. --- */
+   const char *elixir = "defmodule Foo do\n"
+                        "  def greet(x) do\n    IO.puts(x)\n  end\n"
+                        "  defp helper do\n    :ok\n  end\n"
+                        "end\n";
+   want(".ex", elixir, "Foo", "type");
+   want(".ex", elixir, "greet", "function");  /* def foo(x) — name from nested call */
+   want(".ex", elixir, "helper", "function"); /* defp foo — name is a bare identifier */
+   want(".exs", "defmodule S do\n  def run, do: :ok\nend\n", "run", "function");
+
+   /* --- PowerShell (function_statement → function; class → type; method → function;
+    * command invocations are the call form) --- */
+   const char *ps = "function Get-Thing {\n  param($x)\n  Write-Host $x\n}\n"
+                    "class Animal {\n  [void] Speak() { Write-Host 'hi' }\n}\n";
+   want(".ps1", ps, "Get-Thing", "function");
+   want(".ps1", ps, "Animal", "type");
+   want(".ps1", ps, "Speak", "function"); /* class method */
+   want(".psm1", "function Export-Data {}\n", "Export-Data", "function");
 
    /* --- nested members: methods inside a type body are surfaced (the walk descends type
     * bodies but never function bodies), across the OO languages. --- */
@@ -258,6 +327,18 @@ int main(void)
    wantcall(".c", "void f(){ g(); obj->m(); }\n", "f", "g");
    wantcall(".c", "void f(){ obj->m(); }\n", "f", "m"); /* method call -> last id */
    wantcall(".py", "def f():\n    g()\n    obj.m()\n", "f", "g");
+   wantcall(".scala", "object M { def f(): Unit = { g() } }\n", "f", "g");
+   wantcall(".groovy", "def f() { g() }\n", "f", "g");
+   /* ObjC: a C call and an ObjC message send [self redraw] both attribute to the
+    * enclosing method (message_expression callee via its `method` field). */
+   wantcall(".m", "@implementation W\n- (void)refresh { redraw(); }\n@end\n", "refresh", "redraw");
+   wantcall(".m", "@implementation W\n- (void)refresh { [self redraw]; }\n@end\n", "refresh",
+            "redraw");
+   /* Elixir: a body call attributes to the enclosing def; the `def` macro-call itself
+    * is NOT emitted as a call (the !is_def guard). */
+   wantcall(".ex", "defmodule M do\n  def run do\n    work()\n  end\nend\n", "run", "work");
+   /* PowerShell: a command invocation inside a function is a call to that command. */
+   wantcall(".ps1", "function Deploy {\n  Publish-Build\n}\n", "Deploy", "Publish-Build");
    wantcall(".py", "def f():\n    obj.m()\n", "f", "m");
    wantcall(".js", "function f(){ g(); a.b.c(); }\n", "f", "g");
    wantcall(".js", "function f(){ a.b.c(); }\n", "f", "c"); /* chained -> last id */

@@ -375,6 +375,7 @@ int handle_dashboard_onboard(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 int handle_dashboard_memory_stats(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_lsp_diagnostics_summary(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_dashboard_all(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
+int handle_dashboard_audit(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 char *server_agent_list_json(void);
 int handle_workspace_context(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_workspace_add(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
@@ -450,6 +451,8 @@ int handle_agent_add(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_agent_local(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_agent_remove(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_agent_enable(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
+int handle_agent_roles(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
+int handle_agent_personas(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_agent_disable(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_agent_probe(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);
 int handle_agent_stats(server_ctx_t *ctx, server_conn_t *conn, cJSON *req);

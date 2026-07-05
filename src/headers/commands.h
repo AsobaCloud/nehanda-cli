@@ -79,6 +79,7 @@ const subcmd_t *get_session_subcmds(void);
 void session_subcmd_show(app_ctx_t *ctx, int argc, char **argv);
 void session_subcmd_search(app_ctx_t *ctx, int argc, char **argv);
 void session_subcmd_stats(app_ctx_t *ctx, int argc, char **argv);
+void session_subcmd_tokens(app_ctx_t *ctx, int argc, char **argv);
 void session_subcmd_brief(app_ctx_t *ctx, int argc, char **argv);
 void session_subcmd_start(app_ctx_t *ctx, int argc, char **argv);
 void session_subcmd_status(app_ctx_t *ctx, int argc, char **argv);
@@ -152,6 +153,10 @@ void cmd_session_start(app_ctx_t *ctx, int argc, char **argv);
  * hook payload off the wire and writes into an open_memstream so it can echo
  * the captured brief back to the thin client. */
 void session_start_emit(app_ctx_t *ctx, const char *hook_input, FILE *out);
+/* Workspace-independent brief for the remote thin-client SessionStart path
+ * (session.brief_assemble). Side-effect-free: build_session_context only, none
+ * of session_start_emit's worktree/state/reindex work. */
+void session_brief_emit(FILE *out);
 void cmd_launch(app_ctx_t *ctx, int argc, char **argv);
 void cmd_wrapup(app_ctx_t *ctx, int argc, char **argv);
 

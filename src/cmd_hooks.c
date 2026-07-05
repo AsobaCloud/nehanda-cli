@@ -12,6 +12,10 @@
 #include "agent_coord.h"
 #include "agent_eval.h"
 #include "log.h"
+#include "wfe_binding.h"     /* db1_wfe_binding_get -- S2 native-tool gate */
+#include "wfe_store.h"       /* db1_work_item_get (delivered==accepted) */
+#include "wfe_enforce.h"     /* the enforce dial -> deny (hard) vs warn (soft) */
+#include "wfe_native_gate.h" /* wfe_native_tool_externalizes / wfe_is_shell_tool */
 #include "audit_action.h"
 #include "trace_analysis.h"
 #include "workspace.h"
@@ -21,6 +25,7 @@
 #include "slop_detect.h"
 #include "git_verify.h"
 #include "cJSON.h"
+#include "headers/util.h"
 #include "headers/conversation_context.h"
 #include <dirent.h>
 #include <pthread.h>
@@ -34,6 +39,9 @@ static int is_write_tool(const char *tool)
    return strcmp(tool, "Write") == 0 || strcmp(tool, "Edit") == 0 ||
           strcmp(tool, "MultiEdit") == 0 || strcmp(tool, "write_file") == 0;
 }
+
+/* Worktree isolation helpers (aimee_path_is_main_clone / aimee_main_clone_edits_allowed)
+ * are shared with the client hook dispatch — see headers/util.h. */
 
 /* Emit slop findings to stderr (advisory). */
 static void slop_emit_stderr(const char *file_path, slop_finding_t *findings, int n)
@@ -111,6 +119,105 @@ static void emit_pretool_rewrite_unsupported_json(int rewrite_rc, const char *re
             rewrite_rc == 3 ? "command" : "path", rewrite_rc == 3 ? "command" : "path",
             rewritten && rewritten[0] ? rewritten : "<unknown>");
    emit_pretool_deny_json(reason);
+}
+
+/* S2 pre-delivery externalization gate for the primary CLI's NATIVE tools (tracks
+ * 2+3). If this session is bound to an enforced work-item whose gate.deliver has NOT
+ * passed (state != "accepted") and this tool call is a KNOWN externalization
+ * (wfe_native_tool_externalizes -- including a Bash command that runs git push / a
+ * remote curl), DENY under a hard dial (emit deny + exit) or LOG under advisory/soft
+ * (the warn-soak that measures false positives before a hard flip). Fail-CLOSED on
+ * the externalizing surface: if the binding is unreadable under a hard global dial,
+ * deny. Best-effort RISK-REDUCTION, not a hermetic seal (see wfe_native_gate.h).
+ *
+ * FAIL POLICY (consult #984 [6][14][23]): a DB fault (binding UNREADABLE) fails
+ * CLOSED under a hard dial -- we cannot tell if a binding exists, so deny. A cleanly
+ * ABSENT binding (bg==0) is ALLOWED -- that session genuinely has no enforced
+ * work-item to gate. Distinct cases: "unknown" != "none". The gate therefore depends
+ * on the aimee session id reaching the hook (AIMEE_SESSION_ID env, stamped into the
+ * tmux CLI): a session spawned OUTSIDE that stamp resolves no binding and is allowed
+ * -- an inherent limitation of a hook that trusts its environment (same class as the
+ * classifier's documented bypasses; the full seal is a sandbox). On DENY the hook
+ * emits the deny JSON and exit(0)s -- the Claude Code PreToolUse protocol for a
+ * blocked tool (same channel as the memory-interception deny). */
+static void s2_native_gate_pretool(const char *sid, const char *tool_name, const char *tool_input)
+{
+   if (!sid || !sid[0] || !tool_name || !tool_name[0])
+      return;
+
+   /* Pull the shell command (Bash etc.) out of tool_input for inspection. Prefer the
+    * parsed {"command":...} member, but FALL BACK to the raw tool_input string when
+    * it is not a JSON object, has no command member, or parsing/alloc fails -- the
+    * command text is still present there and the classifier's substring match catches
+    * it. This closes a bypass where tool_input is a raw string, not an object
+    * (consult #984 [16][25][31]), and is robust to malformed JSON / OOM ([5][9][26]). */
+   char *cmd_heap = NULL;
+   const char *command = tool_input ? tool_input : "";
+   if (wfe_is_shell_tool(tool_name) && tool_input && tool_input[0])
+   {
+      cJSON *ti = cJSON_Parse(tool_input);
+      if (ti)
+      {
+         cJSON *c = cJSON_GetObjectItemCaseSensitive(ti, "command");
+         if (cJSON_IsString(c) && c->valuestring && (cmd_heap = strdup(c->valuestring)))
+            command = cmd_heap;
+         cJSON_Delete(ti);
+      }
+   }
+   int externalizes = wfe_native_tool_externalizes(tool_name, command);
+   free(cmd_heap);
+   if (!externalizes)
+      return; /* not an externalizing tool -> never gated */
+
+   char wi[80] = "", stage[16] = "";
+   int bg = db1_wfe_binding_get(sid, wi, sizeof wi, stage, sizeof stage);
+   if (bg < 0)
+   {
+      /* Binding unreadable (DB fault): fail CLOSED on the externalizing surface
+       * under a hard GLOBAL dial -- a security gate that fails open is not a gate. */
+      if (wfe_enforce_stage_parse(getenv("AIMEE_WORKFLOW_ENFORCE_STAGE")) == WFE_ENFORCE_HARD)
+      {
+         audit_log("s2-native-gate", "DENY-failclosed sid=%s tool=%s (binding unreadable)", sid,
+                   tool_name);
+         emit_pretool_deny_json("aimee S2: enforcement state is temporarily unavailable; this "
+                                "externalizing action is blocked (fail-closed).");
+         exit(0);
+      }
+      return;
+   }
+   int bound = (bg == 1 && wi[0]);
+
+   /* gate.deliver passing transitions the run to "accepted"; before that the guard
+    * holds, once accepted it lifts. */
+   int delivered = 0, stage_hard = 0;
+   if (bound)
+   {
+      db1_work_item_t item;
+      delivered = (db1_work_item_get(wi, &item) == 1 && strcmp(item.state, "accepted") == 0);
+      stage_hard = (wfe_enforce_stage_parse(stage) == WFE_ENFORCE_HARD);
+   }
+
+   switch (wfe_native_gate_decision(externalizes, bound, delivered, stage_hard))
+   {
+   case WFE_NATIVE_DENY:
+      audit_log("s2-native-gate", "DENY sid=%s tool=%s wi=%s stage=hard", sid, tool_name, wi);
+      emit_pretool_deny_json(
+          "aimee S2: this session is bound to an enforced work-item that has not passed "
+          "gate.deliver -- externalizing actions (push / PR / publish / network egress) are "
+          "blocked until the change is reviewed and delivered.");
+      exit(0);
+   case WFE_NATIVE_WARN:
+      /* advisory/soft = warn-soak: record the would-deny (measures false positives)
+       * but do NOT block -- this calibrates the gate before a hard flip. */
+      audit_log("s2-native-gate", "WOULD-DENY sid=%s tool=%s wi=%s stage=%s", sid, tool_name, wi,
+                stage[0] ? stage : "?");
+      LOG_WARN("s2-native-gate",
+               "would deny externalizing tool '%s' pre-gate.deliver (stage=%s, wi=%s)", tool_name,
+               stage[0] ? stage : "?", wi);
+      break;
+   case WFE_NATIVE_ALLOW:
+      break;
+   }
 }
 
 /* --- cmd_hooks --- */
@@ -232,6 +339,53 @@ void cmd_hooks(app_ctx_t *ctx, int argc, char **argv)
          }
       }
 
+      /* Worktree isolation. aimee already isolates its OWN work — every delegate/
+       * work item runs in a locked worktree (delegate_checkout.c, wfe_blocks.c).
+       * But the PRIMARY session's harness Edit/Write never traverse aimee's /v1
+       * gateway, so nothing stopped it from editing the SHARED MAIN CLONE directly
+       * — which is how concurrent sessions pile uncommitted work onto one branch.
+       * This is the one seam that sees those edits, so enforce it here: a file
+       * mutation in a main clone (its .git is a directory; a worktree's is a file)
+       * is denied and steered into a dedicated worktree. Delegates are unaffected
+       * (their worktree .git is a file). Escape hatch for the branch owner:
+       * AIMEE_ALLOW_MAIN_CHECKOUT=1 or a .git/aimee-allow-main-edits marker. */
+      {
+         /* Key on the file being edited (resolved against cwd), not just cwd. */
+         const char *wt_fpath = NULL;
+         cJSON *wt_ti = (tool_input && tool_input[0]) ? cJSON_Parse(tool_input) : NULL;
+         if (wt_ti)
+         {
+            cJSON *fp = cJSON_GetObjectItemCaseSensitive(wt_ti, "file_path");
+            if (!cJSON_IsString(fp))
+               fp = cJSON_GetObjectItemCaseSensitive(wt_ti, "notebook_path");
+            if (cJSON_IsString(fp))
+               wt_fpath = fp->valuestring;
+         }
+         int wt_block = is_write_tool(tool_name) && cwd[0] &&
+                        aimee_edit_target_in_main_clone(wt_fpath, cwd) &&
+                        !aimee_main_clone_edits_allowed(cwd);
+         cJSON_Delete(wt_ti);
+         if (wt_block)
+         {
+            char reason[1024];
+            snprintf(reason, sizeof(reason),
+                     "BLOCKED: %s edits the SHARED MAIN CLONE (%s), not a git worktree — "
+                     "concurrent sessions entangle their uncommitted work this way. Isolate "
+                     "this task in its own worktree first:\n"
+                     "  git -C %s worktree add ../<name>-<task> -b <branch> origin/testing\n"
+                     "then work there. (Branch owner override: AIMEE_ALLOW_MAIN_CHECKOUT=1 or "
+                     "touch %s/.git/aimee-allow-main-edits.)",
+                     tool_name, cwd, cwd, cwd);
+            if (hook_client_uses_pretool_json())
+            {
+               emit_pretool_deny_json(reason);
+               exit(0);
+            }
+            fprintf(stderr, "aimee: %s\n", reason);
+            exit(2);
+         }
+      }
+
       /* Memory interception: redirect an agent's local memory-file write into
        * the central store, reusing the deny-with-message channel. */
       {
@@ -261,6 +415,10 @@ void cmd_hooks(app_ctx_t *ctx, int argc, char **argv)
             }
          }
       }
+
+      /* S2 pre-delivery externalization gate for the primary CLI's native tools
+       * (may emit a deny + exit before the generic guardrail check runs). */
+      s2_native_gate_pretool(sid, tool_name, tool_input);
 
       char msg[1024] = "";
       int rc = pre_tool_check(tool_name, tool_input, &state, config_guardrail_mode(&cfg), cwd, msg,
