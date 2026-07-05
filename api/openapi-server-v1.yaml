@@ -347,6 +347,14 @@ paths:
           content:
             application/json:
               schema: { type: object }
+  /workflow/blocks/{name}:
+    put:
+      summary: Create or edit a delegate custom block (blocks.yaml; command executors refused)
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Updated block catalog, content: { application/json: { schema: { type: object } } } } }
+    delete:
+      summary: Delete a custom delegate block (command blocks are operator-only)
+      responses: { "200": { description: Updated block catalog, content: { application/json: { schema: { type: object } } } } }
   /workflow/defs:
     get:
       summary: List saved workflow definitions
@@ -649,6 +657,38 @@ paths:
           description: Missing proposal_md
         "500":
           description: Could not create the work item
+  /dev/ci-event:
+    post:
+      summary: CI outcome webhook — record a PR's CI result for its autonomous run and resume the scheduler (HMAC-signed; no capability, fail-closed if the secret is unset)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pr_ref, head_sha, status, signature]
+              properties:
+                pr_ref: { type: string, description: The PR ref the run opened }
+                head_sha: { type: string, description: The commit CI ran on }
+                status: { type: string, enum: [passed, failed, error, pending] }
+                log_url: { type: string, description: Optional CI log URL }
+                signature: { type: string, description: HMAC-SHA256 hex over "pr_ref|head_sha|status" keyed by AIMEE_CI_WEBHOOK_SECRET }
+      responses:
+        "200":
+          description: "{ok, work_item, duplicate}"
+          content:
+            application/json:
+              schema: { type: object }
+        "400":
+          description: Missing/invalid fields or unknown status
+        "401":
+          description: Invalid signature
+        "404":
+          description: No work item for pr_ref
+        "413":
+          description: Body too large
+        "503":
+          description: Webhook disabled (AIMEE_CI_WEBHOOK_SECRET unset)
   /dev/sweep:
     post:
       summary: Deepening sweep (analysis-only) — propose duplication-across-call-sites seams, re-ground each against the live code index, and return a ranked report. Files nothing.
@@ -1924,6 +1964,16 @@ paths:
       summary: Disable an agent
       requestBody: { content: { application/json: { schema: { type: object } } } }
       responses: { "200": { description: Agent disabled, content: { application/json: { schema: { type: object } } } } }
+  /agent/roles:
+    post:
+      summary: Set an agent's roles
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Agent roles updated, content: { application/json: { schema: { type: object } } } } }
+  /agent/personas:
+    post:
+      summary: Set the personas an agent may be dispatched as ("all" = every persona)
+      requestBody: { content: { application/json: { schema: { type: object } } } }
+      responses: { "200": { description: Agent personas updated, content: { application/json: { schema: { type: object } } } } }
   /agent/probe:
     post:
       summary: Probe an agent/provider
@@ -2046,6 +2096,10 @@ paths:
     get:
       summary: Full dashboard snapshot
       responses: { "200": { description: Dashboard, content: { application/json: { schema: { type: object } } } } }
+  /dashboard/audit:
+    get:
+      summary: Tool-action audit ledger (guardrail verdicts) for the Logs page
+      responses: { "200": { description: Audit, content: { application/json: { schema: { type: object } } } } }
   /dashboard/delegations:
     get:
       summary: Delegation dashboard
@@ -2672,6 +2726,56 @@ paths:
       responses:
         "200":
           description: Session-start brief envelope
+          content:
+            application/json:
+              schema: { type: object }
+  /session/brief_assemble:
+    post:
+      summary: Workspace-independent session brief for the remote thin client
+      description: >-
+        Assembles and returns the workspace-independent SessionStart brief
+        (persona principles + learned Rules + key facts) via build_session_context,
+        with none of the hooks/session_start workspace side-effects (no worktree
+        checkout, state persistence, or reindex) and no client filesystem access.
+        Returns a minimal versioned envelope so the thin client has a stable
+        contract. CAP_SESSION_READ.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Versioned brief envelope { schema_version, output }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schema_version: { type: integer }
+                  output: { type: string }
+  /memory/user_capture:
+    post:
+      summary: Capture a per-user memory into db1
+      description: >-
+        Upsert a per-user memory (identity fact or preference) into db1
+        (per-user by construction). The write path behind
+        `aimee memory identity/prefer`. CAP_MEMORY_WRITE.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, key, content]
+              properties:
+                kind: { type: string }
+                key: { type: string }
+                content: { type: string }
+                tier: { type: string }
+      responses:
+        "200":
+          description: Capture result envelope { kind, key, scope }
           content:
             application/json:
               schema: { type: object }

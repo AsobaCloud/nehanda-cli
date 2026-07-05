@@ -258,7 +258,7 @@ struct fam_def
    const char *name;
    const char *cmd_key;
    const char *description;
-   struct fam_member members[12];
+   struct fam_member members[14];
 };
 static const struct fam_def MCP_FAMILIES[] = {
     {"pipeline",
@@ -314,6 +314,9 @@ static const struct fam_def MCP_FAMILIES[] = {
       {"preview", "preview_blast_radius"},
       {"hybrid", "index_hybrid"},
       {"hubs", "index_graph_hubs"},
+      {"audit", "index_graph_audit"},
+      {"diff", "index_graph_diff"},
+      {"lessons", "index_lessons"},
       {"surprising", "index_graph_surprising"},
       {"neighbors", "index_graph_node"},
       {NULL, NULL}}},

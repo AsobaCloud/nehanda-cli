@@ -740,6 +740,19 @@ void config_parse_fold_section(config_t *cfg, cJSON *root)
  * it, so an exposed flag is never silently inert. All default-off. */
 void config_parse_reduce_section(config_t *cfg, cJSON *root)
 {
+   /* Two-tier economizer switches (P3), colocated `economizer:` block — parsed FIRST, before
+    * the reduce early-return, so a config that sets economizer.* but no reduce.* is honored. */
+   cJSON *econ = cJSON_GetObjectItemCaseSensitive(root, "economizer");
+   if (cJSON_IsObject(econ))
+   {
+      cJSON *e = cJSON_GetObjectItemCaseSensitive(econ, "enabled");
+      if (cJSON_IsBool(e))
+         cfg->economizer_enabled = cJSON_IsTrue(e) ? 1 : 0;
+      e = cJSON_GetObjectItemCaseSensitive(econ, "aggressive");
+      if (cJSON_IsBool(e))
+         cfg->economizer_aggressive = cJSON_IsTrue(e) ? 1 : 0;
+   }
+
    cJSON *reduce = cJSON_GetObjectItemCaseSensitive(root, "reduce");
    if (!cJSON_IsObject(reduce))
       return;
@@ -757,7 +770,23 @@ void config_parse_reduce_section(config_t *cfg, cJSON *root)
       cfg->reduce_compress = cJSON_IsTrue(item) ? 1 : 0;
    item = cJSON_GetObjectItemCaseSensitive(reduce, "gateway_seam");
    if (cJSON_IsBool(item))
+   {
       cfg->reduce_gateway_seam = cJSON_IsTrue(item) ? 1 : 0;
+      cfg->reduce_gateway_seam_explicit = 1; /* operator set it -> config_save may persist it */
+   }
+   item = cJSON_GetObjectItemCaseSensitive(reduce, "gateway_mutate");
+   if (cJSON_IsBool(item))
+      cfg->reduce_gateway_mutate = cJSON_IsTrue(item) ? 1 : 0;
+   item = cJSON_GetObjectItemCaseSensitive(reduce, "gateway_session_disable_ttl_ms");
+   if (cJSON_IsNumber(item))
+      /* Use cJSON's pre-narrowed valueint (clamped to INT_MIN..INT_MAX at parse) —
+       * casting an out-of-range valuedouble to int is UB, and a fractional value
+       * truncates. A resulting <=0 (incl. a truncated 0.x) is caught startup-fatal
+       * by config_reduce_validate(). */
+      cfg->reduce_gateway_session_disable_ttl_ms = item->valueint;
+   item = cJSON_GetObjectItemCaseSensitive(reduce, "command_filter");
+   if (cJSON_IsBool(item))
+      cfg->reduce_command_filter = cJSON_IsTrue(item) ? 1 : 0;
    item = cJSON_GetObjectItemCaseSensitive(reduce, "freeze_guard");
    if (cJSON_IsBool(item))
       cfg->reduce_freeze_guard_enabled = cJSON_IsTrue(item) ? 1 : 0;
@@ -769,6 +798,91 @@ void config_parse_reduce_section(config_t *cfg, cJSON *root)
          h = FREEZE_GUARD_MAX_HORIZON; /* clamp at parse so on-disk == runtime */
       cfg->reduce_freeze_guard_horizon = h;
    }
+}
+
+/* Clamp an integer to [lo, hi]. */
+static int clampi(int v, int lo, int hi)
+{
+   return v < lo ? lo : (v > hi ? hi : v);
+}
+
+/* Autonomous-development pipeline knobs (Phase-C). Historically env-only
+ * (AIMEE_AUTONOMY_*); parsed here so they live in the typed config + web Settings, then
+ * bridged to the env vars at startup (autonomy_config_to_env) for the wfe library.
+ * Out-of-range values are CLAMPED to sane bounds (not silently dropped) — this runs at
+ * config_load, so it also bounds a value a raw config.set persisted, before the startup
+ * bridge reads it: a fat-fingered skeptics=1000 can't fan out 1000 judge dispatches. The
+ * wfe consumers additionally fail-safe on <=0 (treat as off/default), so the low end is
+ * doubly safe. */
+void config_parse_autonomy_section(config_t *cfg, cJSON *root)
+{
+   cJSON *autonomy = cJSON_GetObjectItemCaseSensitive(root, "autonomy");
+   if (!cJSON_IsObject(autonomy))
+      return;
+   cJSON *item = cJSON_GetObjectItemCaseSensitive(autonomy, "skeptics");
+   if (cJSON_IsNumber(item))
+      cfg->autonomy_skeptics = clampi(item->valueint, 0, 32);
+   item = cJSON_GetObjectItemCaseSensitive(autonomy, "fanout");
+   if (cJSON_IsBool(item))
+      cfg->autonomy_fanout = cJSON_IsTrue(item) ? 1 : 0;
+   item = cJSON_GetObjectItemCaseSensitive(autonomy, "unit_retry");
+   if (cJSON_IsNumber(item))
+      cfg->autonomy_unit_retry = clampi(item->valueint, 0, 10);
+   item = cJSON_GetObjectItemCaseSensitive(autonomy, "unit_max");
+   if (cJSON_IsNumber(item)) /* unit_max must be positive — 0 units is meaningless */
+      cfg->autonomy_unit_max = clampi(item->valueint, 1, 256);
+   item = cJSON_GetObjectItemCaseSensitive(autonomy, "ci_retry_max");
+   if (cJSON_IsNumber(item))
+      cfg->autonomy_ci_retry_max = clampi(item->valueint, 0, 20);
+}
+
+/* Bridge the autonomy config knobs to the AIMEE_AUTONOMY_* env vars the wfe library
+ * reads via getenv (it cannot see config_t across the module boundary). setenv's third
+ * arg is 0 — it sets the var ONLY when unset, so an explicitly-exported env var (a
+ * deployment override) always wins over the config value. Call once at server startup;
+ * a Settings change to these knobs therefore applies on the next server start. */
+/* NOTE: autonomy_config_to_env (the startup setenv bridge) was REMOVED — wfe now reads
+ * autonomy.* live from the config snapshot via config_autonomy_lookup (thread-safe), so there
+ * is no cross-thread setenv. An operator-exported AIMEE_AUTONOMY_* still overrides. */
+
+/* Normalize economizer gateway-mutation invariants IN MEMORY after parse. mutate=1
+ * requires the shadow seam so the validation gates always have a same-payload
+ * baseline: auto-enable reduce_gateway_seam in memory (never rewriting the file)
+ * and WARN. config_load is mtime-cached, so this runs (and warns) once per uncached
+ * load; a config left at seam=0,mutate=1 repeats the WARN each fresh start until
+ * corrected. Synthesizing the seam also FORCES reduce_gateway_seam_explicit=0 so
+ * config_save never persists the synthesized value — even when the file explicitly
+ * set gateway_seam:false alongside mutate:true (mutate wins in memory, but the
+ * operator's on-disk false is not silently rewritten to true). */
+void config_apply_reduce_consistency(config_t *cfg)
+{
+   if (cfg->reduce_gateway_mutate && !cfg->reduce_gateway_seam)
+   {
+      cfg->reduce_gateway_seam = 1;
+      cfg->reduce_gateway_seam_explicit = 0; /* synthesized -> not persistable */
+      fprintf(stderr,
+              "aimee: config warning: reduce.gateway_mutate=1 requires reduce.gateway_seam; "
+              "auto-enabling the shadow seam in memory (set reduce.gateway_seam: true to "
+              "silence this)\n");
+   }
+}
+
+/* Startup-fatal validation for the live gateway-mutation path (see config.h). The
+ * disable-window TTL must be > 0; 0/negative would make a circuit-broken session a
+ * permanent pin (or, negative, an immediately-expired no-op breaker) on live client
+ * traffic, which the design rejects rather than silently clamps. */
+int config_reduce_validate(const config_t *cfg, char *err, size_t errlen)
+{
+   if (cfg->reduce_gateway_session_disable_ttl_ms <= 0)
+   {
+      if (err && errlen)
+         snprintf(err, errlen,
+                  "reduce.gateway_session_disable_ttl_ms must be > 0 (got %d); 0/negative is a "
+                  "permanent-pin/disabled breaker on the live /v1 path",
+                  cfg->reduce_gateway_session_disable_ttl_ms);
+      return 1;
+   }
+   return 0;
 }
 
 void config_parse_sessions_section(config_t *cfg, cJSON *root)

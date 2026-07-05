@@ -17,6 +17,8 @@
 #include "agent_config.h"
 #include "agent_exec.h"
 #include "context_reduce.h"
+#include "gateway_mutate_wire.h"
+#include "server_http_identity.h"
 #include "agent_protocol.h"
 #include "agent_types.h"
 #include "anthropic_ingress.h"
@@ -28,6 +30,7 @@
 #include "router_advise.h"   /* gw_stage_router — the request->workflow seam */
 #include "aimee_ir_shadow.h" /* Slice 3: IR shadow-mode observer */
 #include "aimee_ir_serve.h"  /* Slice 5: IR live request-build */
+#include "aimee_ir_stream.h" /* Slice 5-wire: IR-delta incremental relay */
 #include "ingress_preinject.h"
 #include "json_fluent.h"
 #include "server_http.h"
@@ -363,6 +366,32 @@ static char *build_anthropic_provider_body(const cJSON *in, const agent_t *ag, i
 
 /* --- Buffered: POST /v1/messages (stream:false) ------------------------- */
 
+/* Build the upstream provider body from the current `req` (Anthropic parity path
+ * duplicates req directly; otherwise via the IR path or the legacy translator over
+ * the extracted messages/tools/system). Re-callable so the gateway-mutation 4xx
+ * restore path can rebuild the body from the restored (pristine) req. Returns a
+ * malloc'd JSON string (caller frees) or NULL. */
+static char *anthropic_build_prov_body(cJSON *req, const delegate_driver_t *driver,
+                                       const agent_t *ag, int parity, cJSON *messages, cJSON *tools,
+                                       const char *system_text)
+{
+   char *prov_body = NULL;
+   if (driver_is_anthropic(driver))
+      prov_body = build_anthropic_provider_body(req, ag, 0, parity);
+   else
+   {
+      if (aimee_ir_path_enabled())
+         prov_body = aimee_ir_build_provider_body(
+             req, driver->name, ag->model,
+             agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)));
+      if (!prov_body)
+         prov_body = build_provider_body(driver, ag, messages, tools, system_text,
+                                         agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)),
+                                         jo_num(req, "temperature", 1.0), 0);
+   }
+   return prov_body;
+}
+
 static int messages_buffered(const char *body, char *resp, int cap)
 {
    cJSON *req = cJSON_Parse((body && body[0]) ? body : "{}");
@@ -375,9 +404,11 @@ static int messages_buffered(const char *body, char *resp, int cap)
    char extra[512];
    char msg_id[48];
    const delegate_driver_t *driver;
-   parsed_response_t parsed;
+   parsed_response_t parsed = {0}; /* freed only on the success path, but init defensively */
    int status, http_status, rc;
    const char *model;
+   gw_mutate_ctx_t gwmc;
+   gw_mutate_ctx_init(&gwmc);
 
    if (!req)
       return write_error(resp, cap, 400, "invalid_request_error", "invalid JSON body");
@@ -411,6 +442,20 @@ static int messages_buffered(const char *body, char *resp, int cap)
    /* Re-read `model`: the model-pin stage may have replaced req's "model" node, so
     * the pointer cached above (line ~397) could now dangle. */
    model = jo_cstr(req, "model");
+
+   /* Economizer gateway MUTATION (primary-agent reduction). Default-OFF. Reduces
+    * req["messages"] in place (compress-only) BEFORE translate/build so the provider
+    * body is assembled from the reduced array; on a bad reduction the upstream 4xx is
+    * caught below (restore-resend), the session is circuit-broken, and provenance is
+    * cleared. A dark no-op when reduce_gateway_mutate is off. */
+   if (gw_mutate_is_enabled())
+   {
+      char *mut_sys = anthropic_system_to_text(req);
+      gw_buffered_mutate(req, "messages", model, mut_sys, server_http_identity_session_hdr(),
+                         server_http_identity_bearer(), server_http_identity_principal(), &gwmc);
+      free(mut_sys);
+   }
+
    translate_request(req, driver, ag, &messages, &tools, &system_text);
    if (delegate_build_url(driver, ag, url, sizeof(url)) != 0 ||
        agent_resolve_auth(ag, auth, sizeof(auth)) != 0)
@@ -423,25 +468,30 @@ static int messages_buffered(const char *body, char *resp, int cap)
    else
       agent_build_extra_headers(ag, extra, sizeof(extra));
 
-   if (driver_is_anthropic(driver))
-      prov_body = build_anthropic_provider_body(req, ag, 0, parity);
-   else
-   {
-      /* Slice 5: build the provider request VIA THE IR (parse -> IR ->
-       * backend.build; NO direct anthropic->openai translation) when the IR-path
-       * flag is on. Falls back to the legacy translator on any failure or when the
-       * flag is off, so behavior is unchanged by default. */
-      if (aimee_ir_path_enabled())
-         prov_body = aimee_ir_build_provider_body(
-             req, driver->name, ag->model,
-             agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)));
-      if (!prov_body)
-         prov_body = build_provider_body(driver, ag, messages, tools, system_text,
-                                         agent_request_max_tokens(ag, jo_int(req, "max_tokens", 0)),
-                                         jo_num(req, "temperature", 1.0), 0);
-   }
+   prov_body = anthropic_build_prov_body(req, driver, ag, parity, messages, tools, system_text);
    http_status = agent_http_post(url, auth, prov_body ? prov_body : "{}", &response, ag->timeout_ms,
                                  extra[0] ? extra : NULL);
+
+   /* Gateway mutation post-send: on ANY 4xx of a mutated request, restore the
+    * pristine original, repair, disable the session, and resend ONCE from pristine;
+    * on 5xx, disable the session without resending. No-op unless we mutated. */
+   if (gw_buffered_after_status(req, "messages", http_status, &gwmc) == GW_POST_RESEND)
+   {
+      cJSON_Delete(messages);
+      messages = NULL;
+      cJSON_Delete(tools);
+      tools = NULL;
+      free(system_text);
+      system_text = NULL;
+      translate_request(req, driver, ag, &messages, &tools, &system_text);
+      free(prov_body);
+      prov_body = anthropic_build_prov_body(req, driver, ag, parity, messages, tools, system_text);
+      free(response);
+      response = NULL;
+      http_status = agent_http_post(url, auth, prov_body ? prov_body : "{}", &response,
+                                    ag->timeout_ms, extra[0] ? extra : NULL);
+   }
+
    if (http_status != 200 || !response)
    {
       /* Exact parity: relay the upstream status + Anthropic error body verbatim
@@ -509,6 +559,7 @@ static int messages_buffered(const char *body, char *resp, int cap)
    agent_free_parsed_response(&parsed);
 
 cleanup:
+   gw_mutate_ctx_free(&gwmc);
    cJSON_Delete(out);
    cJSON_Delete(provider_resp);
    free(response);
@@ -527,7 +578,18 @@ cleanup:
 typedef struct
 {
    sse_parser_t parser;
-   anthropic_stream_xlate_t *xl;
+   anthropic_stream_xlate_t *xl; /* legacy incremental translator */
+   /* Slice 5-wire: neutral IR-delta relay (used instead of `xl` when the
+    * AIMEE_IR_STREAM_RELAY flag is on). Provider OpenAI-chat SSE chunks ->
+    * openai_chunk_to_deltas -> anthropic_delta_emit -> `emit`. */
+   int ir_relay;
+   openai_stream_state_t ir_ost;
+   anthropic_stream_state_t ir_ast;
+   server_http_sse_event_emit emit;
+   void *emit_ctx;
+   const char *msg_id;
+   const char *model;
+   long ir_usage_out; /* tapped from the TURN_STOP delta for the cost row */
 } prov_stream_ctx_t;
 
 typedef struct
@@ -547,6 +609,10 @@ typedef struct
    int output_tokens;
    int cache_write_tokens;
    int cache_read_tokens;
+   /* Gateway-mutation streaming breaker: when this stream carried a reduced payload
+    * (gwmc->mutated), an invalid-request error frame disables the session for
+    * subsequent turns (§2.5 streaming). NULL when the request was not mutated. */
+   gw_mutate_ctx_t *gwmc;
 } anthropic_relay_ctx_t;
 
 static int prov_line_cb(const char *line, size_t len, void *ud)
@@ -557,7 +623,36 @@ static int prov_line_cb(const char *line, size_t len, void *ud)
       const char *p = line + 5;
       while (*p == ' ')
          p++;
-      anthropic_stream_feed_openai(c->xl, p); /* line is NUL-terminated by the parser */
+      if (c->ir_relay)
+      {
+         /* OpenAI-chat providers close the stream with a literal `data: [DONE]`
+          * sentinel that is not JSON; the finish_reason chunk already produced the
+          * IR TURN_STOP, so just skip it. */
+         if (strcmp(p, "[DONE]") == 0)
+            return 0;
+         cJSON *chunk = cJSON_Parse(p);
+         if (chunk)
+         {
+            /* A finish chunk closes EVERY open block (text + up to
+             * AIMEE_STREAM_MAX_TOOLS tool blocks) then TURN_STOP in one call, and
+             * a chunk carrying many tool_calls opens as many; size the buffer to
+             * hold the worst case so the terminal TURN_STOP is never truncated
+             * (which would hang the client's SSE reader). */
+            aimee_delta_t deltas[2 * AIMEE_STREAM_MAX_TOOLS + 4];
+            int n = openai_chunk_to_deltas(chunk, &c->ir_ost, deltas,
+                                           (int)(sizeof deltas / sizeof deltas[0]));
+            for (int i = 0; i < n; i++)
+            {
+               if (deltas[i].type == AIMEE_DELTA_TURN_STOP)
+                  c->ir_usage_out = deltas[i].usage_out;
+               anthropic_delta_emit(&deltas[i], &c->ir_ast, c->msg_id, c->model, c->emit,
+                                    c->emit_ctx);
+            }
+            cJSON_Delete(chunk);
+         }
+      }
+      else
+         anthropic_stream_feed_openai(c->xl, p); /* line is NUL-terminated by the parser */
    }
    return 0;
 }
@@ -635,6 +730,13 @@ static void relay_flush(anthropic_relay_ctx_t *c)
       relay_capture_usage(c, event, c->data);
       c->emit(c->emit_ctx, event, c->data);
       c->emitted++;
+      /* Inspect-as-forward (§2.5 streaming): the frame is already forwarded above;
+       * if this MUTATED stream carried an invalid-request-class error frame, the
+       * reduced payload is the likely cause -> disable subsequent turns. Transient
+       * frames (rate-limit/overloaded) are forwarded WITHOUT disabling. */
+      if (c->gwmc && c->gwmc->mutated && strcmp(event, "error") == 0 &&
+          gw_stream_anthropic_error_is_invalid_request(c->data))
+         gw_stream_disable(c->gwmc, "stream_invalid_request");
    }
    c->event[0] = '\0';
    c->data_len = 0;
@@ -704,6 +806,8 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
    prov_stream_ctx_t pc;
    int input_est;
    int responses_wire = 0;
+   gw_mutate_ctx_t gwmc;
+   gw_mutate_ctx_init(&gwmc);
 
    mint_msg_id(msg_id, sizeof(msg_id));
 
@@ -744,6 +848,20 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
    /* Re-read `model`: the model-pin stage may have replaced req's "model" node, so
     * the pointer cached at the top of this function could now dangle. */
    model = jo_cstr(req, "model");
+
+   /* Economizer gateway MUTATION (streaming). Reduces req["messages"] in place before
+    * translate/build. Streaming CANNOT restore-resend (the 200 is committed on the
+    * first byte), so on a bad reduction only SUBSEQUENT turns are circuit-broken —
+    * via the SSE error-frame inspect-as-forward in relay_flush + the post-stream
+    * fail-safe below. Default-OFF dark no-op. */
+   if (gw_mutate_is_enabled())
+   {
+      char *mut_sys = anthropic_system_to_text(req);
+      gw_buffered_mutate(req, "messages", model, mut_sys, server_http_identity_session_hdr(),
+                         server_http_identity_bearer(), server_http_identity_principal(), &gwmc);
+      free(mut_sys);
+   }
+
    translate_request(req, driver, ag, &messages, &tools, &system_text);
    if (delegate_build_url(driver, ag, url, sizeof(url)) != 0 ||
        agent_resolve_auth(ag, auth, sizeof(auth)) != 0)
@@ -883,6 +1001,15 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
                   buf_status);
          if (emit)
             emit(ctx, "error", err);
+         /* Buffered-replay streaming: circuit-break subsequent turns only when the
+          * non-200 indicates a bad reduced payload — an invalid-request-class 4xx
+          * (400/413/422) or, fail-safe, a 5xx. Auth / rate-limit / not-found
+          * (401/403/404/429) are NOT reduction bugs and are forwarded WITHOUT
+          * disabling. No restore/resend — the 200 is already committed. */
+         if (gw_status_is_invalid_request(buf_status))
+            gw_stream_disable(&gwmc, "stream_invalid_request");
+         else if (buf_status / 100 == 5)
+            gw_stream_disable(&gwmc, "stream_decoder_error");
       }
       free(buf_resp);
       goto cleanup;
@@ -896,12 +1023,18 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
       sse_parser_init(&relay.parser);
       relay.emit = emit;
       relay.emit_ctx = ctx;
+      relay.gwmc = &gwmc; /* enable the streaming breaker for a mutated stream */
       stream_status =
           agent_http_post_stream(url, auth, prov_body ? prov_body : "{}", anthropic_relay_chunk_cb,
                                  &relay, ag->timeout_ms, extra[0] ? extra : NULL);
       relay_flush(&relay);
       if (stream_status != 200)
+      {
          relay_emit_transport_error(&relay, stream_status);
+         /* Fail-safe (§2.5): a non-SSE post-200 upstream failure on a mutated stream
+          * disables subsequent turns (the current turn is already lost). */
+         gw_stream_disable(&gwmc, "stream_decoder_error");
+      }
       /* Cost accounting for the native Anthropic streaming ingress, from the
        * usage tapped off the relayed SSE. A clean 200 is realized spend; an
        * aborted stream that still observed usage is recorded as partial so the
@@ -926,6 +1059,67 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
    }
 
    input_est = messages ? session_compact_estimate_tokens(messages) : 0;
+
+   if (aimee_ir_stream_relay_enabled())
+   {
+      /* Slice 5-wire (default-off): drive the incremental OpenAI-chat -> Anthropic
+       * SSE relay through the neutral IR-delta model instead of the legacy
+       * anthropic_stream_feed_openai translator -- the last live direct-translation
+       * site. */
+      memset(&pc, 0, sizeof pc);
+      sse_parser_init(&pc.parser);
+      pc.ir_relay = 1;
+      openai_stream_state_init(&pc.ir_ost);
+      pc.emit = emit;
+      pc.emit_ctx = ctx;
+      pc.msg_id = msg_id;
+      pc.model = model;
+      int ir_status = agent_http_post_stream(url, auth, prov_body ? prov_body : "{}", prov_chunk_cb,
+                                             &pc, ag->timeout_ms, extra[0] ? extra : NULL);
+      sse_parser_free(&pc.parser);
+      /* Finish-safety: if the upstream cut off before a finish_reason chunk (no IR
+       * TURN_STOP was produced), synthesize the closing sequence so the client's
+       * SSE reader terminates cleanly, mirroring anthropic_stream_finish. Close any
+       * still-open content blocks, then emit TURN_STOP. */
+      if (pc.ir_ast.started && !pc.ir_ost.stopped)
+      {
+         aimee_delta_t bs = {0};
+         bs.type = AIMEE_DELTA_BLOCK_STOP;
+         if (pc.ir_ost.text_block >= 0)
+         {
+            bs.block_id = pc.ir_ost.text_block;
+            anthropic_delta_emit(&bs, &pc.ir_ast, msg_id, model, emit, ctx);
+         }
+         for (int i = 0; i < AIMEE_STREAM_MAX_TOOLS; i++)
+            if (pc.ir_ost.tool_block[i] >= 0)
+            {
+               bs.block_id = pc.ir_ost.tool_block[i];
+               anthropic_delta_emit(&bs, &pc.ir_ast, msg_id, model, emit, ctx);
+            }
+         aimee_delta_t ts = {0};
+         ts.type = AIMEE_DELTA_TURN_STOP;
+         ts.stop_reason = AIMEE_STOP_END_TURN;
+         ts.usage_out = pc.ir_usage_out;
+         anthropic_delta_emit(&ts, &pc.ir_ast, msg_id, model, emit, ctx);
+      }
+      /* Cost row: input from the local estimate (message_start reports 0, same as
+       * the legacy translator's estimate basis), output tapped from the IR
+       * TURN_STOP delta. */
+      if ((input_est > 0 || pc.ir_usage_out > 0) && agent_ingress_accounting_enabled())
+      {
+         agent_result_t ar;
+         memset(&ar, 0, sizeof(ar));
+         snprintf(ar.agent_name, sizeof(ar.agent_name), "%s", ag->name);
+         snprintf(ar.model, sizeof(ar.model), "%s", ag->model);
+         snprintf(ar.requested_model, sizeof(ar.requested_model), "%s", model ? model : "");
+         ar.prompt_tokens = input_est;
+         ar.completion_tokens = (int)pc.ir_usage_out;
+         agent_record_token_audit_kind(&ar, "", "anthropic-ingress",
+                                       ir_status == 200 ? "realized" : "partial");
+      }
+      goto cleanup;
+   }
+
    xl = anthropic_stream_begin(msg_id, model, input_est, emit, ctx);
    if (!xl)
       goto cleanup;
@@ -935,6 +1129,12 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
    int xlate_status = agent_http_post_stream(url, auth, prov_body ? prov_body : "{}", prov_chunk_cb,
                                              &pc, ag->timeout_ms, extra[0] ? extra : NULL);
    sse_parser_free(&pc.parser);
+
+   /* OpenAI-via-translator streaming: this path lacks per-frame Anthropic error
+    * classification, so a non-200 upstream on a mutated request is a fail-safe
+    * disable of subsequent turns. */
+   if (xlate_status != 200)
+      gw_stream_disable(&gwmc, "stream_decoder_error");
 
    anthropic_stream_finish(xl);
 
@@ -964,6 +1164,7 @@ static int messages_stream(const char *body, server_http_sse_event_emit emit, vo
    anthropic_stream_free(xl);
 
 cleanup:
+   gw_mutate_ctx_free(&gwmc);
    free(prov_body);
    free(system_text);
    cJSON_Delete(messages);

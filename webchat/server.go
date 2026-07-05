@@ -121,6 +121,7 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", s.requireAuth(s.handleRoot))
 	mux.HandleFunc("/chat", s.requireAuth(s.handleSPA))
 	mux.HandleFunc("/dashboard", s.requireAuth(s.handleSPA))
+	mux.HandleFunc("/logs", s.requireAuth(s.handleSPA))
 	// Workflow surfaces: "Edit Workflows" (the def/graph editor) and "Workflow
 	// Actions" (author → autonomous-run → status/history). Both are SPA routes so a
 	// hard refresh / direct link serves index.html and React Router takes over.
@@ -154,6 +155,9 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/chat/personas/", s.requireAuth(s.handleChatPersonaItem))
 	mux.HandleFunc("/api/chat/persona", s.requireAuth(s.handleChatPersona))
 	mux.HandleFunc("/api/settings", s.requireAuth(s.handleSettings))
+	// Full typed config surface for the Settings page.
+	mux.HandleFunc("/api/config", s.requireAuth(s.handleConfigAll))
+	mux.HandleFunc("/api/config/set", s.requireAuth(s.handleConfigSet))
 	mux.HandleFunc("/api/chat/attach", s.requireAuth(s.handleChatAttach))
 	mux.HandleFunc("/api/chat/detach", s.requireAuth(s.handleChatDetach))
 	mux.HandleFunc("/api/chat/session-events", s.requireAuth(s.handleChatSessionEvents))
@@ -174,6 +178,7 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 
 	// Aggregate dashboard endpoint — all panels in one server round-trip
 	mux.HandleFunc("/api/dashboard", s.requireAuth(s.handleDashboardAll))
+	mux.HandleFunc("/api/audit", s.requireAuth(s.dataArrayHandler("dashboard.audit")))
 
 	// Code-graph visualization (§8): read-only views via aimee-server's index_graph_* MCP tools.
 	mux.HandleFunc("/api/graph/hubs", s.requireAuth(s.handleGraphHubs))
@@ -182,6 +187,7 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 
 	// Workflow visual composer (W7): proxy to aimee-server /v1/workflow/*.
 	mux.HandleFunc("/api/workflow/blocks", s.requireAuth(s.handleWorkflowBlocks))
+	mux.HandleFunc("/api/workflow/blocks/", s.requireAuth(s.handleWorkflowBlockItem))
 	mux.HandleFunc("/api/workflow/defs", s.requireAuth(s.handleWorkflowDefs))
 	mux.HandleFunc("/api/workflow/defs/", s.requireAuth(s.handleWorkflowDefs))
 	mux.HandleFunc("/api/workflow/validate", s.requireAuth(s.handleWorkflowValidate))
@@ -218,6 +224,11 @@ func (s *server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agents/enable", s.requireAuth(s.agentOpHandler("agent.enable")))
 	mux.HandleFunc("POST /api/agents/disable", s.requireAuth(s.agentOpHandler("agent.disable")))
 	mux.HandleFunc("POST /api/agents/probe", s.requireAuth(s.agentOpHandler("agent.probe")))
+	mux.HandleFunc("POST /api/agents/roles", s.requireAuth(s.agentOpHandler("agent.roles")))
+	mux.HandleFunc("POST /api/agents/personas", s.requireAuth(s.agentOpHandler("agent.personas")))
+	// Role registry (the shared vocabulary matched between personas and agents).
+	mux.HandleFunc("/api/roles", s.requireAuth(s.handleRoles))
+	mux.HandleFunc("/api/roles/", s.requireAuth(s.handleRoleItem))
 	mux.HandleFunc("/api/rules", s.requireAuth(s.handleCollabRulesList))
 	mux.HandleFunc("/api/rules/active", s.requireAuth(s.handleCollabRulesActive))
 	mux.HandleFunc("POST /api/rules/{id}/{action}", s.requireAuth(s.handleCollabRuleAction))

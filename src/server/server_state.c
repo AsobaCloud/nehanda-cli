@@ -1,7 +1,10 @@
 /* server_state.c: server handlers for memory, index, rules, working memory, dashboard, workspace */
+#include "server_state_internal.h"
 #include "aimee.h"
 #include "server.h"
 #include "dashboard.h"
+#include "render.h"       /* decision_to_json + db2_decision_log_list */
+#include "audit_ledger.h" /* audit_ledger_read — server-incurred tool-action audit */
 #include "lsp.h"
 #include "platform_path.h"
 #include "workspace.h"
@@ -28,7 +31,7 @@
 #include <unistd.h>
 
 /* Send a response object and delete it. Returns send rc. */
-static int send_and_free(server_conn_t *conn, cJSON *resp)
+int send_and_free(server_conn_t *conn, cJSON *resp)
 {
    return server_send_ok(conn, resp);
 }
@@ -542,11 +545,9 @@ int handle_blast_radius_preview(server_ctx_t *ctx, server_conn_t *conn, cJSON *r
 
 /* Auditable-correctness /v1/audit/trace handler (kept in a textual include to
  * stay under the per-file line cap). */
-#include "server_state_audit.inc"
 
 /* CSS migration assistant /v1/css/signals handler — a thin forward to the KB
  * (textual include for the line cap). */
-#include "server_css_query.inc"
 
 int handle_kb_search(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
@@ -1383,7 +1384,7 @@ int handle_workspace_context(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
  * the workspace registry (config workspaces[]) and project indexing both stay
  * server-side, mirroring the legacy cmd_workspace implementation. */
 
-static int workspace_rpc_args(cJSON *req, char **argv, int max)
+int workspace_rpc_args(cJSON *req, char **argv, int max)
 {
    cJSON *args = cJSON_GetObjectItemCaseSensitive(req, "args");
    if (!cJSON_IsArray(args))
@@ -1445,7 +1446,7 @@ int handle_workspace_list(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 /* Capture the trimmed first line of a `git -C <root> ...` command through the
  * shared provider's exec primitive (empty when the command fails / root is not
  * a repo). The provider seam means a detached server runs this on its mirror. */
-static void ws_git_line(const char *const argv[], char *out, size_t outsz)
+void ws_git_line(const char *const argv[], char *out, size_t outsz)
 {
    out[0] = '\0';
    const workspace_provider_t *ws = workspace_provider_shared();
@@ -1465,7 +1466,6 @@ static void ws_git_line(const char *const argv[], char *out, size_t outsz)
  * sibling .inc (kept out of this file's line budget); included here so they
  * share workspace_rpc_args, ws_git_line, and the jo_ok/send_and_free helpers
  * defined above. */
-#include "server_runner_endpoints.inc"
 
 int handle_workspace_remove(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
@@ -1869,6 +1869,96 @@ static cJSON *parse_or_object(char *json)
    return v ? v : cJSON_CreateObject();
 }
 
+/* Recent governance decision records (decision_log via KB client), newest first. */
+static char *dashboard_decisions_json(void)
+{
+   db2_decision_log_row_t rows[50];
+   int n = kb_client_decision_log_list(NULL, 50, rows, 50);
+   if (n < 0)
+      n = 0;
+   cJSON *arr = cJSON_CreateArray();
+   for (int i = 0; i < n; i++)
+      cJSON_AddItemToArray(arr, decision_to_json(&rows[i]));
+   char *json = cJSON_PrintUnformatted(arr);
+   cJSON_Delete(arr);
+   return json ? json : strdup("[]");
+}
+
+/* Server-incurred tool-action audit (guardrail verdicts), most-recent first, capped. */
+static cJSON *dashboard_audit_array(int limit)
+{
+   cJSON *all = audit_ledger_read(NULL, NULL);
+   if (!all)
+      return cJSON_CreateArray();
+   int n = cJSON_GetArraySize(all);
+   cJSON *out = cJSON_CreateArray();
+   for (int i = n - 1; i >= 0 && (limit <= 0 || cJSON_GetArraySize(out) < limit); i--)
+      cJSON_AddItemToArray(out, cJSON_DetachItemFromArray(all, i));
+   cJSON_Delete(all);
+   return out;
+}
+
+static void readiness_add_step(cJSON *steps, const char *step, const char *status,
+                               const char *message)
+{
+   cJSON *s = cJSON_CreateObject();
+   cJSON_AddStringToObject(s, "step", step);
+   cJSON_AddStringToObject(s, "status", status);
+   if (message && message[0])
+      cJSON_AddStringToObject(s, "message", message);
+   cJSON_AddItemToArray(steps, s);
+}
+
+static int json_array_len(const cJSON *v)
+{
+   return cJSON_IsArray(v) ? cJSON_GetArraySize(v) : 0;
+}
+
+/* Real readiness report (onboard-report shape) from the already-gathered payload. */
+static cJSON *dashboard_readiness(const cJSON *resp)
+{
+   cJSON *report = cJSON_CreateObject();
+   cJSON_AddStringToObject(report, "version", "1");
+   cJSON *steps = cJSON_AddArrayToObject(report, "steps");
+   cJSON *next = cJSON_AddArrayToObject(report, "next_actions");
+   int ready = 1;
+
+   const cJSON *mem = cJSON_GetObjectItem(resp, "memory_stats");
+   const cJSON *tiers = mem ? cJSON_GetObjectItem(mem, "tier_kinds") : NULL;
+   if (json_array_len(tiers) > 0)
+      readiness_add_step(steps, "database", "ok", "memory store reachable");
+   else
+      readiness_add_step(steps, "database", "warn", "no memories recorded yet");
+
+   int agents = json_array_len(cJSON_GetObjectItem(resp, "agents"));
+   if (agents > 0)
+   {
+      char msg[64];
+      snprintf(msg, sizeof(msg), "%d agent%s configured", agents, agents == 1 ? "" : "s");
+      readiness_add_step(steps, "agents", "ok", msg);
+   }
+   else
+   {
+      ready = 0;
+      readiness_add_step(steps, "agents", "error", "no agents configured");
+      cJSON_AddItemToArray(next, cJSON_CreateString("Configure at least one delegate agent"));
+   }
+
+   if (json_array_len(cJSON_GetObjectItem(resp, "metrics")) > 0)
+      readiness_add_step(steps, "delegations", "ok", "delegate activity recorded");
+   else
+      readiness_add_step(steps, "delegations", "warn", "no delegate activity yet");
+
+   const cJSON *lsp = cJSON_GetObjectItem(resp, "lsp");
+   int lsp_err = lsp ? (int)cJSON_GetNumberValue(cJSON_GetObjectItem(lsp, "errors")) : 0;
+   readiness_add_step(steps, "lsp", lsp_err > 0 ? "warn" : "ok",
+                      lsp_err > 0 ? "diagnostics present" : "no code diagnostics");
+
+   cJSON_AddBoolToObject(report, "ready", ready);
+   cJSON_AddNumberToObject(report, "elapsed_ms", 0);
+   return report;
+}
+
 int handle_dashboard_traces(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
    (void)ctx;
@@ -1966,8 +2056,8 @@ int handle_dashboard_all(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    ADD_ARRAY("plans", api_plans());
    ADD_ARRAY("logs", kb_client_dashboard_logs_json());
    ADD_ARRAY("agents", server_agent_list_json());
-   ADD_OBJECT("plugins", api_dashboard_plugins());
-   ADD_OBJECT("onboard", api_dashboard_onboard());
+   ADD_ARRAY("token_audit", api_token_audit());
+   ADD_ARRAY("decisions", dashboard_decisions_json());
    ADD_OBJECT("memory_stats", kb_client_dashboard_memory_stats_json());
 
 #undef ADD_ARRAY
@@ -1981,6 +2071,20 @@ int handle_dashboard_all(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    cJSON_AddNumberToObject(lsp, "active_servers", active_servers);
    cJSON_AddItemToObject(resp, "lsp", lsp);
 
+   cJSON_AddItemToObject(resp, "onboard", dashboard_readiness(resp));
+
+   cJSON_AddItemToObject(resp, "audit", dashboard_audit_array(300));
+
+   return send_and_free(conn, resp);
+}
+
+/* dashboard.audit: the server's tool-action audit ledger for the Logs page. */
+int handle_dashboard_audit(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
+{
+   (void)ctx;
+   (void)req;
+   cJSON *resp = jo_ok();
+   cJSON_AddItemToObject(resp, "data", dashboard_audit_array(5000));
    return send_and_free(conn, resp);
 }
 

@@ -272,6 +272,8 @@ Focused references:
 | [Personas](docs/personas.md) | Built in and custom agent identities, delegate policy, and how personas staff reviews |
 | [Workflows](docs/WORKFLOWS.md) | The composable dev lifecycle workflow engine, block catalog, and authoring |
 | [Workflow Actions](docs/WORKFLOW_ACTIONS.md) | The web page to author a proposal, run it autonomously, and watch its status/history |
+| [Dashboard & Logs](docs/DASHBOARD.md) | The web Dashboard's server-incurred metric panels, customization, the Logs (tool-action audit) tab, and the panel data architecture |
+| [Settings](docs/SETTINGS.md) | The web page for the server's typed runtime config — economizer levers, autonomous-dev knobs, tool-output condensation, and how each maps to `aimee.yaml` |
 | [Workspace Management](docs/WORKSPACES.md) | Multi repo workspaces and session isolation |
 | [Security Model](docs/SECURITY.md) | Threat model, trust boundaries, capability system |
 | [Webchat git security](docs/WEBCHAT_GIT_SECURITY.md) | How webchat handles a webuser's git forge token at rest, in transit to git, and in the in browser editor, and where exposure is and is not closed |
@@ -279,6 +281,11 @@ Focused references:
 | [Compatibility](docs/COMPATIBILITY.md) | Supported OS, shell, and provider matrix |
 | [VS Code Integration](docs/VSCODE.md) | Wire aimee into VS Code via MCP tools or as an OpenAI compatible model |
 | [Feature Status](docs/STATUS.md) | Implementation status of all features |
+
+## Community
+
+Questions, help, and discussion happen on the **official aimee Discord**:
+<https://discord.gg/FjGjvcgAqz>.
 
 ## License
 

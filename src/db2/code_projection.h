@@ -96,6 +96,62 @@ extern "C"
     * Used by graph analytics (§4 hub/centrality) — a read-only projection. */
    int db2_code_projection_list_edges(const char *project, code_projection_edge_t *out, int max);
 
+   /* List the edges of a SPECIFIC generation (any state) into out[] (up to max),
+    * ordered source,target. Returns the count written (0 if the generation has no
+    * edges), or -1 on error. Used to compute community membership for the
+    * just-published generation regardless of visible state. */
+   int db2_code_projection_list_edges_for_gen(int64_t gen_id, code_projection_edge_t *out, int max);
+
+   /* --- Community membership (graph-feedback S-community) --- */
+
+   /* One node's community assignment within a generation. */
+   typedef struct
+   {
+      char node_id[512];      /* graph node id (edge endpoint)              */
+      char community_id[512]; /* min-member node id (lex), generation-local */
+   } code_projection_community_t;
+
+   /* Replace the community membership for gen_id: delete any existing rows for the
+    * generation, then insert rows[0..n). Idempotent for a given (gen, partition).
+    * Returns 0 on success, -1 on error. */
+   int db2_code_projection_communities_replace(int64_t gen_id, const char *project,
+                                               const code_projection_community_t *rows, int n);
+
+   /* List the community rows of gen_id into out[] (up to max), ordered by node_id.
+    * Returns the count written (0 if none), or -1 on error. */
+   int db2_code_projection_communities_list(int64_t gen_id, code_projection_community_t *out,
+                                            int max);
+
+   /* --- Generation metadata (graph-feedback S2 snapshot diff) --- */
+
+   typedef struct
+   {
+      int64_t id;
+      char project[256];
+      char state[16];
+      char source_hash[128];
+      char extractor_version[64];
+      char pipeline_version[64];
+   } code_projection_generation_meta_t;
+
+   /* Load a generation's metadata into *out. Returns 0 if found, 1 if no such
+    * generation, -1 on error. */
+   int db2_code_projection_generation_meta(int64_t gen_id, code_projection_generation_meta_t *out);
+
+   /* One row of the generation list (for a diff route's 409 "available
+    * generations" response). */
+   typedef struct
+   {
+      int64_t id;
+      char state[16];
+      char started_at[32];
+   } code_projection_generation_row_t;
+
+   /* List a project's generations, newest first, into out[] (up to max). Returns
+    * the count written, or -1 on error. */
+   int db2_code_projection_generations_list(const char *project,
+                                            code_projection_generation_row_t *out, int max);
+
    /* --- Full project sync --- */
 
    /* Sync all code-index facts for project into entity_edges under gen_id.

@@ -52,4 +52,23 @@ typedef struct
  * on a bad argument. Never allocates caller-visible memory; out[] is caller-owned. */
 int kb_rrf_fuse(const kb_rrf_signal_t *signals, int n, double k, kb_rrf_result_t *out, int max);
 
+/* A per-candidate earned-trust value from the §3 lessons artifact, keyed by the
+ * same id space as the signals. */
+typedef struct
+{
+   char id[256];
+   double trust; /* signed; higher = more trusted (from lessons_reflect scores) */
+} kb_rrf_trust_t;
+
+/* Fuse as kb_rrf_fuse, but with earned trust inserted as a TIE-BREAK ONLY
+ * (proposal §3, v1): among candidates with an EXACTLY-equal fused score AND equal
+ * structural_weight, the higher-trust one ranks first (then id asc). Trust never
+ * moves a candidate across a real score gap — RRF's rank-distance blend stays the
+ * primary signal and earned trust only nudges within a genuine tie. `trust`/
+ * `n_trust` is an unordered lookup; a candidate absent from it (or `trust==NULL`)
+ * is treated as trust 0, so passing NULL makes this byte-identical to kb_rrf_fuse.
+ * Same return contract; deterministic. */
+int kb_rrf_fuse_trust(const kb_rrf_signal_t *signals, int n, double k, const kb_rrf_trust_t *trust,
+                      int n_trust, kb_rrf_result_t *out, int max);
+
 #endif /* KB_RRF_H */

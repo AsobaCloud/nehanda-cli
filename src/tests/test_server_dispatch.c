@@ -130,9 +130,18 @@ int platform_evloop_del(platform_evloop_t *loop, int fd)
    return 0;
 }
 
+/* Instrumented so test_conn_update_events_null_evloop can assert the invariant
+ * that conn_update_events never hands a NULL loop to the event layer (a NULL
+ * loop here means epoll_ctl(loop->epoll_fd,...) would dereference NULL and
+ * crash the whole server — the /v1 HTTP-worker crash-loop regression). */
+int g_evloop_mod_null_loop = 0;
+int g_evloop_mod_nonnull_loop = 0;
 int platform_evloop_mod(platform_evloop_t *loop, int fd, uint32_t events)
 {
-   (void)loop;
+   if (loop)
+      g_evloop_mod_nonnull_loop = 1;
+   else
+      g_evloop_mod_null_loop = 1;
    (void)fd;
    (void)events;
    return 0;
@@ -388,6 +397,27 @@ void session_start_emit(app_ctx_t *ctx, const char *hook_input, FILE *out)
    (void)ctx;
    (void)hook_input;
    (void)out;
+}
+/* session.brief_assemble invokes session_brief_emit (cmd_session_lifecycle.c),
+ * also not linked here. Stub it with a marker so the op handler test can assert
+ * the emitted brief flows into the response envelope. */
+void session_brief_emit(FILE *out)
+{
+   if (out)
+      fputs("STUB_BRIEF_CONTENT", out);
+}
+/* memory.user_capture invokes db1_user_memory_upsert (db1/user_memory.c), not
+ * linked here. Stub it so the dispatch table builds. */
+int db1_user_memory_upsert(const char *kind, const char *tier, const char *key, const char *content,
+                           double confidence, const char *source_session)
+{
+   (void)kind;
+   (void)tier;
+   (void)key;
+   (void)content;
+   (void)confidence;
+   (void)source_session;
+   return 0;
 }
 void session_id_set_override(const char *sid)
 {
@@ -852,6 +882,10 @@ int handle_dashboard_all(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
    return stub_handler(conn, "dashboard.all");
 }
+int handle_dashboard_audit(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
+{
+   return stub_handler(conn, "dashboard.audit");
+}
 char *server_agent_list_json(void)
 {
    return strdup("[]");
@@ -1021,6 +1055,14 @@ int handle_agent_enable(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
    return stub_handler(conn, "agent.enable");
 }
+int handle_agent_roles(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
+{
+   return stub_handler(conn, "agent.roles");
+}
+int handle_agent_personas(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
+{
+   return stub_handler(conn, "agent.personas");
+}
 int handle_agent_disable(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
    return stub_handler(conn, "agent.disable");
@@ -1140,6 +1182,19 @@ char *shell_escape(const char *raw)
 int config_load(config_t *cfg)
 {
    memset(cfg, 0, sizeof(*cfg));
+   return 0;
+}
+
+int config_load_file(config_t *cfg)
+{
+   memset(cfg, 0, sizeof(*cfg));
+   return 0;
+}
+
+/* live-config-reload P1b: server_config.c / server.c call config_reload after a config.set
+ * and on SIGHUP; stub it here (this test doesn't link the real config.o). */
+int config_reload(void)
+{
    return 0;
 }
 
@@ -1726,9 +1781,93 @@ static void test_hooks_pre_recovers_worktree_mapping_from_cwd(void)
    free(ctx);
 }
 
+/* Regression: the /v1 HTTP workers (server_http.c) build a memset-zeroed
+ * server_conn_t, so conn->evloop is NULL and its fd is never registered with
+ * any epoll set. Flushing a buffered response must NOT route that NULL loop
+ * into the event layer — conn_update_events used to call
+ * platform_evloop_mod(conn->evloop, ...) unconditionally, so epoll_ctl
+ * dereferenced NULL and segfaulted the whole server on every buffered /v1
+ * response (a crash-restart loop). conn_update_events now no-ops on NULL. */
+static void test_conn_update_events_null_evloop(void)
+{
+   int fds[2];
+   assert(pipe(fds) == 0);
+
+   /* Case 1: NULL evloop (the HTTP-worker shape). Preload pending bytes so
+    * server_send_response drains them via conn_flush, which is the path that
+    * calls conn_update_events. The event layer must never see the NULL loop. */
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(conn != NULL);
+   conn->fd = fds[1];
+   conn->evloop = NULL;
+   memcpy(conn->write_buf, "hello", 5);
+   conn->write_len = 5;
+   conn->write_pos = 0;
+
+   g_evloop_mod_null_loop = 0;
+   g_evloop_mod_nonnull_loop = 0;
+   cJSON *resp = cJSON_CreateObject();
+   cJSON_AddStringToObject(resp, "status", "ok");
+   int rc = server_send_response(conn, resp);
+   cJSON_Delete(resp);
+   assert(rc == 0);                     /* response actually written */
+   assert(g_evloop_mod_null_loop == 0); /* the fix: NULL loop never used */
+   free(conn);
+
+   /* Case 2 (positive control): an epoll-registered conn (non-NULL evloop)
+    * must still have its interest set updated — the fix must not disable that
+    * for real event-loop connections. */
+   char marker;
+   conn = calloc(1, sizeof(*conn));
+   assert(conn != NULL);
+   conn->fd = fds[1];
+   conn->evloop = (platform_evloop_t *)&marker; /* non-NULL; stub never derefs */
+   memcpy(conn->write_buf, "world", 5);
+   conn->write_len = 5;
+   conn->write_pos = 0;
+
+   g_evloop_mod_null_loop = 0;
+   g_evloop_mod_nonnull_loop = 0;
+   resp = cJSON_CreateObject();
+   cJSON_AddStringToObject(resp, "status", "ok");
+   rc = server_send_response(conn, resp);
+   cJSON_Delete(resp);
+   assert(rc == 0);
+   assert(g_evloop_mod_null_loop == 0);
+   assert(g_evloop_mod_nonnull_loop == 1); /* registration still happens */
+   free(conn);
+
+   close(fds[0]);
+   close(fds[1]);
+   printf("test_conn_update_events_null_evloop: PASS\n");
+}
+
+/* session.brief_assemble (Proposal 1 Phase 1): the remote thin-client
+ * SessionStart brief op. Asserts the response is the minimal versioned envelope
+ * {schema_version:1, output} and that the assembled brief (here the stub's
+ * marker) flows into output — the contract the thin client depends on. */
+static void test_session_brief_assemble(void)
+{
+   server_ctx_t *ctx = calloc(1, sizeof(*ctx));
+   server_conn_t *conn = calloc(1, sizeof(*conn));
+   assert(ctx != NULL && conn != NULL);
+   const char *msg = "{\"method\":\"session.brief_assemble\"}";
+   cJSON *json = dispatch_json(ctx, conn, msg, strlen(msg));
+   cJSON *sv = cJSON_GetObjectItem(json, "schema_version");
+   cJSON *out = cJSON_GetObjectItem(json, "output");
+   assert(cJSON_IsNumber(sv) && sv->valueint == 1);
+   assert(cJSON_IsString(out) && strstr(out->valuestring, "STUB_BRIEF_CONTENT") != NULL);
+   cJSON_Delete(json);
+   free(conn);
+   free(ctx);
+   printf("test_session_brief_assemble: PASS\n");
+}
+
 int main(void)
 {
    test_invalid_json();
+   test_session_brief_assemble();
+   test_conn_update_events_null_evloop();
    test_missing_method();
    test_oversized_payload();
    test_large_delegate_payload_within_limit();

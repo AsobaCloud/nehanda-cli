@@ -77,6 +77,42 @@ static void ss_render_section(struct ss_sbuf *b, const char *title, cJSON *arr)
  * server-side hook (git pull --ff-only, session_state writes) need a co-located
  * server and are intentionally skipped here; proactive recall is the injectable
  * value. Always soft-fails (exit 0) so the host session is never blocked. */
+/* SessionStart recall retry policy. Total worst case ~= the old single 30s
+ * shot: SESSION_START_RECALL_ATTEMPTS * per-attempt timeout + linear backoff.
+ * Per-attempt timeout stays generous enough not to trip a slow-but-healthy
+ * server (a 12s recall on a cold provider still lands on the first attempt). */
+#define SESSION_START_RECALL_ATTEMPTS   3
+#define SESSION_START_RECALL_TIMEOUT_MS 15000
+#define SESSION_START_RECALL_BACKOFF_US 400000 /* multiplied by attempt: 0.4s, 0.8s */
+
+/* Retried POST for the SessionStart hook. It fires exactly once and soft-fails
+ * silently, so one transient failure would otherwise leave the session with no
+ * context. Only transport failures (resp==NULL) and 5xx are retried — a 4xx is
+ * deterministic (bad bearer/body/route). Bounded so a genuinely-down server
+ * never blocks the prompt for long. Returns the first 200 response (ownership
+ * passes to the caller) or NULL; on failure the last response is freed here. */
+static cJSON *ss_retry_post(const char *endpoint, const char *bearer, const char *path,
+                            const char *body_s)
+{
+   cJSON *resp = NULL;
+   for (int attempt = 0; attempt < SESSION_START_RECALL_ATTEMPTS; attempt++)
+   {
+      if (attempt > 0)
+         usleep(SESSION_START_RECALL_BACKOFF_US * attempt);
+      int status = 0;
+      resp = cli_http_request(endpoint, "POST", path, body_s, bearer,
+                              SESSION_START_RECALL_TIMEOUT_MS, &status);
+      if (status == 200)
+         return resp; /* success */
+      int retryable = (resp == NULL) || (status >= 500);
+      cJSON_Delete(resp);
+      resp = NULL;
+      if (!retryable)
+         break; /* deterministic client error — no point retrying */
+   }
+   return NULL;
+}
+
 static int handle_session_start_remote(void)
 {
    char *endpoint = cli_v1_client_endpoint();
@@ -84,44 +120,64 @@ static int handle_session_start_remote(void)
       return 0;
    char *bearer = cli_v1_client_bearer();
 
-   cJSON *body = cJSON_CreateObject();
-   /* task_hint is required by /v1/memory/recall; session_start widens recall. */
-   cJSON_AddStringToObject(body, "task_hint", "session start");
-   cJSON_AddBoolToObject(body, "session_start", 1);
-   char *body_s = cJSON_PrintUnformatted(body);
-   cJSON_Delete(body);
+   struct ss_sbuf ctx = {0};
 
-   int status = 0;
-   cJSON *resp =
-       cli_http_request(endpoint, "POST", "/v1/memory/recall", body_s, bearer, 30000, &status);
-   free(endpoint);
-   free(bearer);
-   free(body_s);
-   if (!resp || status != 200)
+   /* 1) The full workspace-independent brief (persona principles + learned
+    * Rules + key facts) from session.brief_assemble. This is the primary
+    * payload and the never-empty floor: the server always emits at least
+    * persona principles, so a fresh session is never left with an empty brief
+    * (the pre-Phase-1 behaviour when recall was empty). The endpoint takes no
+    * input; send an empty object. */
+   cJSON *brief = ss_retry_post(endpoint, bearer, "/v1/session/brief_assemble", "{}");
+   if (brief)
    {
-      cJSON_Delete(resp);
-      return 0;
+      const char *out = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(brief, "output"));
+      if (out && out[0])
+         ss_add(&ctx, out);
+      cJSON_Delete(brief);
    }
 
-   cJSON *recall = cJSON_GetObjectItemCaseSensitive(resp, "recall");
-   struct ss_sbuf b = {0};
-   ss_render_section(&b, "Always-On Rules", cJSON_GetObjectItem(recall, "always_on_rules"));
-   ss_render_section(&b, "Identity", cJSON_GetObjectItem(recall, "identity"));
-   ss_render_section(&b, "Preferences", cJSON_GetObjectItem(recall, "preferences"));
-   ss_render_section(&b, "Active Context", cJSON_GetObjectItem(recall, "active_context"));
-   ss_render_section(&b, "Open Commitments", cJSON_GetObjectItem(recall, "open_commitments"));
-   ss_render_section(&b, "Reminders", cJSON_GetObjectItem(recall, "reminders"));
-   ss_render_section(&b, "Directives", cJSON_GetObjectItem(recall, "directives"));
+   /* 2) Proactive recall sections appended below the brief. These are distinct
+    * data from the brief's Key Facts (the 7 curated recall categories), so
+    * there is no double-render. */
+   cJSON *rbody = cJSON_CreateObject();
+   cJSON_AddStringToObject(rbody, "task_hint", "session start");
+   cJSON_AddBoolToObject(rbody, "session_start", 1);
+   char *rbody_s = cJSON_PrintUnformatted(rbody);
+   cJSON_Delete(rbody);
+   cJSON *resp = ss_retry_post(endpoint, bearer, "/v1/memory/recall", rbody_s);
+   free(rbody_s);
+   if (resp)
+   {
+      cJSON *recall = cJSON_GetObjectItemCaseSensitive(resp, "recall");
+      struct ss_sbuf b = {0};
+      ss_render_section(&b, "Always-On Rules", cJSON_GetObjectItem(recall, "always_on_rules"));
+      ss_render_section(&b, "Identity", cJSON_GetObjectItem(recall, "identity"));
+      ss_render_section(&b, "Preferences", cJSON_GetObjectItem(recall, "preferences"));
+      ss_render_section(&b, "Active Context", cJSON_GetObjectItem(recall, "active_context"));
+      ss_render_section(&b, "Open Commitments", cJSON_GetObjectItem(recall, "open_commitments"));
+      ss_render_section(&b, "Reminders", cJSON_GetObjectItem(recall, "reminders"));
+      ss_render_section(&b, "Directives", cJSON_GetObjectItem(recall, "directives"));
+      if (b.p && b.p[0])
+      {
+         /* The brief already ends with a blank line, so no leading newline is
+          * needed here (avoids a triple blank line between the two blocks). */
+         ss_add(&ctx, "# Proactive Recall (session-start)\n\n");
+         ss_add(&ctx, b.p);
+      }
+      free(b.p);
+      cJSON_Delete(resp);
+   }
 
-   if (b.p && b.p[0])
+   free(endpoint);
+   free(bearer);
+
+   if (ctx.p && ctx.p[0])
    {
       cJSON *out = cJSON_CreateObject();
       cJSON *hook_out = cJSON_AddObjectToObject(out, "hookSpecificOutput");
       cJSON_AddStringToObject(hook_out, "hookEventName", "SessionStart");
-      struct ss_sbuf ctx = {0};
-      ss_add(&ctx, "# Proactive Recall (session-start)\n\n");
-      ss_add(&ctx, b.p);
-      cJSON_AddStringToObject(hook_out, "additionalContext", ctx.p ? ctx.p : b.p);
+      cJSON_AddStringToObject(hook_out, "additionalContext", ctx.p);
       char *s = cJSON_PrintUnformatted(out);
       if (s)
       {
@@ -129,11 +185,9 @@ static int handle_session_start_remote(void)
          fputc('\n', stdout);
          free(s);
       }
-      free(ctx.p);
       cJSON_Delete(out);
    }
-   free(b.p);
-   cJSON_Delete(resp);
+   free(ctx.p);
    return 0;
 }
 
@@ -310,10 +364,15 @@ int handle_session_start(int json_output)
    int nonblocking = (getenv("AIMEE_SESSION_ID") != NULL);
 
    /* P4: surface this project's central memory into the local memory dir so a
-    * fresh session/agent sees it (best-effort; never blocks session-start). */
+    * fresh session/agent sees it (best-effort; never blocks session-start).
+    * Skipped under the .md retirement (AIMEE_MEMORY_MD_RETIRE): memory is not
+    * re-materialized as .md files — the agent uses aimee memory recall/search
+    * (the session brief steers it there) instead. */
    {
+      const char *mr = getenv("AIMEE_MEMORY_MD_RETIRE");
+      int md_retire = mr && (mr[0] == '1' || mr[0] == 't' || mr[0] == 'T' || mr[0] == 'y');
       char hcwd[4096];
-      if (getcwd(hcwd, sizeof(hcwd)))
+      if (!md_retire && getcwd(hcwd, sizeof(hcwd)))
          harness_memory_hydrate(hcwd);
    }
 

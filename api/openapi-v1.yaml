@@ -968,6 +968,201 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /console/overview:
+    get:
+      operationId: getConsoleOverview
+      summary: Web-console dashboard overview
+      description: |
+        Aggregated kb health/throughput for the aimee-kb web console dashboard.
+        Requires a console-admin credential (see the kb-web-console proposal).
+        S0 returns the envelope with an empty components list; S1 fills it with
+        an in-process telemetry fan-in.
+      responses:
+        "200":
+          description: Overview envelope
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden (credential not permitted for this route)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /enrollments:
+    get:
+      operationId: listEnrollments
+      summary: List issued client-certificate enrollments (console)
+      description: |
+        Paginated list of redeemed client certificates for the accounts surface.
+        Requires a console-admin credential.
+      responses:
+        "200":
+          description: Enrollment list
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          description: Unauthorized
+        "503":
+          description: Store unavailable
+
+  /enrollments/{id}/revoke:
+    post:
+      operationId: revokeEnrollment
+      summary: Revoke a client-certificate enrollment (console)
+      description: |
+        Marks the enrollment revoked; the revocation is enforced at the mTLS
+        seam. Requires a console-admin credential.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Revoked enrollment
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Bad enrollment id
+        "404":
+          description: Enrollment not found
+        "503":
+          description: Revoke failed (store unavailable)
+
+  /config/oidc:
+    get:
+      operationId: getConsoleOidcConfig
+      summary: Console OIDC login config (console-admin)
+      responses:
+        "200":
+          description: OIDC config (empty if unset)
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          description: Unauthorized
+    put:
+      operationId: putConsoleOidcConfig
+      summary: Set the console OIDC login config (console-admin)
+      description: |
+        Structural validation (https jwks_url + required fields). The console
+        fetches this at startup; restart the console to re-apply.
+      responses:
+        "200":
+          description: Stored config
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Bad request
+        "503":
+          description: Config store unavailable
+
+  /scopes:
+    get:
+      operationId: listScopes
+      summary: Scope lattice — distinct scopes with cert counts (console)
+      responses:
+        "200":
+          description: Scope list
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          description: Unauthorized
+
+  /decisions:
+    get:
+      operationId: listDecisions
+      summary: List governance decision records (console)
+      description: Filter by subject/status; most-recent-first. Console-admin only.
+      responses:
+        "200":
+          description: Decision list
+          content:
+            application/json:
+              schema:
+                type: object
+        "401":
+          description: Unauthorized
+    post:
+      operationId: createDecision
+      summary: Author a decision record (console)
+      description: |
+        Creates a decision; one active decision per (subject, linked_policy_id).
+        A conflicting create returns 409 (supersede the active one instead).
+      responses:
+        "201":
+          description: Created decision
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Bad request
+        "409":
+          description: Conflict — an active decision already exists for this scope
+
+  /decisions/{id}:
+    get:
+      operationId: getDecision
+      summary: Decision record + supersede chain (console)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Decision with supersede_chain
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Not found
+
+  /audit/actions:
+    get:
+      operationId: listAuditActions
+      summary: Policy-verdict action audit feed (console)
+      description: Requires a `since` time-window bound; optional `until`, `scope_kind`, `limit`.
+      parameters:
+        - name: since
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Audit action list
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Missing required time-window
+        "401":
+          description: Unauthorized
+
   /intelligence/calibration/readiness:
     get:
       operationId: getIntelligenceCalibrationReadiness

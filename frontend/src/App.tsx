@@ -4,9 +4,12 @@ import { Routes, Route, Navigate, NavLink, useLocation } from 'react-router-dom'
 import { Toast } from '@rakuensoftware/smoothgui';
 import Chat from './pages/Chat';
 import Dashboard from './pages/Dashboard';
+import Logs from './pages/Logs';
 import EditWorkflows from './pages/EditWorkflows';
 import WorkflowActions from './pages/WorkflowActions';
-import Delegates from './pages/Delegates';
+import Agents from './pages/Agents';
+import Personas from './pages/Personas';
+import Settings from './pages/Settings';
 import Projects from './pages/Projects';
 import Graph from './pages/Graph';
 import Editor from './pages/Editor';
@@ -64,12 +67,15 @@ type Tab = { label: string; icon: string; route: string };
 const NAV_ITEMS: Tab[] = [
   { label: 'Chat', icon: '💬', route: '/chat' },
   { label: 'Dashboard', icon: '📊', route: '/dashboard' },
+  { label: 'Logs', icon: '📜', route: '/logs' },
   { label: 'Edit Workflows', icon: '🔀', route: '/edit-workflows' },
   { label: 'Workflow Actions', icon: '📝', route: '/workflow-actions' },
-  { label: 'Delegates', icon: '🤝', route: '/delegates' },
+  { label: 'Agents', icon: '🤝', route: '/agents' },
+  { label: 'Personas', icon: '🎭', route: '/personas' },
   { label: 'Projects', icon: '📁', route: '/projects' },
   { label: 'Graph', icon: '🕸️', route: '/graph' },
   { label: 'Editor', icon: '🖥️', route: '/editor' },
+  { label: 'Settings', icon: '⚙️', route: '/settings' },
 ];
 
 /* Top bar: one tab per session. A session bundles a chat + the project it runs
@@ -237,12 +243,16 @@ export default function App() {
               <Routes>
                 <Route path="/chat" element={<Chat />} />
                 <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/logs" element={<Logs />} />
                 <Route path="/edit-workflows" element={<EditWorkflows />} />
                 <Route path="/workflow-actions" element={<WorkflowActions />} />
-                <Route path="/delegates" element={<Delegates />} />
+                <Route path="/agents" element={<Agents />} />
+                <Route path="/delegates" element={<Navigate to="/agents" replace />} />
+                <Route path="/personas" element={<Personas />} />
                 <Route path="/projects" element={<Projects />} />
                 <Route path="/graph" element={<Graph />} />
                 <Route path="/editor" element={<Editor />} />
+                <Route path="/settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Routes>
             </ErrorBoundary>

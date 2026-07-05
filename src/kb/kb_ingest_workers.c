@@ -524,7 +524,7 @@ int kb_ingest_doc_content(const char *project, const char *source_path, const ch
    const char *effective_cmd = kb_effective_embedding_cmd(embedding_cmd);
 
    char hash[KB_DOC_HASH_HEX_LEN + 1];
-   kb_doc_content_hash(content, (int)len, hash);
+   kb_doc_content_hash_for_path(source_path, content, (int)len, hash);
 
    char stored[KB_DOC_HASH_HEX_LEN + 1] = "";
    if (db2_kb_documents_get_stored_hash(project, source_path, stored, sizeof(stored)) == 1 &&
