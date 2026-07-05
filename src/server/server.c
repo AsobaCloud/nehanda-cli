@@ -2,17 +2,21 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#include "server_internal.h"
 #include "aimee.h"
 #include "harness_memory.h"        /* hmem_upsert (server owns DB1) */
 #include "harness_memory_audit.h"  /* hmem_audit */
 #include "harness_memory_common.h" /* hmem_resolve_project / hmem_project_key_ok */
 #include "harness_memory_scope.h"  /* hmem_scope_for_client */
+#include "harness_memory_spill.h"  /* hmem_spill_write (retirement db1-outage fail-open) */
 #include "json_fluent.h"           /* jo_ok */
 #include "memory_redirect.h"       /* memory_redirect_classify / _bash_targets / _rematerialize */
+#include "primary_cli_ingestor.h"
 #include "server.h"
 #include "turn_registry.h"
-#include "server_http.h" /* server_http_api_status_report */
-#include "config.h"      /* config_t / config_load for api.status, api.enable */
+#include "server_http.h"
+#include "server_tls.h" /* server_http_api_status_report */
+#include "config.h"     /* config_t / config_load for api.status, api.enable */
 #include "delegate_backend_docker.h"
 #include "delegate_backend_local.h"
 #include "delegate_backend_ssh.h"
@@ -38,6 +42,7 @@
 #include "model_provider.h"
 #include "model_registry.h"
 #include "db1.h"
+#include "db1/user_memory.h"
 #include "token_audit.h"
 #include "dashboard.h"
 #include "log.h"
@@ -52,15 +57,18 @@
 #include "git_verify.h"
 #include "toolset.h"
 #include "cJSON.h"
+#include "s2_native_gate_hook.h" /* S2 native-tool gate (server-side, tracks 2+3) */
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+
+/* Defined in server_main.c; set by the SIGHUP handler, observed by the main loop (P1b). */
+extern volatile sig_atomic_t g_config_reload_requested;
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #include <string.h>
-#include "server_seed_config.inc" /* server_seed_config_defaults() */
 
 extern int hooks_ensure_cwd_worktree(session_state_t *state, const char *sid, const char *cwd);
 
@@ -123,9 +131,17 @@ void server_compute_budget_release(server_ctx_t *ctx, int granted)
    pthread_mutex_unlock(&ctx->compute_budget_mutex);
 }
 
-/* Update event loop registration: IN always, OUT when there's pending data */
+/* Update event loop registration: IN always, OUT when there's pending data.
+ *
+ * Only meaningful for connections owned by the epoll accept loop. The /v1 HTTP
+ * workers (server_http.c) run their own blocking per-connection loop and build
+ * a memset-zeroed server_conn_t whose evloop is NULL and whose fd was never
+ * registered with any epoll set; for them this is a no-op (dereferencing a NULL
+ * evloop here previously crashed the whole server on every buffered response). */
 static void conn_update_events(server_conn_t *conn)
 {
+   if (!conn->evloop)
+      return;
    uint32_t events = PLAT_EV_IN;
    if (conn->write_len > 0)
       events |= PLAT_EV_OUT;
@@ -336,9 +352,6 @@ static int handle_server_health(server_ctx_t *ctx, server_conn_t *conn, cJSON *r
    cJSON_AddNumberToObject(resp, "connections", ctx->conn_count);
    return server_send_ok(conn, resp);
 }
-
-#include "server_insights.inc"
-#include "server_api_status.inc"
 
 /* worktree.gc: remove abandoned session worktrees under the operator's git_root.
  * Server-side because the GC primitive lives in workspace.c (already linked into
@@ -647,10 +660,6 @@ static int handle_launch_run(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
    return server_send_ok(conn, launch_resp);
 }
 
-#include "server_provider.inc"
-#include "server_provider_slots.inc"
-#include "server_eval.inc"
-
 static int handle_init_run(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
    (void)ctx;
@@ -820,6 +829,38 @@ static int server_memory_intercept(const char *tool, const char *tool_input, con
       return 0;
    }
 
+   /* .md retirement (AIMEE_MEMORY_MD_RETIRE, default-off): store the intercepted
+    * write into db1 as a private, non-recallable archive row (kind='archive',
+    * tier L1 — outside the recall selectors) and do NOT re-materialize the .md —
+    * the file never exists; content lives only in aimee. The agent is steered to
+    * `aimee memory` by the session brief. Server owns db1, so write directly. */
+   {
+      const char *mr = getenv("AIMEE_MEMORY_MD_RETIRE");
+      if (mr && (mr[0] == '1' || mr[0] == 't' || mr[0] == 'T' || mr[0] == 'y'))
+      {
+         /* Project-qualified so identically-named memories from different
+          * projects don't collide under this user's UNIQUE(kind,key). */
+         char akey[HMEM_PROJECT_KEY_MAX + 600];
+         snprintf(akey, sizeof(akey), "archive:%s/%s", project, name);
+         if (db1_user_memory_upsert("archive", "L1", akey, content, 1.0, client) != 0)
+         {
+            /* db1 outage: spill for the next reconcile (matches the non-retire
+             * path + the client fallback), then fail-open so the agent isn't
+             * blocked on our store. */
+            int sp = hmem_spill_write(project, name, "archive", content);
+            hmem_audit(sp == 0 ? "spill" : "spill-failed", project, name, "db1 store unreachable");
+            cJSON_Delete(ti);
+            return 0;
+         }
+         hmem_audit("redirect-db1", project, name, NULL);
+         snprintf(msg, msg_len,
+                  "Saved to aimee memory. Memory files are retired — retrieve with "
+                  "`aimee memory search` and use `aimee memory store` going forward.");
+         cJSON_Delete(ti);
+         return 2;
+      }
+   }
+
    hmem_row_t row;
    memset(&row, 0, sizeof(row));
    snprintf(row.project, sizeof(row.project), "%s", project);
@@ -848,6 +889,11 @@ static int server_memory_intercept(const char *tool, const char *tool_input, con
    return 2;
 }
 
+/* S2 pre-delivery native-tool externalization gate (server side; tracks 2+3). This
+ * is the REAL enforcement point -- `aimee hooks pre` forwards to hooks.pre, so the
+ * gate must run here (the CLI cmd_hooks copy is only a server-unreachable fallback).
+ * Returns 2 to DENY (fills msg) or 0 to allow. Mirrors handle_hooks_pre's memory-
+ * interception deny. Honest scope + fail policy: see wfe_native_gate.h / cmd_hooks.c. */
 static int handle_hooks_pre(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 {
    cJSON *jtn = cJSON_GetObjectItemCaseSensitive(req, "tool_name");
@@ -879,36 +925,30 @@ static int handle_hooks_pre(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
       return server_send_error(conn, "invalid session_id (must be alphanumeric/dash/underscore)",
                                request_id);
 
-   /* Load config */
    config_t cfg;
    config_load(&cfg);
 
-   /* Load session state from DB1 using provided session_id */
    session_state_t state;
    session_state_load(&state, sid);
    hooks_ensure_cwd_worktree(&state, sid, cwd);
 
    /* Memory interception: redirect an agent's local memory-file write into the
-    * central store BEFORE the generic guardrails see it (a memory write must not
-    * be tripped by e.g. the worktree guardrail). rc==2 with a message is rendered
-    * by the client as a PreToolUse deny. */
+    * central store BEFORE the generic guardrails see it (rc==2 -> client deny). */
    {
       char mr_msg[1024] = "";
       if (server_memory_intercept(tool_name, tool_input, cwd, req, mr_msg, sizeof(mr_msg)) == 2)
       {
-         cJSON *mresp = cJSON_CreateObject();
-         cJSON_AddStringToObject(mresp, "status", "blocked");
-         cJSON_AddNumberToObject(mresp, "exit_code", 2);
-         if (mr_msg[0])
-            cJSON_AddStringToObject(mresp, "message", mr_msg);
-         if (request_id)
-            cJSON_AddStringToObject(mresp, "request_id", request_id);
-         int mrc = server_send_response(conn, mresp);
-         cJSON_Delete(mresp);
-         if (ti_heap)
-            free(ti_heap);
-         return mrc;
+         free(ti_heap);
+         return hook_send_blocked(conn, mr_msg, request_id);
       }
+   }
+
+   /* S2 native-tool externalization gate (tracks 2+3): sends the block on deny. */
+   int s2rc = s2_native_gate_hook_pre(conn, sid, tool_name, tool_input, request_id);
+   if (s2rc >= 0)
+   {
+      free(ti_heap);
+      return s2rc;
    }
 
    /* Run guardrail check */
@@ -1192,6 +1232,75 @@ static int handle_hooks_session_start(server_ctx_t *ctx, server_conn_t *conn, cJ
    return rc;
 }
 
+/* session.brief_assemble: workspace-independent SessionStart brief for the
+ * remote thin-client path (Proposal 1 Phase 1). Runs only session_brief_emit
+ * (build_session_context) — no worktree/state/reindex side-effects, no
+ * client_cwd filesystem access. Returns a minimal versioned envelope
+ * {schema_version, output} so the thin client has a stable contract that Phase 2
+ * can extend. Auth: session.* -> CAP_SESSION_READ. */
+static int handle_session_brief_assemble(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
+{
+   (void)ctx;
+
+   cJSON *jrid = cJSON_GetObjectItemCaseSensitive(req, "request_id");
+   const char *request_id = cJSON_IsString(jrid) ? jrid->valuestring : NULL;
+
+   char *captured = NULL;
+   size_t captured_len = 0;
+   FILE *mem = open_memstream(&captured, &captured_len);
+   if (!mem)
+      return server_send_error(conn, "open_memstream failed", request_id);
+
+   session_brief_emit(mem);
+   fflush(mem);
+   fclose(mem);
+
+   cJSON *resp = jo_ok();
+   cJSON_AddNumberToObject(resp, "schema_version", 1);
+   cJSON_AddStringToObject(resp, "output", captured ? captured : "");
+   if (request_id)
+      cJSON_AddStringToObject(resp, "request_id", request_id);
+
+   int rc = server_send_response(conn, resp);
+   cJSON_Delete(resp);
+   free(captured);
+   return rc;
+}
+
+/* memory.user_capture: upsert a per-user memory into db1 (Proposal 2 Phase 1
+ * S2 — the write path behind `aimee memory identity/prefer`). db1 is per-user
+ * by construction (aimee-server is 1:1 per user); this is how a thin client
+ * populates the identity/preferences the session brief recalls. Params:
+ * {kind, key, content, tier?}. CAP_MEMORY_WRITE. */
+static int handle_memory_user_capture(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
+{
+   (void)ctx;
+   cJSON *jrid = cJSON_GetObjectItemCaseSensitive(req, "request_id");
+   const char *request_id = cJSON_IsString(jrid) ? jrid->valuestring : NULL;
+   const char *kind = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(req, "kind"));
+   const char *key = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(req, "key"));
+   const char *content = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(req, "content"));
+   const char *tier = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(req, "tier"));
+   const char *sid = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(req, "session_id"));
+   if (!kind || !kind[0] || !key || !key[0])
+      return server_send_error(conn, "kind and key are required", request_id);
+   if (!content || !content[0])
+      return server_send_error(conn, "content is required", request_id);
+
+   if (db1_user_memory_upsert(kind, tier, key, content, 1.0, sid) != 0)
+      return server_send_error(conn, "failed to store user memory", request_id);
+
+   cJSON *resp = jo_ok();
+   cJSON_AddStringToObject(resp, "kind", kind);
+   cJSON_AddStringToObject(resp, "key", key);
+   cJSON_AddStringToObject(resp, "scope", "user");
+   if (request_id)
+      cJSON_AddStringToObject(resp, "request_id", request_id);
+   int rc = server_send_response(conn, resp);
+   cJSON_Delete(resp);
+   return rc;
+}
+
 static const server_method_dispatch_t server_dispatch_table[] = {
     /* Server */
     {"server.info", handle_server_info},
@@ -1226,6 +1335,8 @@ static const server_method_dispatch_t server_dispatch_table[] = {
     {"agent.local", handle_agent_local},
     {"agent.remove", handle_agent_remove},
     {"agent.enable", handle_agent_enable},
+    {"agent.roles", handle_agent_roles},
+    {"agent.personas", handle_agent_personas},
     {"agent.disable", handle_agent_disable},
     {"agent.probe", handle_agent_probe},
     {"agent.stats", handle_agent_stats},
@@ -1238,6 +1349,8 @@ static const server_method_dispatch_t server_dispatch_table[] = {
     {"hooks.pre", handle_hooks_pre},
     {"hooks.post", handle_hooks_post},
     {"hooks.session_start", handle_hooks_session_start},
+    {"session.brief_assemble", handle_session_brief_assemble},
+    {"memory.user_capture", handle_memory_user_capture},
     {"session.create", handle_session_create},
     {"session.list", handle_session_list},
     {"session.get", handle_session_get},
@@ -1359,6 +1472,7 @@ static const server_method_dispatch_t server_dispatch_table[] = {
     {"dashboard.onboard", handle_dashboard_onboard},
     {"dashboard.memory_stats", handle_dashboard_memory_stats},
     {"dashboard.all", handle_dashboard_all},
+    {"dashboard.audit", handle_dashboard_audit},
     {"lsp.diagnostics_summary", handle_lsp_diagnostics_summary},
     {"workspace.context", handle_workspace_context},
     {"workspace.add", handle_workspace_add},
@@ -1921,6 +2035,9 @@ int server_init(server_ctx_t *ctx, const char *socket_path)
     * end-to-end server-side. Registration runs nothing on its own — a run begins
     * only when intake creates a work item and the autonomy driver advances it. */
    wfe_autonomy_register();
+   /* Boot-time enforcement-posture signal for the primary-CLI-ingestor: makes an
+    * "enabled but silently inert" misconfig (flag on, dial off) visible at startup. */
+   primary_cli_ingestor_log_posture();
    wfe_scheduler_init();
    /* Provision the delegate vault from operator-supplied secrets before serving,
     * so a freshly stood-up server's delegates/roundtables work without a manual
@@ -1946,6 +2063,18 @@ int server_run(server_ctx_t *ctx)
       struct timespec ts = {.tv_sec = 1, .tv_nsec = 0};
       nanosleep(&ts, NULL);
       webuser_editor_reap_tick();
+      /* SIGHUP requested a config reload (live-config-reload P1b): do it here, off the
+       * signal path, since config_reload takes a mutex and does file I/O. */
+      if (g_config_reload_requested)
+      {
+         g_config_reload_requested = 0;
+         int rc = config_reload();
+         aimee_log(rc < 0 ? LOG_WARN : LOG_INFO, "config", "SIGHUP config reload: %s",
+                   rc > 0 ? "applied" : (rc == 0 ? "no change" : "rejected (kept running config)"));
+         /* Also live-reload the TLS cert (re-read cert/key + swap SSL_CTX) so a renewed cert
+          * is picked up on SIGHUP without dropping the listener (live-config-reload). */
+         (void)server_tls_reload();
+      }
    }
    return 0;
 }

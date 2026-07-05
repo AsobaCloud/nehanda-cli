@@ -1,4 +1,5 @@
 /* cmd_agent_delegate.c: delegate, verify, and delegate-status CLI commands */
+#include "cmd_agent_delegate_internal.h"
 #include "aimee.h"
 #include "agent.h"
 #include "log.h"
@@ -37,7 +38,6 @@ static const char *DELEGATE_COORD_STATUS_NOTE =
     "coord jobs are queued packet plans. `aimee jobs status` and `aimee delegate status` show "
     "durable background delegate jobs, not coord jobs";
 
-#include "cmd_agent_delegate_toolset.inc"
 void delegate_worktree_restore(const char *orig_cwd, const char *git_root, const char *work_name,
                                int keep)
 {

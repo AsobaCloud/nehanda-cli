@@ -24,6 +24,11 @@
 #include "kb_pki.h"
 #include "kb_paths.h"
 #include "kb_scope.h"
+#include "kb_route_acl.h"
+#include "kb_http_console.h"
+#include "kb_http_accounts.h"
+#include "kb_http_governance.h"
+#include "db2/enrollments.h"
 #include "kb_verifier.h"
 #include "kb/http/openapi_data.h"
 #include "db2/lifecycle.h"
@@ -630,6 +635,17 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
                   "{\"error\":\"enrollment failed: invalid or already-used token, or bad CSR\"}");
          return 401;
       }
+      /* Persist a queryable enrollment record keyed by the cert's sha256
+       * fingerprint, so the console can list + revoke it. Best-effort: a DB2
+       * outage must not fail the redemption (the cert is already issued).
+       * INVARIANT: this fingerprint MUST equal what kb_tls_peer_fingerprint()
+       * computes for the same cert at the mTLS seam (both are sha256 of the cert
+       * DER via X509_digest), or revocation checks would silently miss. Live-
+       * verified in the S2a integration test. (kb_pki_ca_fingerprint despite its
+       * name hashes any cert's DER, not the CA specifically.) */
+      char fp[KB_PKI_FP_HEX] = "";
+      if (kb_pki_ca_fingerprint(cert, fp, sizeof(fp)) == 0)
+         db2_enrollment_insert(scope, fp, "", "", 0, NULL);
       cJSON *resp = cJSON_CreateObject();
       cJSON_AddStringToObject(resp, "client_cert", cert);
       cJSON_AddStringToObject(resp, "scope", scope);
@@ -671,6 +687,36 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
             return 403;
          }
       }
+
+      /* console-admin containment: the web console's scope:console-admin bearer
+       * is authorized ONLY for its fixed route allowlist (kb_route_acl.c); every
+       * other route is a 403 regardless of scope target. Server-side enforcement,
+       * defence-in-depth with the console's own role gate. */
+      if (vr.scope_kind[0] && strcmp(vr.scope_kind, KB_SCOPE_KIND_CONSOLE_ADMIN) == 0 &&
+          !kb_route_acl_console_admin_allows(method, path))
+      {
+         snprintf(out_buf, (size_t)out_cap,
+                  "{\"error\":\"forbidden: console-admin credential not permitted for %s %s\"}",
+                  method, path);
+         return 403;
+      }
+   }
+
+   /* Console + accounts routes. Served only to the owner (unscoped credential) or
+    * a console-admin bearer — never to some other scope kind, so a project-scoped
+    * client cannot reach the console surface. (In an auth-off deployment vr is
+    * zeroed = owner, consistent with everything open.) */
+   if (!vr.scope_kind[0] || strcmp(vr.scope_kind, KB_SCOPE_KIND_CONSOLE_ADMIN) == 0)
+   {
+      int cr = kb_http_console_route(method, path, out_buf, out_cap);
+      if (cr >= 0)
+         return cr;
+      int ar = kb_http_accounts_route(method, path, query_string, body, out_buf, out_cap);
+      if (ar >= 0)
+         return ar;
+      int gr = kb_http_governance_route(method, path, query_string, body, out_buf, out_cap);
+      if (gr >= 0)
+         return gr;
    }
 
    /* POST /v1/enroll — the owner mints a one-time client enrollment (the HTTP
@@ -685,7 +731,9 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
          snprintf(out_buf, (size_t)out_cap, "{\"error\":\"method not allowed\"}");
          return 405;
       }
-      if (vr.scope_kind[0])
+      /* Owner mints, and the console-admin credential may also mint (enroll-a-
+       * client is a console accounts action). Any other scope is rejected. */
+      if (vr.scope_kind[0] && strcmp(vr.scope_kind, KB_SCOPE_KIND_CONSOLE_ADMIN) != 0)
          return kb_http_owner_required(out_buf, out_cap, "enrollment minting");
       cJSON *req = body ? cJSON_Parse(body) : NULL;
       const cJSON *jhost = req ? cJSON_GetObjectItemCaseSensitive(req, "host") : NULL;
@@ -699,6 +747,29 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
          return 400;
       }
       const char *scope = cJSON_IsString(jscope) ? jscope->valuestring : "global";
+      /* A console-admin caller may mint only a properly-scoped CLIENT credential
+       * — never an owner/full-access cert (a scope with no ':' gets full access
+       * at the mTLS seam) and never a privileged kind (console-admin/curator/
+       * owner). This bounds the console: it cannot escalate by minting. The owner
+       * credential keeps unrestricted minting. */
+      if (vr.scope_kind[0] && strcmp(vr.scope_kind, KB_SCOPE_KIND_CONSOLE_ADMIN) == 0)
+      {
+         const char *colon = strchr(scope, ':');
+         size_t kindlen = colon ? (size_t)(colon - scope) : 0;
+         int privileged = !colon /* owner / full-access */ ||
+                          (kindlen == 13 && strncmp(scope, "console-admin", 13) == 0) ||
+                          (kindlen == 7 && strncmp(scope, "curator", 7) == 0) ||
+                          (kindlen == 5 && strncmp(scope, "owner", 5) == 0);
+         if (privileged)
+         {
+            cJSON_Delete(req);
+            snprintf(
+                out_buf, (size_t)out_cap,
+                "{\"error\":\"forbidden: console-admin may not mint an owner or privileged scope; "
+                "use a scoped '<kind>:<id>' value\"}");
+            return 403;
+         }
+      }
       char conn[1024];
       int rc = kb_enroll_mint(kb_default_config_dir(), jhost->valuestring, (int)jport->valuedouble,
                               scope, conn, sizeof(conn));
@@ -1286,6 +1357,12 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
       return handle_get_code_graph_hubs_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/code/graph/surprising") == 0)
       return handle_get_code_graph_surprising_route(method, query_string, out_buf, out_cap);
+   if (strcmp(path, "/v1/code/graph/audit") == 0)
+      return handle_get_code_graph_audit_route(method, query_string, out_buf, out_cap);
+   if (strcmp(path, "/v1/code/graph/diff") == 0)
+      return handle_get_code_graph_diff_route(method, query_string, out_buf, out_cap);
+   if (strcmp(path, "/v1/code/lessons") == 0)
+      return handle_get_code_lessons_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/code/graph") == 0)
       return handle_get_code_graph_route(method, query_string, out_buf, out_cap);
    if (strcmp(path, "/v1/pdf/search") == 0)
@@ -1439,6 +1516,8 @@ int kb_http_route_ex(const char *method, const char *path, const char *query_str
 
    if (strcmp(path, "/v1/code/scan") == 0)
       return handle_post_code_scan_route(method, body, out_buf, out_cap);
+   if (strcmp(path, "/v1/code/lessons/observe") == 0)
+      return handle_post_code_lessons_observe_route(method, body, out_buf, out_cap);
    if (strcmp(path, "/v1/code/repo-trust") == 0) /* S7: admin; owner gate in handler */
       return handle_post_code_repo_trust_route(method, body, out_buf, out_cap, !vr.scope_kind[0]);
    /* POST /v1/ingest */

@@ -6,6 +6,7 @@
  * (roundtable_pipeline_capture). See
  * docs/proposals/accepted/agent-roundtable-authoring-pipeline.md. */
 
+#include "server_pipeline_internal.h"
 #include "server_pipeline.h"
 
 #include "cJSON.h"
@@ -151,8 +152,8 @@ static cJSON *build_digest(const rtp_run_t *run, const rtp_pass_t *latest, int h
 }
 
 /* forward decls: defined later in the file. */
-static void execute_gate_merge(int id, rtp_run_t *run, rtp_gate_t *gate, int gate_no, cJSON *req,
-                               cJSON *resp);
+void execute_gate_merge(int id, rtp_run_t *run, rtp_gate_t *gate, int gate_no, cJSON *req,
+                        cJSON *resp);
 static int resolve_panel(const config_t *cfg, rtp_panel_t *out);
 static int maybe_ttl_abandon(int id, rtp_run_t *run, const config_t *cfg);
 
@@ -553,7 +554,7 @@ static void attach_prompt_brief(cJSON *body, const char *artifact, const char *b
  * dedicated worktree, else the repo root. Empty -> the server's active
  * workspace (back-compat). Every git/gh command below is anchored to it so the
  * pipeline never operates on the wrong checkout/branch. */
-static const char *rtp_git_cwd(const rtp_run_t *run)
+const char *rtp_git_cwd(const rtp_run_t *run)
 {
    if (run->worktree_path[0])
       return run->worktree_path;
@@ -563,7 +564,7 @@ static const char *rtp_git_cwd(const rtp_run_t *run)
 }
 
 /* Prepend `cd '<cwd>' && ` (escaped) when a checkout is recorded. */
-static size_t rtp_cd_prefix(const rtp_run_t *run, char *buf, size_t cap)
+size_t rtp_cd_prefix(const rtp_run_t *run, char *buf, size_t cap)
 {
    const char *cwd = rtp_git_cwd(run);
    if (!cwd[0])
@@ -578,7 +579,7 @@ static size_t rtp_cd_prefix(const rtp_run_t *run, char *buf, size_t cap)
 }
 
 /* `git rev-parse <ref>` in the recorded checkout. out is empty on failure. */
-static int git_rev_parse(const rtp_run_t *run, const char *ref, char *out, size_t cap)
+int git_rev_parse(const rtp_run_t *run, const char *ref, char *out, size_t cap)
 {
    char *eref = shell_escape(ref);
    char cmd[RTP_PATH_LEN + 96];
@@ -1103,7 +1104,7 @@ static int ref_contains_commit(const rtp_run_t *run, const char *ref, const char
  * worktree. `gh pr merge` lands remotely and does not move the local base, so we
  * fetch first and branch from merge_sha (or the freshly-fetched origin/<base>),
  * never a stale local base (#1). Resets head/worktree/PR fields. Returns 0/-1. */
-static int prepare_impl_workspace(rtp_run_t *run, const char *merge_sha)
+int prepare_impl_workspace(rtp_run_t *run, const char *merge_sha)
 {
    if (!run->repo_root[0])
       return -1;
@@ -1777,8 +1778,6 @@ int handle_pipeline_advance(server_ctx_t *ctx, server_conn_t *conn, cJSON *req)
 }
 
 /* ----------------------------------------------------------------- gate ---- */
-
-#include "server_pipeline_merge.inc"
 
 static int gate_authorized(cJSON *req)
 {

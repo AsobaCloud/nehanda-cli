@@ -11,6 +11,7 @@
 #include "db2/entity_edges.h"
 #include "db2/entity_nodes.h"
 #include "db2/kb_service_backend.h" /* db2_kb_service_code_audit_json */
+#include "kb_graph_analytics.h"     /* kb_graph_communities */
 
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,84 @@ const char *kb_graph_edge_provenance(const char *edge_origin, int structural_wei
    if (edge_origin && strcmp(edge_origin, "session") == 0)
       return "ambiguous";
    return "inferred";
+}
+
+/* Upper bound on edges pulled into the in-memory community computation. Matches
+ * the analytics read-out cap; a larger projection is truncated (deterministically,
+ * by the source,target ORDER BY of the edge read). */
+#define KB_GRAPH_COMMUNITY_MAX_EDGES 20000
+
+/* Compute + persist deterministic community membership for a just-published
+ * generation (graph-feedback S-community). Best-effort: a failure here does not
+ * unpublish the projection — communities are a derived analytic. Returns the
+ * number of nodes assigned, or -1 on error. */
+static int kb_graph_persist_communities(int64_t gen_id, const char *project)
+{
+   if (gen_id <= 0)
+      return -1;
+
+   code_projection_edge_t *cpe = malloc((size_t)KB_GRAPH_COMMUNITY_MAX_EDGES * sizeof(*cpe));
+   if (!cpe)
+      return -1;
+   int ne = db2_code_projection_list_edges_for_gen(gen_id, cpe, KB_GRAPH_COMMUNITY_MAX_EDGES);
+   if (ne < 0)
+   {
+      free(cpe);
+      return -1;
+   }
+   if (ne == 0)
+   {
+      /* No edges -> clear any stale membership for this generation. */
+      free(cpe);
+      return db2_code_projection_communities_replace(gen_id, project, NULL, 0);
+   }
+
+   kb_graph_edge_t *ge = malloc((size_t)ne * sizeof(*ge));
+   if (!ge)
+   {
+      free(cpe);
+      return -1;
+   }
+   for (int i = 0; i < ne; i++)
+   {
+      snprintf(ge[i].source, sizeof(ge[i].source), "%s", cpe[i].source);
+      snprintf(ge[i].target, sizeof(ge[i].target), "%s", cpe[i].target);
+      ge[i].weight = cpe[i].structural_weight;
+   }
+   free(cpe);
+
+   /* Distinct nodes are bounded by 2 per edge. */
+   long long max_nodes = (long long)ne * 2;
+   kb_graph_community_t *gc = malloc((size_t)max_nodes * sizeof(*gc));
+   if (!gc)
+   {
+      free(ge);
+      return -1;
+   }
+   int nc = kb_graph_communities(ge, ne, gc, (int)max_nodes);
+   free(ge);
+   if (nc < 0)
+   {
+      free(gc);
+      return -1;
+   }
+
+   code_projection_community_t *rows = nc > 0 ? malloc((size_t)nc * sizeof(*rows)) : NULL;
+   if (nc > 0 && !rows)
+   {
+      free(gc);
+      return -1;
+   }
+   for (int i = 0; i < nc; i++)
+   {
+      snprintf(rows[i].node_id, sizeof(rows[i].node_id), "%s", gc[i].node);
+      snprintf(rows[i].community_id, sizeof(rows[i].community_id), "%s", gc[i].community);
+   }
+   free(gc);
+
+   int rc = db2_code_projection_communities_replace(gen_id, project, rows, nc);
+   free(rows);
+   return rc == 0 ? nc : -1;
 }
 
 int64_t kb_graph_build_project_if_changed(const char *project, int *rebuilt)
@@ -63,6 +142,9 @@ int64_t kb_graph_build_project_if_changed(const char *project, int *rebuilt)
       db2_code_projection_generation_abort(gen, "publish failed");
       return -1;
    }
+   /* Derived analytic: deterministic community membership for this generation.
+    * Best-effort — a failure does not unpublish the projection. */
+   kb_graph_persist_communities(gen, project);
    if (rebuilt)
       *rebuilt = 1;
    return edges; /* >= 0 (a changed-but-empty project publishes 0 edges + its hash) */
@@ -94,6 +176,8 @@ int kb_handle_graph_sync_code(int fd, cJSON *req)
       db2_code_projection_generation_abort(gen, "publish failed");
       return kb_send_error(fd, "failed to publish projection generation");
    }
+   /* Derived analytic (best-effort, see kb_graph_build_project_if_changed). */
+   kb_graph_persist_communities(gen, project);
 
    cJSON *resp = jo_ok();
    cJSON_AddStringToObject(resp, "project", project);
