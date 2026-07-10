@@ -5,7 +5,7 @@ A local AI coding substrate powered by the **Nehanda** fine-tuned model. Free an
 Built on [aimee](https://github.com/RakuenSoftware/aimee) — a local memory substrate with 4-tier context compaction, supervisor/delegate task decomposition, and guardrails. This fork adds Nehanda as the primary reasoning model, routed through the Nehanda Gateway, with Zorora's auth infrastructure handling access control.
 
 ```
-  Your Terminal (Claude Code / Codex / nehanda-cli TUI)
+  Your Terminal (nehanda TUI, or any OpenAI-compatible CLI)
           │
           ▼
   nehanda-cli (local, AGPL)

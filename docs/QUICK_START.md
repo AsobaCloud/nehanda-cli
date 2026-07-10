@@ -4,7 +4,7 @@
 
 - macOS or Linux
 - cmake 3.16+, make, git, C11 compiler
-- Docker (for the local KB inference container)
+- Docker (for the server stack)
 - Ollama (optional — for local delegate workers)
 
 ## Install
@@ -15,31 +15,33 @@ cd nehanda-cli
 ./install.sh
 ```
 
+`install.sh` builds the binary, starts the Docker stack, and trusts the server's TLS cert in the macOS keychain (requires your password once).
+
 Add to your shell profile if not already there:
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
+export AIMEE_SERVER_URL=https://localhost:8743
+export AIMEE_SERVER_TOKEN=<your-token>   # from install output
 ```
 
-## Authenticate
-
-```bash
-nehanda auth login
-```
-
-This opens a browser to complete sign-in and payment. Your API key is stored locally in the session database — you never need to handle it manually.
-
-## Start Docker services
-
-The local KB inference container handles embeddings and session synthesis locally:
+## Start the Docker stack (if not already running)
 
 ```bash
 cd nehanda-cli
 docker compose -f upstream/compose.combined.yaml up -d
+curl -sk -H "Authorization: Bearer $AIMEE_SERVER_TOKEN" https://localhost:8743/v1/health
+# -> {"status":"ok","service":"aimee-server"}
 ```
 
-Wait for it to be healthy:
+## Register Nehanda as the primary model
+
 ```bash
-curl -k -H 'Authorization: Bearer nehanda-local-dev' https://localhost:8743/v1/health
+nehanda agent add nehanda http://nehanda.asoba.co:8000 nehanda-rag-synthesis-27b \
+  --provider openai --key "none" \
+  --roles "code,review,explain,refactor,draft,execute,summarize,plan,validate,diagnose" \
+  --default
+
+nehanda config set provider nehanda
 ```
 
 ## Start a session
@@ -48,18 +50,12 @@ curl -k -H 'Authorization: Bearer nehanda-local-dev' https://localhost:8743/v1/h
 nehanda
 ```
 
-This drops into the nehanda TUI with Nehanda 27B as the primary model.
+This opens the nehanda TUI connected to Nehanda 27B. No external tools required, no vendor API keys, no cloud dependency beyond the Nehanda EC2 endpoint.
 
-## Use with your existing CLI tool
+## Use with ona-code (optional — adds SDLC workflow enforcement)
 
-### Claude Code
-```bash
-./upstream/configure-hooks.sh
-nehanda claude-proxy enable http://127.0.0.1:8910 nehanda-local-dev
-ANTHROPIC_BASE_URL=http://127.0.0.1:8910 ANTHROPIC_AUTH_TOKEN=nehanda-local-dev claude
-```
+ona-code connects to nehanda-server's OpenAI-compatible endpoint and adds a 6-phase state machine (plan → implement → test → verify) on top:
 
-### ona-code
 ```bash
 mkdir -p ~/.ona && cat > ~/.ona/settings.json << 'EOF'
 {
@@ -73,17 +69,21 @@ EOF
 cd /path/to/ona-code && npm start
 ```
 
-## Register local Ollama delegates (optional)
+## Register Ollama delegates (optional)
 
+Local Mac delegates:
 ```bash
-export AIMEE_SERVER_URL=https://localhost:8743
-export AIMEE_SERVER_TOKEN=nehanda-local-dev
-
 nehanda agent local ollama-local http://localhost:11434/v1 \
-  --model llama3:latest \
-  --slots 2 \
-  --ctx 16384
+  --model llama3:latest --slots 2 --ctx 16384
 ```
+
+Remote LAN delegates (Windows machine):
+```bash
+nehanda agent local ollama-remote-coder http://AsobaCorp-1.local:11434/v1 \
+  --model deepseek-coder-v2:latest --slots 2 --ctx 32768
+```
+
+See `docs/SELF_HOST.md` for full delegate setup options.
 
 ## Index your project
 

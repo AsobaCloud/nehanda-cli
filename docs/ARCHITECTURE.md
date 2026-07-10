@@ -7,8 +7,8 @@ Source of truth for the three-tier design, AGPL boundary analysis, auth flow, an
 ```
 ┌───────────────────────────── USER MACHINE (AGPL Tier) ─────────────────────────────┐
 │                                                                                      │
-│   [ Coding CLI: Claude Code / OpenCode / nehanda TUI ]                              │
-│                 │ ANTHROPIC_BASE_URL / OpenAI-compatible base_url                   │
+│   [ nehanda TUI / any OpenAI-compatible CLI ]                               │
+│                 │ OpenAI-compatible base_url                                  │
 │                 ▼                                                                    │
 │   [ nehanda-cli ]  (AGPL-3.0, source public)                                        │
 │     • 4-tier memory compaction (~86% token reduction pre-egress)                    │
