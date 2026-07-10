@@ -1,0 +1,44 @@
+# nehanda-cli configuration example
+# Copy to nehanda.yaml (gitignored) and fill in your values.
+#
+# The NEHANDA_API_KEY is issued at signup via `nehanda auth login`.
+# All other fields have working defaults for the hosted service.
+
+# Primary agent — Nehanda Gateway
+nehanda:
+  gateway_url: "https://gateway.nehanda.co"
+  model: "nehanda-rag-synthesis-27b"
+  # api_key is read from NEHANDA_API_KEY env var or the local session store.
+  # Do not hardcode it here.
+
+# KB inference — local bundled CPU container (embeddings, reranking, synthesis)
+# These stay local; do not point them at the Nehanda Gateway.
+kb:
+  embedder_url: "http://localhost:8742"
+  reranker_url: "http://localhost:8742"
+  embedding_dim: 1024
+
+# Delegate workers — local Ollama (free, zero egress)
+# Add or remove entries to match what you have installed.
+delegates:
+  - name: "ollama-local"
+    endpoint: "http://localhost:11434/v1"
+    model: "llama3:latest"
+    slots: 2
+    ctx: 16384
+    roles: ["summarize", "format", "boilerplate"]
+
+  # Uncomment to add remote LAN delegates (see docs/DELEGATES.md)
+  # - name: "ollama-remote-coder"
+  #   endpoint: "http://AsobaCorp-1.local:11434/v1"
+  #   model: "deepseek-coder-v2:latest"
+  #   slots: 2
+  #   ctx: 32768
+  #   roles: ["code", "refactor", "review"]
+
+# Self-host mode: bypass the Nehanda Gateway entirely.
+# Set this to any OpenAI-compatible endpoint running your own model.
+# When set, nehanda_gateway_url and api_key are ignored.
+# self_host:
+#   endpoint: "http://localhost:8000/v1"
+#   model: "your-local-model-name"
