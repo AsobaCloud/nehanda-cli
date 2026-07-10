@@ -15,33 +15,13 @@ cd nehanda-cli
 ./install.sh
 ```
 
-`install.sh` builds the binary, starts the Docker stack, and trusts the server's TLS cert in the macOS keychain (requires your password once).
+`install.sh` does everything: builds the binary, starts the Docker stack, trusts the server TLS cert, rotates the bearer token, and registers Nehanda as the primary agent. On completion it prints the `export` lines to add to your shell profile.
 
 Add to your shell profile if not already there:
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 export AIMEE_SERVER_URL=https://localhost:8743
-export AIMEE_SERVER_TOKEN=<your-token>   # from install output
-```
-
-## Start the Docker stack (if not already running)
-
-```bash
-cd nehanda-cli
-docker compose -f upstream/compose.combined.yaml up -d
-curl -sk -H "Authorization: Bearer $AIMEE_SERVER_TOKEN" https://localhost:8743/v1/health
-# -> {"status":"ok","service":"aimee-server"}
-```
-
-## Register Nehanda as the primary model
-
-```bash
-nehanda agent add nehanda http://nehanda.asoba.co:8000 nehanda-rag-synthesis-27b \
-  --provider openai --key "none" \
-  --roles "code,review,explain,refactor,draft,execute,summarize,plan,validate,diagnose" \
-  --default
-
-nehanda config set provider nehanda
+export AIMEE_SERVER_TOKEN=<token printed by install.sh>
 ```
 
 ## Start a session
@@ -49,8 +29,6 @@ nehanda config set provider nehanda
 ```bash
 nehanda
 ```
-
-This opens the nehanda TUI connected to Nehanda 27B. No external tools required, no vendor API keys, no cloud dependency beyond the Nehanda EC2 endpoint.
 
 ## Use with ona-code (optional — adds SDLC workflow enforcement)
 
