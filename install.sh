@@ -229,27 +229,28 @@ fi
 # ── Step 9: Bearer token + client wiring ─────────────────────────────────────
 step "Client configuration"
 
-# Try to rotate the bootstrap token. If already rotated, the server returns an error —
-# in that case fall through to using the stored token from a previous run.
+TOKEN_STORE="$HOME/.config/aimee/nehanda-install-token"
 TOKEN=""
+
+# Try bootstrap rotation first (works on a fresh stack)
 ROTATE_RESP="$(curl -sk -X POST \
   -H 'Authorization: Bearer aimee-local-dev' \
   https://localhost:8743/v1/api/rotate_bearer 2>/dev/null || true)"
 
 if echo "$ROTATE_RESP" | grep -q '"bearer_token"'; then
   TOKEN="$(echo "$ROTATE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['bearer_token'])" 2>/dev/null || true)"
-  ok "Bearer token obtained"
+  # Persist for idempotent re-runs
+  mkdir -p "$(dirname "$TOKEN_STORE")"
+  echo "$TOKEN" > "$TOKEN_STORE"
+  chmod 600 "$TOKEN_STORE"
+  ok "Bearer token obtained and stored"
+elif [ -f "$TOKEN_STORE" ]; then
+  # Re-run: token was already rotated, recover from stored copy
+  TOKEN="$(cat "$TOKEN_STORE")"
+  ok "Bearer token recovered from previous install"
 else
-  # Already rotated — read from nehanda remote status (stored in ~/.config/aimee/)
-  TOKEN="$(nehanda remote status 2>/dev/null \
-    | grep -oE 'token=[0-9a-f]{16,}' | cut -d= -f2 | head -1 || true)"
-  if [ -z "$TOKEN" ]; then
-    warn "Could not auto-obtain bearer token (bootstrap already used and no stored token found)."
-    warn "If this is a fresh install, restart the stack and re-run:"
-    warn "  docker compose -f $COMPOSE_FILE down && ./install.sh"
-  else
-    ok "Bearer token recovered from previous install"
-  fi
+  warn "Could not obtain bearer token — bootstrap already used and no stored token found."
+  warn "Restart the stack and re-run: docker compose -f $COMPOSE_FILE down -v && ./install.sh"
 fi
 
 if [ -n "$TOKEN" ]; then
