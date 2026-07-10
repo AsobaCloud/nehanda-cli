@@ -1,8 +1,8 @@
 # nehanda-cli
 
-A local AI coding substrate powered by the **Nehanda** fine-tuned model. Free and open-source (AGPL-3.0).
+A local AI coding substrate powered by the [**Nehanda** fine-tuned model](https://huggingface.co/asoba/nehanda-v3-27b). Free and open-source (AGPL-3.0).
 
-Built on [aimee](https://github.com/RakuenSoftware/aimee) — a local memory substrate with 4-tier context compaction, supervisor/delegate task decomposition, and guardrails. This fork adds Nehanda as the primary reasoning model, routed through the Nehanda Gateway, with Zorora's auth infrastructure handling access control.
+Built on [aimee](https://github.com/RakuenSoftware/aimee) — a local memory substrate with 4-tier context compaction, supervisor/delegate task decomposition, and guardrails. This fork wires Nehanda in as the primary reasoning model, with your local and LAN Ollama instances as free delegate workers.
 
 ```
   Your Terminal (nehanda TUI, or any OpenAI-compatible CLI)
@@ -12,40 +12,37 @@ Built on [aimee](https://github.com/RakuenSoftware/aimee) — a local memory sub
   • 4-tier memory compaction (~86% token reduction)
   • Supervisor/Delegate task fan-out
   • Local Ollama delegates (free, zero egress)
-  • Injects NEHANDA_API_KEY on upstream calls
-          │  HTTPS — OpenAI/Anthropic wire protocol
+          │  HTTPS — OpenAI wire protocol
           ▼
-  Nehanda Gateway (af-south-1, proprietary)
-  • Validates token via ona-user-auth Lambda
-  • Checks nehanda subscription tier + quota
-  • Forwards compacted payload to vLLM
-          │
-          ▼
-  Nehanda 27B on EC2 (g6e.12xlarge, closed)
+  Nehanda 27B on EC2 (nehanda.asoba.co:8000)
+  • vLLM, tensor-parallel
+  • nehanda-rag-synthesis-27b
 ```
 
 ## Quick start
 
 ```bash
-# Install
 git clone https://github.com/AsobaCloud/nehanda-cli.git
 cd nehanda-cli
 ./install.sh
+```
 
-# Authenticate (device flow — opens browser)
-nehanda auth login
+`install.sh` does everything end-to-end: builds the binary, starts the Docker stack, trusts the TLS cert, wires the client to the server, and registers Nehanda as the primary agent. On completion it prints the `export` lines to add to your shell profile.
 
-# Start a session
+```bash
+# After install, start a session:
 nehanda
 ```
 
+See [docs/QUICK_START.md](docs/QUICK_START.md) for full setup details.
+
 ## Architecture
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full three-tier design, AGPL boundary analysis, and auth flow.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the three-tier design and AGPL boundary analysis.
 
 ## Self-hosting
 
-See [docs/SELF_HOST.md](docs/SELF_HOST.md) for running entirely locally without the Nehanda Gateway (bring your own model endpoint).
+See [docs/SELF_HOST.md](docs/SELF_HOST.md) for running with a local model instead of the Nehanda EC2 endpoint.
 
 ## License
 
