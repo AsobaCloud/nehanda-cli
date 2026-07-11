@@ -300,6 +300,44 @@ for m in data.get('models', []):
   fi
 fi
 
+# ── Step 12: Install plan enforcement hooks ───────────────────────────────────
+step "Plan enforcement hooks"
+
+HOOKS_SHARE="$HOME/.local/share/nehanda-cli/hooks"
+mkdir -p "$HOOKS_SHARE"
+
+# Copy hooks from repo
+for f in "$REPO_ROOT/hooks/"*.sh "$REPO_ROOT/hooks/nehanda-plan"; do
+  [ -f "$f" ] || continue
+  cp "$f" "$HOOKS_SHARE/"
+  chmod +x "$HOOKS_SHARE/$(basename "$f")"
+done
+
+# Install nehanda-plan CLI to PATH
+cp "$REPO_ROOT/hooks/nehanda-plan" "$INSTALL_DIR/nehanda-plan"
+chmod +x "$INSTALL_DIR/nehanda-plan"
+ok "Hooks installed to $HOOKS_SHARE"
+ok "nehanda-plan CLI installed to $INSTALL_DIR/nehanda-plan"
+
+# Register hooks with the aimee server
+if nehanda hooks list 2>/dev/null | grep -q "require_plan_approval" 2>/dev/null; then
+  ok "Plan enforcement hooks already registered"
+else
+  nehanda hooks add PreToolUse \
+    --matcher "Edit|Write|MultiEdit" \
+    --command "bash $HOOKS_SHARE/require_plan_approval.sh" 2>&1 | grep -Ev "^$" || true
+
+  nehanda hooks add PostToolUse \
+    --matcher "Edit|Write|MultiEdit" \
+    --command "bash $HOOKS_SHARE/track_dirty.sh" 2>&1 | grep -Ev "^$" || true
+
+  nehanda hooks add PostToolUse \
+    --matcher "Bash" \
+    --command "bash $HOOKS_SHARE/track_validation.sh" 2>&1 | grep -Ev "^$" || true
+
+  ok "Plan enforcement hooks registered"
+fi
+
 # ── Complete ──────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}──────────────────────────────────────────────${RESET}"
@@ -314,6 +352,12 @@ fi
 echo ""
 echo "Start a session:"
 echo "  nehanda"
+echo ""
+echo "Plan-enforced workflow:"
+echo "  nehanda-plan start   # create a plan"
+echo "  nehanda-plan approve # approve it"
+echo "  nehanda              # edits are now gated by plan + TDD"
+echo "  nehanda-plan clear   # done"
 echo ""
 echo "To add remote LAN delegates (Windows Ollama on AsobaCorp-1.local):"
 echo "  nehanda agent local ollama-remote-coder http://AsobaCorp-1.local:11434/v1 \\"
