@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 # hooks/nehanda-plan
-# Plan management CLI for nehanda-cli sessions.
+# SQLite-first plan management for nehanda-cli sessions.
 #
-# Usage:
-#   nehanda-plan start           Create a new plan draft
-#   nehanda-plan approve         Approve the current draft (enables editing)
-#   nehanda-plan status          Show current plan state
-#   nehanda-plan show            Print the current plan content
-#   nehanda-plan clear           Clear all plan state (use after task is done)
+# Mirrors devin_plan_mode.sh exactly:
+#   - start:   creates a draft row in SQLite, writes template to disk for editing
+#   - approve: reads file content, saves as 'approved' row in SQLite, writes state keys
+#   - show:    reads from SQLite (authoritative), falls back to disk
+#   - status:  reads from SQLite
+#   - clear:   wipes state keys and plan rows
+#
+# The file on disk is an editing surface only.
+# SQLite is the source of truth. All hooks query SQLite, not the file.
 #
 # Install (done by install.sh):
 #   cp hooks/nehanda-plan ~/.local/bin/nehanda-plan
-#   chmod +x ~/.local/bin/nehanda-plan
 
 set -euo pipefail
+# shellcheck source=hooks/common.sh
 HOOKS_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOKS_DIR/common.sh"
 
@@ -27,36 +30,40 @@ fi
 CONV_ID="$SESSION_ID"
 db_exec "INSERT OR IGNORE INTO conversations (id, project_dir) VALUES (?, ?);" "$CONV_ID" "$(pwd)"
 db_exec "INSERT OR IGNORE INTO sessions (session_id, conversation_id) VALUES (?, ?);" "$SESSION_ID" "$CONV_ID"
+db_exec "UPDATE conversations SET last_active = datetime('now') WHERE id=?;" "$CONV_ID"
 
 PLAN_DIR="${NEHANDA_PROJECT_DIR:-$(pwd)}/.nehanda/plans"
 PLAN_FILE="$PLAN_DIR/current.md"
+mkdir -p "$PLAN_DIR"
 
 case "${1:-help}" in
-# ── start ────────────────────────────────────────────────────────────────────
+# ── start ─────────────────────────────────────────────────────────────────────
 start)
-    # Clear existing approval state
+    # Clear existing approval and workflow state
     for key in approved plan_file plan_hash scope criteria objective \
                 objective_verification objective_verification_required \
                 planning dirty validated validated_unit validated_e2e \
-                tests_failed tests_reviewed edit_count validation_complete; do
-        state_remove "$key" 2>/dev/null || true
+                tests_failed tests_reviewed edit_count validation_complete \
+                validation_log; do
+        db_exec "DELETE FROM state WHERE conversation_id=? AND key=?;" "$CONV_ID" "$key" 2>/dev/null || true
     done
+
+    # Delete any existing draft rows for this conversation
     db_exec "DELETE FROM plans WHERE conversation_id=? AND status='draft';" "$CONV_ID"
 
-    state_write planning "1"
-    state_write planning_started_at "$(date +%s)"
-    mkdir -p "$PLAN_DIR"
+    # Set planning state
+    db_exec "INSERT OR REPLACE INTO state (conversation_id, key, value, updated_at) VALUES (?, 'planning', '1', datetime('now'));" "$CONV_ID"
+    db_exec "INSERT OR REPLACE INTO state (conversation_id, key, value, updated_at) VALUES (?, 'planning_started_at', ?, datetime('now'));" "$CONV_ID" "$(date +%s)"
 
-    # Write plan template if file doesn't exist
-    if [[ ! -f "$PLAN_FILE" ]]; then
-        cat > "$PLAN_FILE" << 'TEMPLATE'
+    # Write template to disk (for editing)
+    cat > "$PLAN_FILE" << 'TEMPLATE'
 # Plan
 
 ## Objective
 <!-- What needs to be accomplished. One or two sentences. -->
 
 ## Scope
-<!-- List every file that will be modified, one per line as absolute paths:
+<!-- List every file that will be modified, one absolute path per line:
 - /absolute/path/to/file.py
 - /absolute/path/to/other.ts
 -->
@@ -70,107 +77,141 @@ start)
 ## Objective Verification
 <!-- The exact command to run to verify this works end-to-end -->
 TEMPLATE
-        echo "✓ Plan template created: $PLAN_FILE"
-    else
-        echo "✓ Existing plan found: $PLAN_FILE"
-    fi
 
-    save_plan "$PLAN_FILE" "$(cat "$PLAN_FILE")" "draft"
-    echo "  Edit the plan, then run: nehanda-plan approve"
+    # Save draft to SQLite immediately (mirrors the file)
+    DRAFT_CONTENT="$(cat "$PLAN_FILE")"
+    DRAFT_HASH="$(printf '%s\n' "$DRAFT_CONTENT" | shasum -a 256 | awk '{print $1}')"
+    db_exec "INSERT INTO plans (conversation_id, file_path, content, hash, status) VALUES (?, ?, ?, ?, 'draft');" \
+        "$CONV_ID" "$PLAN_FILE" "$DRAFT_CONTENT" "$DRAFT_HASH"
+
+    echo "✓ Planning started. Edit the plan:"
+    echo "  $PLAN_FILE"
+    echo ""
+    echo "  When ready: nehanda-plan approve"
     ;;
 
-# ── approve ──────────────────────────────────────────────────────────────────
+# ── approve ───────────────────────────────────────────────────────────────────
 approve)
-    [[ -f "$PLAN_FILE" ]] || { echo "✗ No plan file at $PLAN_FILE — run: nehanda-plan start" >&2; exit 1; }
+    [[ -f "$PLAN_FILE" ]] || {
+        echo "✗ No plan file at $PLAN_FILE" >&2
+        echo "  Run: nehanda-plan start" >&2
+        exit 1
+    }
+
     CONTENT="$(cat "$PLAN_FILE")"
 
     # Validate required sections
     MISSING=""
-    echo "$CONTENT" | grep -qiE '^##\s+Objective'          || MISSING+="  - ## Objective\n"
-    echo "$CONTENT" | grep -qiE '^##\s+Scope'               || MISSING+="  - ## Scope\n"
-    echo "$CONTENT" | grep -qiE '^##\s+Success.*Criteria'   || MISSING+="  - ## Success Criteria\n"
-    echo "$CONTENT" | grep -qiE '^##\s+Objective.*Verif'    || MISSING+="  - ## Objective Verification\n"
+    echo "$CONTENT" | grep -qiE '^##[[:space:]]+(Objective)' || MISSING+="  - ## Objective\n"
+    echo "$CONTENT" | grep -qiE '^##[[:space:]]+(Scope)'     || MISSING+="  - ## Scope\n"
+    echo "$CONTENT" | grep -qiE '^##[[:space:]]+Success'     || MISSING+="  - ## Success Criteria\n"
+    echo "$CONTENT" | grep -qiE '^##[[:space:]]+Objective.*[Vv]erif' || MISSING+="  - ## Objective Verification\n"
 
     if [[ -n "$MISSING" ]]; then
-        echo "✗ Plan is missing required sections:" >&2
-        printf "%b" "$MISSING" >&2
+        printf "✗ Plan missing required sections:\n%b\n" "$MISSING" >&2
         exit 1
     fi
 
-    # Extract sections
+    # Extract sections for state keys
     OBJECTIVE="$(echo "$CONTENT" | sed -n '/^##[[:space:]]*[Oo]bjective/,/^##/p' \
         | tail -n +2 | grep -v '^##' | sed '/^[[:space:]]*$/d' | head -3)"
     SCOPE="$(echo "$CONTENT" | sed -n '/^##[[:space:]]*[Ss]cope/,/^##/p' \
-        | tail -n +2 | grep -v '^##' | grep -E '^\s*-\s+/' \
+        | tail -n +2 | grep -v '^##' \
+        | grep -E '^\s*-\s+/' \
         | sed 's/^[[:space:]]*-[[:space:]]*//')"
     CRITERIA="$(echo "$CONTENT" | sed -n '/^##[[:space:]]*[Ss]uccess/,/^##/p' \
         | tail -n +2 | grep -v '^##' | sed '/^[[:space:]]*$/d' | head -5)"
     OBJ_VERIF="$(echo "$CONTENT" | sed -n '/^##[[:space:]]*[Oo]bjective.*[Vv]erif/,/^##/p' \
         | tail -n +2 | grep -v '^##' | sed '/^[[:space:]]*$/d')"
 
-    # Save to DB and write approval state
     PLAN_HASH="$(printf '%s\n' "$CONTENT" | shasum -a 256 | awk '{print $1}')"
-    save_plan "$PLAN_FILE" "$CONTENT" "approved"
+    PLAN_FILE_ABS="$(realpath "$PLAN_FILE" 2>/dev/null || echo "$PLAN_FILE")"
 
-    state_write plan_file "$(realpath "$PLAN_FILE" 2>/dev/null || echo "$PLAN_FILE")"
-    state_write plan_hash "$PLAN_HASH"
-    state_write objective "$OBJECTIVE"
-    state_write scope "$SCOPE"
-    state_write criteria "$CRITERIA"
-    state_write objective_verification "$OBJ_VERIF"
-    state_write objective_verification_required "$(echo "$SCOPE" | grep -v '\.(md|txt|rst)$' | grep -c '.' || echo 0)"
-    state_remove planning
-    state_remove planning_started_at
-    state_write approved "1"
+    # Save approved row to SQLite (authoritative source)
+    db_exec "INSERT INTO plans (conversation_id, file_path, content, hash, status, approved_at) \
+        VALUES (?, ?, ?, ?, 'approved', datetime('now'));" \
+        "$CONV_ID" "$PLAN_FILE_ABS" "$CONTENT" "$PLAN_HASH"
 
-    echo "✓ Plan approved"
+    # Write approval state keys (read by require_plan_approval.sh)
+    for key_val in \
+        "plan_file|$PLAN_FILE_ABS" \
+        "plan_hash|$PLAN_HASH" \
+        "objective|$OBJECTIVE" \
+        "scope|$SCOPE" \
+        "criteria|$CRITERIA" \
+        "objective_verification|$OBJ_VERIF" \
+        "approved|1"; do
+        KEY="${key_val%%|*}"
+        VAL="${key_val#*|}"
+        db_exec "INSERT OR REPLACE INTO state (conversation_id, key, value, updated_at) \
+            VALUES (?, ?, ?, datetime('now'));" "$CONV_ID" "$KEY" "$VAL"
+    done
+
+    # Clear planning state
+    db_exec "DELETE FROM state WHERE conversation_id=? AND key IN ('planning','planning_started_at');" "$CONV_ID"
+
+    echo "✓ Plan approved and saved to SQLite"
     echo "  Objective: $OBJECTIVE"
-    SCOPE_COUNT="$(echo "$SCOPE" | grep -c '.' || echo 0)"
+    SCOPE_COUNT="$(printf '%s' "$SCOPE" | grep -c '.' || echo 0)"
     echo "  Scope: $SCOPE_COUNT file(s)"
     echo ""
-    echo "  Start your nehanda session. Edits outside scope will be blocked."
+    echo "  Start session: nehanda"
     ;;
 
-# ── status ───────────────────────────────────────────────────────────────────
-status)
-    DB_STATUS="$(db_query "SELECT status FROM plans WHERE conversation_id=? ORDER BY id DESC LIMIT 1;" "$CONV_ID" 2>/dev/null || true)"
-    if state_exists approved 2>/dev/null; then
-        echo "✓ APPROVED"
-        state_exists objective 2>/dev/null && echo "  Objective: $(state_read objective)"
-        state_exists plan_file 2>/dev/null && echo "  Plan:      $(state_read plan_file)"
-        state_exists dirty    2>/dev/null && echo "  Dirty:     $(state_read dirty)"
-        state_exists tests_failed 2>/dev/null && echo "  TDD state: tests failed (red phase — editing unlocked)"
-        state_exists validated 2>/dev/null && echo "  Validated: $(state_read validated)"
-    elif state_exists planning 2>/dev/null; then
-        echo "📝 PLANNING"
-        echo "  Plan file: $PLAN_FILE"
-        echo "  Run: nehanda-plan approve"
-    else
-        echo "○ IDLE — no active plan"
-        echo "  Run: nehanda-plan start"
-    fi
-    ;;
-
-# ── show ─────────────────────────────────────────────────────────────────────
+# ── show ──────────────────────────────────────────────────────────────────────
 show)
-    DB_CONTENT="$(get_plan_content_from_db 2>/dev/null || true)"
+    # SQLite is authoritative — read from DB, fall back to disk
+    DB_CONTENT="$(db_query \
+        "SELECT content FROM plans WHERE conversation_id=? \
+         AND status IN ('approved','draft') ORDER BY id DESC LIMIT 1;" "$CONV_ID")"
     if [[ -n "$DB_CONTENT" ]]; then
         echo "$DB_CONTENT"
     elif [[ -f "$PLAN_FILE" ]]; then
         cat "$PLAN_FILE"
     else
-        echo "No plan found. Run: nehanda-plan start" >&2; exit 1
+        echo "No plan found. Run: nehanda-plan start" >&2
+        exit 1
+    fi
+    ;;
+
+# ── status ────────────────────────────────────────────────────────────────────
+status)
+    DB_STATUS="$(db_query \
+        "SELECT status FROM plans WHERE conversation_id=? ORDER BY id DESC LIMIT 1;" \
+        "$CONV_ID" 2>/dev/null || true)"
+
+    APPROVED="$(db_query \
+        "SELECT value FROM state WHERE conversation_id=? AND key='approved';" \
+        "$CONV_ID" 2>/dev/null || true)"
+
+    if [[ "$APPROVED" == "1" ]]; then
+        echo "✓ APPROVED"
+        OBJ="$(db_query "SELECT value FROM state WHERE conversation_id=? AND key='objective';" "$CONV_ID")"
+        PF="$(db_query "SELECT value FROM state WHERE conversation_id=? AND key='plan_file';" "$CONV_ID")"
+        DIRTY="$(db_query "SELECT value FROM state WHERE conversation_id=? AND key='dirty';" "$CONV_ID")"
+        TF="$(db_query "SELECT value FROM state WHERE conversation_id=? AND key='tests_failed';" "$CONV_ID")"
+        [[ -n "$OBJ" ]]   && echo "  Objective: $OBJ"
+        [[ -n "$PF" ]]    && echo "  Plan:      $PF"
+        [[ -n "$DIRTY" ]] && echo "  Dirty:     $DIRTY"
+        [[ -n "$TF" ]]    && echo "  TDD state: tests failed — production editing unlocked"
+    elif [[ "$DB_STATUS" == "draft" ]]; then
+        echo "📝 PLANNING — edit and approve:"
+        echo "  $PLAN_FILE"
+        echo "  nehanda-plan approve"
+    else
+        echo "○ IDLE — no active plan"
+        echo "  nehanda-plan start"
     fi
     ;;
 
 # ── clear ─────────────────────────────────────────────────────────────────────
 clear)
-    for key in approved plan_file plan_hash scope criteria objective \
-                objective_verification objective_verification_required \
-                planning dirty validated validated_unit validated_e2e \
-                tests_failed tests_reviewed edit_count validation_complete \
-                validation_log; do
-        state_remove "$key" 2>/dev/null || true
+    KEYS="approved,plan_file,plan_hash,scope,criteria,objective,objective_verification,\
+objective_verification_required,planning,dirty,validated,validated_unit,validated_e2e,\
+tests_failed,tests_reviewed,edit_count,validation_complete,validation_log"
+    # SQLite doesn't support IN with a single ?-bound list, so delete individually
+    for key in $(echo "$KEYS" | tr ',' ' '); do
+        db_exec "DELETE FROM state WHERE conversation_id=? AND key=?;" "$CONV_ID" "$key" 2>/dev/null || true
     done
     echo "✓ Plan state cleared"
     ;;
@@ -178,21 +219,21 @@ clear)
 # ── help ──────────────────────────────────────────────────────────────────────
 help|*)
     cat << 'HELP'
-nehanda-plan — plan enforcement for nehanda-cli sessions
+nehanda-plan — SQLite-backed plan enforcement for nehanda-cli
 
 Commands:
-  start    Create a plan draft (.nehanda/plans/current.md)
-  approve  Validate and approve the plan (enables editing)
-  status   Show current plan/TDD state
-  show     Print current plan content
-  clear    Clear all state (run after task is complete)
+  start    Create plan draft in SQLite + disk template for editing
+  approve  Read file → validate → save as 'approved' in SQLite → write state keys
+  show     Print plan from SQLite (authoritative), fallback to disk
+  status   Show approval/TDD state from SQLite
+  clear    Wipe all state keys from SQLite
 
 Workflow:
-  1. nehanda-plan start       # create plan template
-  2. edit .nehanda/plans/current.md
-  3. nehanda-plan approve     # approve it
-  4. nehanda                  # start session — edits are now gated
-  5. nehanda-plan clear       # done
+  1. nehanda-plan start              # creates .nehanda/plans/current.md
+  2. edit .nehanda/plans/current.md  # every save is mirrored to SQLite by track_dirty.sh
+  3. nehanda-plan approve            # validates + approves in SQLite
+  4. nehanda                         # session — edits gated by plan + TDD
+  5. nehanda-plan clear              # done
 HELP
     ;;
 esac

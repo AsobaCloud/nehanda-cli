@@ -8,7 +8,7 @@
 #     --matcher "Edit|Write|MultiEdit" \
 #     --command "bash ~/.local/share/nehanda-cli/hooks/require_plan_approval.sh"
 set -euo pipefail
-# shellcheck source=hooks/common.sh
+# shellcheck source=./common.sh
 source "$(dirname "$0")/common.sh"
 init_hook
 

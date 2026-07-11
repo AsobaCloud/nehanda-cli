@@ -5,7 +5,7 @@
 # When tests FAIL (non-zero exit): sets tests_failed → unlocks production editing
 # When tests PASS: records validation, clears dirty if both unit + e2e passed
 set -euo pipefail
-# shellcheck source=hooks/common.sh
+# shellcheck source=./common.sh
 source "$(dirname "$0")/common.sh"
 init_hook
 
