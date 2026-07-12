@@ -86,6 +86,52 @@ cp upstream/aimee-kb ~/.local/bin/nehanda-kb
 
 ---
 
+### 5. `zsh: killed nehanda` immediately on launch (macOS)
+
+**Symptom:** `nehanda` or `nehanda-server` is killed instantly with no error message. Crash report may show `SIGKILL` / `Code Signature Invalid`.
+
+**Cause:** `cp` into `~/.local/bin/` invalidates the linker ad-hoc signature. Terminal enforces code signing on interactive binaries.
+
+**Fix:** Applied in `install.sh` — ad-hoc re-signs all three binaries after install. If you copied binaries manually:
+```bash
+codesign -s - -f ~/.local/bin/nehanda ~/.local/bin/nehanda-server ~/.local/bin/nehanda-kb
+```
+
+---
+
+### 6. `aimee chat: no content in response` (intermittent)
+
+**Symptom:** TUI or `/v1/chat/stream` returns `no content in response` on some turns, especially identity or reasoning-heavy questions.
+
+**Cause:** Qwen reasoning models embed scaffold text (`Thinking Process:`, `</think>`) in the content field. Upstream stripping logic could discard the entire answer when no `Final Output:` marker was present.
+
+**Fix:** Applied in `patches/004-qwen-reasoning-strip-fix.patch`. Re-run `./install.sh` or rebuild `nehanda-server` after applying patches.
+
+---
+
+### 7. Model identifies as AIMEE / denies vision
+
+**Symptom:** Nehanda says it is AIMEE, Claude, or Qwen, or claims it cannot view images.
+
+**Cause:** Upstream AIMEE engineer persona is the default when Nehanda prompts are not installed.
+
+**Fix:** Re-run `./install.sh` (installs `config/webchat_system_prompt.txt`) or copy manually:
+```bash
+cp config/webchat_system_prompt.txt ~/.config/aimee/
+cp config/personas/engineer.md ~/.config/aimee/personas/
+```
+Start a new `nehanda` session after updating.
+
+---
+
+### 8. `nehanda chat` fails but bare `nehanda` works
+
+**Symptom:** `nehanda chat` errors about OpenCode TUI; bare `nehanda` works.
+
+**Fix:** Applied in `patches/003-nehanda-chat-native-fallback.patch` — `nehanda chat` falls back to the native TUI when OpenCode is not installed.
+
+---
+
 ## Service health checks
 
 ```bash
@@ -128,18 +174,32 @@ nehanda agent local ollama-remote-reasoner http://AsobaCorp-1.local:11434/v1 \
 
 ---
 
+## Services not running (`server unavailable` / `no final response from server`)
+
+**Symptom:** `nehanda` launches but chat fails, or you get `aimee: cannot launch session; server unavailable`.
+
+**Cause:** The CLI does not auto-start the server. Embedder, kb, and server must be running before `nehanda`.
+
+**Fix:**
+```bash
+bash scripts/install-native-services.sh   # installs launchd agents + registers EC2 agent
+bash scripts/start-native-services.sh status   # verify all three are ok
+```
+
+---
+
 ## Full recovery sequence
 
 ```bash
 # 1. Kill any stale processes
-pkill -x nehanda-server nehanda-kb 2>/dev/null; pkill -f start-embedder.sh 2>/dev/null
+bash scripts/start-native-services.sh stop
 
 # 2. Clear stale remote.conf if present
 [ -f ~/.config/aimee/remote.conf ] && mv ~/.config/aimee/remote.conf ~/.config/aimee/remote.conf.bak
 
-# 3. Re-run the smoke test (starts fresh stack + registers agents)
-bash scripts/phase0-smoke.sh
+# 3. Reinstall native services
+bash scripts/install-native-services.sh
 
-# 4. Reload shell
-source ~/.zshrc
+# 4. Verify
+bash scripts/phase0-smoke.sh
 ```

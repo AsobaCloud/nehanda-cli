@@ -6,7 +6,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 export PATH="/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/opt/libpq/bin:/opt/homebrew/opt/curl/bin:/opt/homebrew/opt/sqlite/bin:$HOME/.local/bin:$PATH"
-export PKG_CONFIG_PATH="/opt/homebrew/opt/libpq/lib/pkgconfig:/opt/homebrew/opt/curl/lib/pkgconfig:/opt/homebrew/opt/sqlite/lib/pkgconfig:/opt/homebrew/opt/zstd/lib/pkgconfig:/opt/homebrew/opt/openssl@3/lib/pkgconfig"
 
 NEHANDA_ENDPOINT="${NEHANDA_ENDPOINT:-http://nehanda.asoba.co:8000}"
 NEHANDA_MODEL="${NEHANDA_MODEL:-nehanda-rag-synthesis-27b}"
@@ -15,11 +14,6 @@ LOG_DIR="${NEHANDA_DATA_DIR:-$HOME/.local/share/nehanda-cli}/phase0-logs"
 EMBEDDER_STUB="${AIMEE_LLM_STUB:-1}"
 
 mkdir -p "$LOG_DIR" "$HOME/.config/aimee"
-
-# Native Phase 0 uses the co-located UDS server, not Docker TLS remote.conf.
-if [ -f "$HOME/.config/aimee/remote.conf" ] && [ ! -f "$HOME/.config/aimee/remote.conf.phase0-bak" ]; then
-  mv "$HOME/.config/aimee/remote.conf" "$HOME/.config/aimee/remote.conf.phase0-bak"
-fi
 
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -38,48 +32,11 @@ step "0.2 binaries"
 command -v nehanda nehanda-server nehanda-kb >/dev/null || fail "missing binaries"
 pass "nehanda, nehanda-server, nehanda-kb on PATH"
 
-# Stop any prior phase0 processes
-pkill -f "start-embedder.sh" 2>/dev/null || true
-pkill -x nehanda-kb 2>/dev/null || true
-pkill -x nehanda-server 2>/dev/null || true
-sleep 1
-
-# ── 0.3 embedder ─────────────────────────────────────────────────────────────
-step "0.3 embedder (:8742)"
-AIMEE_LLM_STUB="$EMBEDDER_STUB" "$REPO_ROOT/scripts/start-embedder.sh" \
-  >"$LOG_DIR/embedder.log" 2>&1 &
-EMBED_PID=$!
-for i in $(seq 1 30); do
-  curl -sf 'http://127.0.0.1:8742/health' >/dev/null && break
-  sleep 1
-done
-curl -sf 'http://127.0.0.1:8742/health' >/dev/null || fail "embedder health"
+# ── 0.3–0.5 start native stack ────────────────────────────────────────────────
+step "0.3–0.5 start native services (embedder + kb + server)"
+NEHANDA_RESTART=1 AIMEE_LLM_STUB="$EMBEDDER_STUB" bash "$SCRIPT_DIR/start-native-services.sh"
 pass "embedder :8742 healthy (stub=${EMBEDDER_STUB})"
-
-# ── 0.4 kb ─────────────────────────────────────────────────────────────────────
-step "0.4 nehanda-kb (:8741)"
-export AIMEE_LLM_URL="${AIMEE_LLM_URL:-http://127.0.0.1:8742}"
-export AIMEE_EMBEDDING_DIM="${AIMEE_EMBEDDING_DIM:-1024}"
-export DATABASE_URL="${DATABASE_URL:-postgresql://localhost/aimee_shared}"
-nehanda-kb --http-port=8741 >"$LOG_DIR/kb.log" 2>&1 &
-KB_PID=$!
-for i in $(seq 1 60); do
-  curl -sf 'http://127.0.0.1:8741/v1/health?status=1' >/dev/null && break
-  sleep 1
-done
-curl -sf 'http://127.0.0.1:8741/v1/health?status=1' >/dev/null || fail "kb health"
 pass "nehanda-kb :8741 healthy"
-
-# ── 0.5 server ─────────────────────────────────────────────────────────────────
-step "0.5 nehanda-server (UDS)"
-export AIMEE_KB_API_URL="${AIMEE_KB_API_URL:-http://127.0.0.1:8741}"
-nehanda-server >"$LOG_DIR/server.log" 2>&1 &
-SERVER_PID=$!
-for i in $(seq 1 60); do
-  [ -S "$AIMEE_SOCK" ] && curl -sf --unix-socket "$AIMEE_SOCK" http://localhost/v1/health >/dev/null && break
-  sleep 1
-done
-curl -sf --unix-socket "$AIMEE_SOCK" http://localhost/v1/health >/dev/null || fail "server UDS health"
 pass "nehanda-server UDS healthy"
 
 # ── 0.6 EC2 agent ──────────────────────────────────────────────────────────────
@@ -90,7 +47,6 @@ nehanda agent add nehanda "$NEHANDA_ENDPOINT" "$NEHANDA_MODEL" \
   --no-tools \
   --roles "code,review,explain,refactor,draft,execute,summarize,plan,validate" \
   --default 2>/dev/null || true
-# Persist tools off (agent_save_config omits false; loader would re-derive from model caps).
 if [ -f "$HOME/.config/aimee/agents.json" ]; then
   python3 - <<'PY'
 import json, os
@@ -141,5 +97,5 @@ pass "second turn completed (verify recall in logs if needed)"
 echo ""
 echo "Phase 0 gate: PASSED"
 echo "Logs: $LOG_DIR"
-echo "PIDs: embedder=$EMBED_PID kb=$KB_PID server=$SERVER_PID"
-echo "Stop: kill $EMBED_PID $KB_PID $SERVER_PID"
+echo "Services persist via launchd if you ran: bash scripts/install-native-services.sh"
+echo "Stop foreground stack: bash scripts/start-native-services.sh stop"

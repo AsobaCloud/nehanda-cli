@@ -2,7 +2,7 @@
 
 A local AI coding substrate powered by the [**Nehanda** fine-tuned model](https://huggingface.co/asoba/nehanda-v3-27b). Free and open-source (AGPL-3.0).
 
-Built on [aimee](https://github.com/RakuenSoftware/aimee) — local memory substrate with 4-tier context compaction, supervisor/delegate task decomposition, and guardrails. This fork wires Nehanda in as the primary reasoning model, with local and LAN Ollama instances as free delegate workers.
+Built on [aimee](https://github.com/RakuenSoftware/aimee) — local memory substrate with 4-tier context compaction, supervisor/delegate task decomposition, and guardrails. This fork wires Nehanda in as the primary reasoning model: a fine-tuned Qwen3.6 27B multimodal stack (technical writing, deep research, coding, document review, vision).
 
 ```
   Your Terminal (nehanda TUI)
