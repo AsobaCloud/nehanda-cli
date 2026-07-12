@@ -118,7 +118,8 @@ nehanda agent local ollama-remote-qwen http://AsobaCorp-1.local:11434/v1 --model
 nehanda agent local ollama-remote-reasoner http://AsobaCorp-1.local:11434/v1 --model deepseek-r1:14b --slots 1 --ctx 32768
 nehanda agent local ollama-remote-gemma http://AsobaCorp-1.local:11434/v1 --model codegemma:7b --slots 2 --ctx 16384
 
-# 4. Verify
+# 4. Reload shell and verify
+source ~/.zshrc
 nehanda agent list
 nehanda
 ```
