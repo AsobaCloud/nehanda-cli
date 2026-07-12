@@ -36,4 +36,5 @@ git checkout .   # revert — the patch is the record, not the upstream file
 
 | File | Description |
 |---|---|
-| *(none yet)* | Add patches as upstream modifications are needed |
+| `001-macos-sock-compat.patch` | macOS `SOCK_CLOEXEC` / `accept4()` shims in `platform_ipc.c` |
+| `002-macos-native-build.patch` | macOS Makefile + compile fixes; pthread stack guards for ~722KB `config_t`; KB HTTP listener stack; provider chat respects `tools_enabled` (EC2 vLLM) |
