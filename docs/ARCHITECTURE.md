@@ -7,9 +7,10 @@ Source of truth for the three-tier design, AGPL boundary analysis, auth flow, an
 ```
 ┌───────────────────────────── USER MACHINE (AGPL Tier) ─────────────────────────────┐
 │                                                                                      │
-│   [ nehanda TUI / any OpenAI-compatible CLI ]                               │
-│                 │ OpenAI-compatible base_url                                  │
-│                 ▼                                                                    │
+│   [ nehanda native TUI / OpenCode (via opencode attach) ]                           │
+│        │ UDS                              │ bridge 127.0.0.1:<port>                 │
+│        └──────────────────────────────────┴──────────────────────────────┐            │
+│                                                                         ▼            │
 │   [ nehanda-cli ]  (AGPL-3.0, source public)                                        │
 │     • 4-tier memory compaction (~86% token reduction pre-egress)                    │
 │     • Supervisor/Delegate task decomposition                                         │
@@ -37,6 +38,21 @@ Source of truth for the three-tier design, AGPL boundary analysis, auth flow, an
 │     Never exposed at the AGPL boundary                                              │
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### OpenCode Integration
+
+For interactive sessions (`nehanda` or `nehanda chat` on a tty), nehanda tries OpenCode before the built-in C TUI:
+
+1. `opencode_exec_tui()` starts a local OpenCode v2 bridge on `127.0.0.1:<random-port>`
+2. It fork-execs `opencode attach http://127.0.0.1:<port> --dir <cwd>`
+3. The bridge translates OpenCode's protocol into turns against `nehanda-server` over the Unix domain socket
+4. Detection: `opencode` on `PATH`, or `AIMEE_OPENCODE_BIN=/path/to/opencode`
+
+If OpenCode is missing and `default_launch=1` (bare `nehanda`, `nehanda chat`), nehanda falls back to `builtin_chat_native_loop()` — a minimal readline loop (`> ` prompt, streamed reply, `/quit`). If `--opencode` was passed explicitly, nehanda prints an install hint and exits instead.
+
+One-shot `nehanda chat "message"` (inline text) never uses OpenCode; it goes straight to the server stream API.
+
+No manual OpenCode provider or `base_url` configuration is required for the attach flow — nehanda owns the wiring.
 
 ## Why the AGPL Line Sits Where It Does
 

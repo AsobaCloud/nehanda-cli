@@ -25,6 +25,15 @@ add_compile_definitions(NEHANDA_VERSION_STR="${NEHANDA_VERSION_STR}")
 # Pull in all upstream targets. NEHANDA_BUILD=1 lets upstream code
 # #ifdef around anything we override.
 add_compile_definitions(NEHANDA_BUILD=1)
+# cli_tui_opencode_v2*.c gate the whole module on #ifdef AIMEE_POSIX before any
+# #include. platform.h defines AIMEE_POSIX from AIMEE_MACOS/AIMEE_LINUX, but the
+# upstream CMake build never passed those macros — OpenCode compiled as a no-op
+# stub and nehanda always fell back to the native readline TUI.
+if(APPLE)
+  add_compile_definitions(AIMEE_MACOS AIMEE_POSIX)
+elseif(UNIX)
+  add_compile_definitions(AIMEE_LINUX AIMEE_POSIX)
+endif()
 add_subdirectory(upstream)
 
 # ── nehanda-cli additions ─────────────────────────────────────────────────────

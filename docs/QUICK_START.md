@@ -21,8 +21,8 @@ Builds three binaries (`nehanda`, `nehanda-server`, `nehanda-kb`), installs post
 
 ```bash
 ./install.sh    # ~40s on re-run with cached build; first cold compile takes longer
-nehanda         # interactive native TUI
-nehanda chat "…"  # one-shot message
+nehanda         # interactive TUI (OpenCode if on PATH, else native C TUI)
+nehanda chat "…"  # one-shot message (server stream; OpenCode not used)
 ```
 
 Add to your shell profile:
@@ -37,7 +37,22 @@ export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"   # macOS only
 nehanda
 ```
 
-The native TUI starts when OpenCode is not installed (`nehanda chat` uses the same fallback). Type `/quit` to exit.
+Interactive sessions try OpenCode first: nehanda starts a local bridge and runs `opencode attach` when `opencode` is on `PATH`. If OpenCode is not installed, the native C TUI starts instead. Type `/quit` to exit.
+
+`nehanda chat "message"` (one-shot, with inline text) always uses the server stream API directly — OpenCode only affects interactive TUI sessions.
+
+### Optional: Install OpenCode
+
+1. `./install.sh` — builds the nehanda stack, starts services, registers the EC2 agent
+2. Install [OpenCode](https://github.com/opencode-ai/opencode) separately (package manager or upstream repo)
+3. Ensure `opencode` is on `PATH`
+4. Run `nehanda` — no extra configuration needed
+
+Override detection when needed:
+
+```bash
+export AIMEE_OPENCODE_BIN=/path/to/opencode
+```
 
 ## Nehanda identity (system prompt)
 
@@ -64,14 +79,13 @@ bash scripts/start-native-services.sh status   # embedder, kb, server all ok
 ## How the stack works
 
 ```
-nehanda (TUI)
-  │  Unix domain socket
-  ▼
-nehanda-server  (~/.config/aimee/aimee-http.sock)
-  ├── nehanda-kb  (127.0.0.1:8741)
-  │       ├── postgres aimee_shared  (vectors, code graph, KB docs)
-  │       └── embedder  (127.0.0.1:8742 — local CPU, Qwen3-0.6B)
-  └── nehanda.asoba.co:8000  (EC2 — compacted chat payload only)
+nehanda (interactive)
+  ├── OpenCode on PATH → bridge :<port> → opencode attach → nehanda-server (UDS)
+  └── native C TUI (fallback) ───────────────────────────→ nehanda-server (UDS)
+        ├── nehanda-kb  (127.0.0.1:8741)
+        │       ├── postgres aimee_shared  (vectors, code graph, KB docs)
+        │       └── embedder  (127.0.0.1:8742 — local CPU, Qwen3-0.6B)
+        └── nehanda.asoba.co:8000  (EC2 — compacted chat payload only)
 ```
 
 KB, memory, embeddings, and code index never leave the machine. Only the final compacted prompt goes to EC2.
