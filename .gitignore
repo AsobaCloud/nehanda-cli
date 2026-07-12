@@ -37,3 +37,4 @@ test-*.log
 upstream/
 build/
 upstream/
+.aimee/
