@@ -1,25 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# nehanda-cli installer
-# Gets you from a fresh clone to a running `nehanda` session on macOS and Linux.
+# nehanda-cli installer — one command, then `nehanda`.
 #
-# What this does:
-#   1.  Check prerequisites
-#   2.  Fetch the aimee upstream subtree (if missing)
-#   3.  Apply nehanda patches to upstream
-#   4.  Install system dependencies (libpq, etc.)
-#   5.  Build the nehanda binary
-#   6.  Install the binary to ~/.local/bin
-#   7.  Start the Docker stack
-#   8.  Trust the server TLS cert (macOS keychain / Linux pin file)
-#   9.  Rotate bootstrap bearer token + wire client to server
-#   10. Register Nehanda as primary agent
-#   11. Register local Ollama delegates (auto-detected, skippable)
+# User path:
+#   git clone … && cd nehanda-cli && ./install.sh && nehanda
 #
-# Usage:
-#   ./install.sh
-#   NEHANDA_ENDPOINT=http://your-vllm:8000 ./install.sh   # custom endpoint
-#   SKIP_DELEGATES=1 ./install.sh                          # skip delegate setup
+# This script installs deps, builds binaries, configures PATH, starts services,
+# registers the EC2 agent, and verifies chat — no other steps required.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${NEHANDA_INSTALL_DIR:-$HOME/.local/bin}"
@@ -28,9 +15,7 @@ OS="$(uname -s)"
 
 NEHANDA_ENDPOINT="${NEHANDA_ENDPOINT:-http://nehanda.asoba.co:8000}"
 NEHANDA_MODEL="${NEHANDA_MODEL:-nehanda-rag-synthesis-27b}"
-NEHANDA_API_KEY="${NEHANDA_API_KEY:-none}"
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
   GREEN='\033[0;32m' YELLOW='\033[0;33m' RED='\033[0;31m' BOLD='\033[1m' RESET='\033[0m'
 else
@@ -41,324 +26,288 @@ warn() { echo -e "${YELLOW}!${RESET} $*"; }
 die()  { echo -e "${RED}✗ ERROR:${RESET} $*"; exit 1; }
 step() { echo -e "\n${BOLD}── $* ──${RESET}"; }
 
-need() {
-  local cmd="$1" hint="$2"
-  command -v "$cmd" &>/dev/null || die "'$cmd' not found. $hint"
-}
-
 echo -e "${BOLD}nehanda-cli installer${RESET}"
 echo "  repo:     $REPO_ROOT"
-echo "  binary:   $INSTALL_DIR/nehanda"
 echo "  endpoint: $NEHANDA_ENDPOINT"
 
-# ── Step 1: Prerequisites ─────────────────────────────────────────────────────
-step "Prerequisites"
+# ── macOS: Homebrew + build/runtime deps ──────────────────────────────────────
+install_deps_macos() {
+  if ! command -v brew &>/dev/null; then
+    step "Homebrew"
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    if [ -x /opt/homebrew/bin/brew ]; then
+      eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [ -x /usr/local/bin/brew ]; then
+      eval "$(/usr/local/bin/brew shellenv)"
+    fi
+    ok "Homebrew installed"
+  fi
 
-need git    "Install from https://git-scm.com"
-need cmake  "brew install cmake  (macOS)  |  apt install cmake  (Linux)"
-need make   "brew install make   (macOS)  |  apt install make   (Linux)"
-need docker "https://www.docker.com/products/docker-desktop/"
-need openssl "Pre-installed on macOS/Linux"
+  step "System dependencies (macOS)"
+  for pkg in cmake make git pkgconf postgresql@17 pgvector libpq curl sqlite zstd openssl@3; do
+    brew list "$pkg" &>/dev/null 2>&1 || brew install "$pkg"
+  done
 
-if ! command -v pkg-config &>/dev/null; then
+  export PATH="/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+  export PKG_CONFIG_PATH="/opt/homebrew/opt/libpq/lib/pkgconfig:\
+/opt/homebrew/opt/curl/lib/pkgconfig:\
+/opt/homebrew/opt/sqlite/lib/pkgconfig:\
+/opt/homebrew/opt/zstd/lib/pkgconfig:\
+/opt/homebrew/opt/openssl@3/lib/pkgconfig"
+
+  brew services start postgresql@17 2>/dev/null || true
+  for _ in $(seq 1 15); do
+    psql -lqt 2>/dev/null >/dev/null && break
+    sleep 1
+  done
+
+  if ! psql -lqt 2>/dev/null | cut -d'|' -f1 | tr -d ' ' | grep -qx aimee_shared; then
+    createdb aimee_shared 2>/dev/null || true
+  fi
+  psql -d aimee_shared -v ON_ERROR_STOP=0 -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm;' 2>/dev/null || true
+  psql -d aimee_shared -v ON_ERROR_STOP=0 -c 'CREATE EXTENSION IF NOT EXISTS vector;' 2>/dev/null || true
+
+  psql -d aimee_shared -c '\dx' 2>/dev/null | grep -q vector \
+    || die "pgvector not available — run: brew install pgvector && brew services restart postgresql@17"
+
+  ok "postgres + pgvector ready"
+}
+
+# ── Linux: system packages + postgres ─────────────────────────────────────────
+install_deps_linux() {
+  step "System dependencies (Linux)"
+  if [ -f "$REPO_ROOT/upstream/install-deps.sh" ]; then
+    bash "$REPO_ROOT/upstream/install-deps.sh"
+  else
+    die "upstream/install-deps.sh missing"
+  fi
+  ok "system dependencies ready"
+}
+
+# ── Upstream + patches ────────────────────────────────────────────────────────
+fetch_upstream() {
+  step "Upstream source"
+  if [ ! -f "$REPO_ROOT/upstream/CMakeLists.txt" ]; then
+    if ! git -C "$REPO_ROOT" remote get-url aimee-upstream &>/dev/null; then
+      git -C "$REPO_ROOT" remote add aimee-upstream https://github.com/RakuenSoftware/aimee.git
+    fi
+    git -C "$REPO_ROOT" fetch aimee-upstream
+    git -C "$REPO_ROOT" subtree add --prefix=upstream aimee-upstream main --squash \
+      -m "chore: fetch aimee upstream"
+  fi
+  ok "upstream present"
+
+  step "Patches"
+  for patch in "$REPO_ROOT/patches/"*.patch; do
+    [ -f "$patch" ] || continue
+    name="$(basename "$patch")"
+    if git -C "$REPO_ROOT/upstream" apply --check "$patch" 2>/dev/null; then
+      git -C "$REPO_ROOT/upstream" apply "$patch"
+      ok "applied $name"
+    else
+      ok "already applied $name"
+    fi
+  done
+}
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+build_binaries() {
+  step "Build"
+  mkdir -p "$BUILD_DIR"
+
+  local need_client=1 need_server_kb=1
+  if [ -f "$INSTALL_DIR/nehanda" ] && [ -f "$BUILD_DIR/upstream/nehanda" ] \
+     && [ "$BUILD_DIR/upstream/nehanda" -nt "$REPO_ROOT/CMakeLists.txt" ] \
+     && [ "$BUILD_DIR/upstream/nehanda" -nt "$REPO_ROOT/src/nehanda_auth.c" ]; then
+    need_client=0
+  fi
+  if [ -f "$REPO_ROOT/upstream/aimee-server" ] && [ -f "$REPO_ROOT/upstream/aimee-kb" ] \
+     && [ "$REPO_ROOT/upstream/aimee-server" -nt "$REPO_ROOT/upstream/src/server/server_main.c" ]; then
+    need_server_kb=0
+  fi
+
+  if [ "$need_client" -eq 1 ]; then
+    cmake -S "$REPO_ROOT" -B "$BUILD_DIR" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX="$HOME/.local" \
+      > "$BUILD_DIR/cmake-configure.log" 2>&1 \
+      || die "cmake configure failed — see $BUILD_DIR/cmake-configure.log"
+    cmake --build "$BUILD_DIR" --parallel "$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)" \
+      > "$BUILD_DIR/cmake-build.log" 2>&1 \
+      || die "client build failed — see $BUILD_DIR/cmake-build.log"
+    ok "client built"
+  else
+    ok "client up to date (skipped rebuild)"
+  fi
+
+  if [ "$need_server_kb" -eq 1 ]; then
+    local extra_l=""
+    [[ "$OS" == "Darwin" ]] && extra_l="-L/opt/homebrew/opt/openssl@3/lib -L/opt/homebrew/opt/zstd/lib -L/opt/homebrew/opt/libpq/lib"
+    make -C "$REPO_ROOT/upstream/src" ../aimee-server ../aimee-kb EXTRA_L_FLAGS="$extra_l" \
+      > "$BUILD_DIR/make-server-kb.log" 2>&1 \
+      || die "server/kb build failed — see $BUILD_DIR/make-server-kb.log"
+    ok "server + kb built"
+  else
+    ok "server + kb up to date (skipped rebuild)"
+  fi
+}
+
+install_binaries() {
+  step "Install binaries"
+  mkdir -p "$INSTALL_DIR"
+  cp "$BUILD_DIR/upstream/nehanda" "$INSTALL_DIR/nehanda"
+  cp "$REPO_ROOT/upstream/aimee-server" "$INSTALL_DIR/nehanda-server"
+  cp "$REPO_ROOT/upstream/aimee-kb" "$INSTALL_DIR/nehanda-kb"
+  chmod +x "$INSTALL_DIR/nehanda" "$INSTALL_DIR/nehanda-server" "$INSTALL_DIR/nehanda-kb"
+  # cp invalidates linker adhoc signatures; macOS Terminal kills with SIGKILL otherwise.
   if [[ "$OS" == "Darwin" ]]; then
-    warn "pkg-config not found — installing via Homebrew..."
-    brew install pkgconf
-  else
-    die "pkg-config not found. Install: apt install pkg-config  |  yum install pkgconfig"
+    codesign -s - -f "$INSTALL_DIR/nehanda" 2>/dev/null || true
+    codesign -s - -f "$INSTALL_DIR/nehanda-server" 2>/dev/null || true
+    codesign -s - -f "$INSTALL_DIR/nehanda-kb" 2>/dev/null || true
   fi
-fi
+  ok "installed to $INSTALL_DIR"
+}
 
-ok "Prerequisites satisfied"
+# ── PATH in shell profile ─────────────────────────────────────────────────────
+configure_path() {
+  step "Shell PATH"
+  local line="export PATH=\"$INSTALL_DIR:\$PATH\""
+  local pg_line=""
+  [[ "$OS" == "Darwin" ]] && pg_line='export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"'
 
-# ── Step 2: Upstream subtree ──────────────────────────────────────────────────
-step "Upstream source (aimee)"
+  for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    [ -f "$rc" ] || touch "$rc"
+    grep -qF "$INSTALL_DIR" "$rc" 2>/dev/null || echo "$line" >> "$rc"
+    if [ -n "$pg_line" ]; then
+      grep -qF 'postgresql@17/bin' "$rc" 2>/dev/null || echo "$pg_line" >> "$rc"
+    fi
+  done
 
-if [ ! -f "$REPO_ROOT/upstream/CMakeLists.txt" ]; then
-  echo "Fetching aimee upstream from GitHub (first time only, ~50 MB)..."
-  if ! git -C "$REPO_ROOT" remote get-url aimee-upstream &>/dev/null; then
-    git -C "$REPO_ROOT" remote add aimee-upstream https://github.com/RakuenSoftware/aimee.git
-  fi
-  git -C "$REPO_ROOT" fetch aimee-upstream
-  git -C "$REPO_ROOT" subtree add --prefix=upstream aimee-upstream main --squash \
-    -m "chore: fetch aimee upstream"
-  ok "Upstream fetched"
-else
-  ok "Upstream already present"
-fi
-
-# ── Step 3: Apply patches ─────────────────────────────────────────────────────
-step "Patches"
-
-for patch in "$REPO_ROOT/patches/"*.patch; do
-  [ -f "$patch" ] || continue
-  name="$(basename "$patch")"
-  if git -C "$REPO_ROOT/upstream" apply --check "$patch" 2>/dev/null; then
-    git -C "$REPO_ROOT/upstream" apply "$patch"
-    ok "Applied: $name"
-  else
-    ok "Already applied: $name"
-  fi
-done
-
-# ── Step 4: System dependencies ───────────────────────────────────────────────
-step "System dependencies"
-
-if [[ "$OS" == "Darwin" ]]; then
-  if ! brew list libpq &>/dev/null 2>&1; then
-    echo "Installing libpq via Homebrew..."
-    brew install libpq
-  fi
-  # Homebrew on Apple Silicon vs Intel
-  if [ -d /opt/homebrew/opt/libpq ]; then
-    LIBPQ_PC=/opt/homebrew/opt/libpq/lib/pkgconfig
-  else
-    LIBPQ_PC=/usr/local/opt/libpq/lib/pkgconfig
-  fi
-  export PKG_CONFIG_PATH="${LIBPQ_PC}:${PKG_CONFIG_PATH:-}"
-  ok "libpq available"
-fi
-
-if [[ "$OS" == "Linux" ]] && [ -f "$REPO_ROOT/upstream/install-deps.sh" ]; then
-  echo "Running upstream/install-deps.sh (may prompt for sudo)..."
-  bash "$REPO_ROOT/upstream/install-deps.sh"
-  ok "System dependencies installed"
-fi
-
-# ── Step 5: Build ─────────────────────────────────────────────────────────────
-step "Build"
-
-mkdir -p "$BUILD_DIR"
-cmake -S "$REPO_ROOT" -B "$BUILD_DIR" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX="$HOME/.local" \
-  > "$BUILD_DIR/cmake-configure.log" 2>&1 \
-  || die "cmake configure failed. See: $BUILD_DIR/cmake-configure.log"
-
-cmake --build "$BUILD_DIR" \
-  --parallel "$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)" \
-  > "$BUILD_DIR/cmake-build.log" 2>&1 \
-  || die "Build failed. See: $BUILD_DIR/cmake-build.log"
-
-ok "Build succeeded"
-
-# ── Step 6: Install binary ────────────────────────────────────────────────────
-step "Install binary"
-
-mkdir -p "$INSTALL_DIR"
-cp "$BUILD_DIR/upstream/nehanda" "$INSTALL_DIR/nehanda"
-chmod +x "$INSTALL_DIR/nehanda"
-ok "Installed: $INSTALL_DIR/nehanda"
-
-if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
-  warn "$INSTALL_DIR is not in PATH. Add to your shell profile:"
-  warn "  export PATH=\"$INSTALL_DIR:\$PATH\""
   export PATH="$INSTALL_DIR:$PATH"
-fi
+  [[ "$OS" == "Darwin" ]] && export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"
+  ok "PATH configured in ~/.zshrc and ~/.bashrc"
+}
 
-# ── Step 7: Docker stack ──────────────────────────────────────────────────────
-step "Docker stack"
+# ── Native services (embedder + kb + server) ─────────────────────────────────
+start_services() {
+  step "Native services"
+  mkdir -p "$HOME/.config/aimee"
 
-COMPOSE_FILE="$REPO_ROOT/upstream/compose.combined.yaml"
-
-if ! docker info &>/dev/null 2>&1; then
-  if [[ "$OS" == "Darwin" ]]; then
-    echo "Starting Docker Desktop..."
-    open -a Docker
-    for _ in $(seq 1 30); do
-      if docker info &>/dev/null 2>&1; then break; fi
-      sleep 3
-    done
-    docker info &>/dev/null 2>&1 || die "Docker Desktop did not start. Launch it manually and re-run."
-  else
-    die "Docker is not running. Start it: sudo systemctl start docker"
+  if [ -f "$HOME/.config/aimee/remote.conf" ]; then
+    mv "$HOME/.config/aimee/remote.conf" "$HOME/.config/aimee/remote.conf.docker-bak"
+    ok "removed stale Docker remote.conf"
   fi
-fi
 
-docker compose -f "$COMPOSE_FILE" up -d --wait 2>&1 \
-  | grep -E "Started|Healthy|healthy|Warning|Error" || true
+  export AIMEE_LLM_STUB=1
+  bash "$REPO_ROOT/scripts/install-native-services.sh"
+  ok "embedder :8742, kb :8741, server UDS running"
+}
 
-# Wait for server (up to 60s)
-SERVER_UP=0
-for _ in $(seq 1 20); do
-  if curl -sk --max-time 3 https://localhost:8743/v1/health &>/dev/null; then
-    SERVER_UP=1; break
+# ── Nehanda system prompt (overrides upstream AIMEE engineer persona) ─────────
+install_prompt() {
+  step "System prompt"
+  mkdir -p "$HOME/.config/aimee/personas"
+  cp "$REPO_ROOT/config/webchat_system_prompt.txt" "$HOME/.config/aimee/webchat_system_prompt.txt"
+  cp "$REPO_ROOT/config/personas/engineer.md" "$HOME/.config/aimee/personas/engineer.md"
+  ok "Nehanda identity prompt installed"
+}
+
+# ── EC2 agent ─────────────────────────────────────────────────────────────────
+register_agent() {
+  step "Primary agent"
+  curl -sf "${NEHANDA_ENDPOINT}/v1/models" | grep -q "$NEHANDA_MODEL" \
+    || die "EC2 unreachable at $NEHANDA_ENDPOINT"
+
+  nehanda agent add nehanda "$NEHANDA_ENDPOINT" "$NEHANDA_MODEL" \
+    --provider openai --no-tools \
+    --roles "code,review,explain,refactor,draft,execute,summarize,plan,validate,diagnose" \
+    --default 2>&1 | grep -Ev '^$' || true
+
+  python3 - <<'PY'
+import json, os
+p = os.path.expanduser("~/.config/aimee/agents.json")
+if not os.path.isfile(p):
+    raise SystemExit("agents.json missing after agent add")
+with open(p) as f:
+    d = json.load(f)
+for a in d.get("agents", []):
+    if a.get("name") == "nehanda":
+        a["tools_enabled"] = False
+with open(p, "w") as f:
+    json.dump(d, f, indent="\t")
+PY
+
+  nehanda config set provider nehanda 2>&1 | grep -Ev '^$' || true
+  ok "nehanda → $NEHANDA_ENDPOINT"
+}
+
+run_with_timeout() {
+  local secs="$1"; shift
+  "$@" &
+  local pid=$!
+  ( sleep "$secs" && kill "$pid" 2>/dev/null ) &
+  local killer=$!
+  wait "$pid" 2>/dev/null
+  local rc=$?
+  kill "$killer" 2>/dev/null
+  wait "$killer" 2>/dev/null
+  return "$rc"
+}
+
+# ── Hooks (best-effort — must not block install) ──────────────────────────────
+install_hooks() {
+  step "Plan hooks"
+  local hooks_share="$HOME/.local/share/nehanda-cli/hooks"
+  mkdir -p "$hooks_share"
+  for f in "$REPO_ROOT/hooks/"*.sh "$REPO_ROOT/hooks/nehanda-plan"; do
+    [ -f "$f" ] || continue
+    cp "$f" "$hooks_share/"
+    chmod +x "$hooks_share/$(basename "$f")"
+  done
+  cp "$REPO_ROOT/hooks/nehanda-plan" "$INSTALL_DIR/nehanda-plan"
+  chmod +x "$INSTALL_DIR/nehanda-plan"
+
+  local hooks_out=""
+  hooks_out="$(run_with_timeout 10 nehanda hooks list 2>/dev/null)" || true
+  if echo "$hooks_out" | grep -q require_plan_approval; then
+    ok "hooks already registered"
+    return
   fi
-  sleep 3
-done
-[ "$SERVER_UP" -eq 1 ] || die "Server not healthy after 60s. Check logs:
-  docker compose -f $COMPOSE_FILE logs aimee-server-kb"
-ok "Stack healthy"
+  run_with_timeout 15 nehanda hooks add PreToolUse --matcher "Edit|Write|MultiEdit" \
+    --command "bash $hooks_share/require_plan_approval.sh" 2>/dev/null || true
+  run_with_timeout 15 nehanda hooks add PostToolUse --matcher "Edit|Write|MultiEdit" \
+    --command "bash $hooks_share/track_dirty.sh" 2>/dev/null || true
+  run_with_timeout 15 nehanda hooks add PostToolUse --matcher "Bash" \
+    --command "bash $hooks_share/track_validation.sh" 2>/dev/null || true
+  ok "hooks installed"
+}
 
-# ── Step 8: TLS certificate ───────────────────────────────────────────────────
-step "TLS certificate"
+# ── Verify user path ──────────────────────────────────────────────────────────
+verify() {
+  step "Verify"
+  local out
+  out="$(nehanda chat "Reply with exactly: NEHANDA_OK" 2>&1)" || die "nehanda chat failed"
+  echo "$out" | grep -qi nehanda || die "nehanda chat returned unexpected output"
+  ok "nehanda chat works"
+}
 
-CERT_FILE="/tmp/nehanda-server-$(date +%s).pem"
-openssl s_client -connect localhost:8743 -showcerts 2>/dev/null \
-  | openssl x509 > "$CERT_FILE" 2>/dev/null || true
+# ── Main ──────────────────────────────────────────────────────────────────────
+case "$OS" in
+  Darwin) install_deps_macos ;;
+  Linux)  install_deps_linux ;;
+  *)      die "unsupported OS: $OS" ;;
+esac
 
-if [ -s "$CERT_FILE" ]; then
-  if [[ "$OS" == "Darwin" ]]; then
-    FINGERPRINT="$(openssl x509 -in "$CERT_FILE" -noout -fingerprint -sha256 2>/dev/null \
-      | cut -d= -f2 | tr -d ':')"
-    ALREADY_TRUSTED=0
-    security find-certificate -Z -a /Library/Keychains/System.keychain 2>/dev/null \
-      | grep -qi "$FINGERPRINT" 2>/dev/null && ALREADY_TRUSTED=1 || true
+fetch_upstream
+build_binaries
+install_binaries
+configure_path
+start_services
+install_prompt
+register_agent
+install_hooks
+verify
 
-    if [ "$ALREADY_TRUSTED" -eq 1 ]; then
-      ok "TLS cert already trusted"
-    else
-      echo "Trusting server TLS certificate in macOS keychain (requires your password)..."
-      if sudo security add-trusted-cert -d -r trustRoot \
-           -k /Library/Keychains/System.keychain "$CERT_FILE"; then
-        ok "TLS cert trusted"
-      else
-        warn "Could not auto-trust cert. Run manually:"
-        warn "  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $CERT_FILE"
-      fi
-    fi
-
-  elif [[ "$OS" == "Linux" ]]; then
-    mkdir -p "$HOME/.config/aimee"
-    cp "$CERT_FILE" "$HOME/.config/aimee/remote-ca.pem"
-    ok "TLS cert pinned to ~/.config/aimee/remote-ca.pem"
-  fi
-  rm -f "$CERT_FILE"
-fi
-
-# ── Step 9: Bearer token + client wiring ─────────────────────────────────────
-step "Client configuration"
-
-TOKEN_STORE="$HOME/.config/aimee/nehanda-install-token"
-TOKEN=""
-
-# Try bootstrap rotation first (works on a fresh stack)
-ROTATE_RESP="$(curl -sk -X POST \
-  -H 'Authorization: Bearer aimee-local-dev' \
-  https://localhost:8743/v1/api/rotate_bearer 2>/dev/null || true)"
-
-if echo "$ROTATE_RESP" | grep -q '"bearer_token"'; then
-  TOKEN="$(echo "$ROTATE_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['bearer_token'])" 2>/dev/null || true)"
-  # Persist for idempotent re-runs
-  mkdir -p "$(dirname "$TOKEN_STORE")"
-  echo "$TOKEN" > "$TOKEN_STORE"
-  chmod 600 "$TOKEN_STORE"
-  ok "Bearer token obtained and stored"
-elif [ -f "$TOKEN_STORE" ]; then
-  # Re-run: token was already rotated, recover from stored copy
-  TOKEN="$(cat "$TOKEN_STORE")"
-  ok "Bearer token recovered from previous install"
-else
-  warn "Could not obtain bearer token — bootstrap already used and no stored token found."
-  warn "Restart the stack and re-run: docker compose -f $COMPOSE_FILE down -v && ./install.sh"
-fi
-
-if [ -n "$TOKEN" ]; then
-  nehanda remote set https://localhost:8743 "$TOKEN" 2>&1 \
-    | grep -Ev "^$|TLS: verified" || true
-  ok "Client connected: nehanda -> https://localhost:8743"
-fi
-
-# ── Step 10: Nehanda as primary ───────────────────────────────────────────────
-step "Primary agent"
-
-nehanda agent add nehanda "$NEHANDA_ENDPOINT" "$NEHANDA_MODEL" \
-  --provider openai \
-  --key "$NEHANDA_API_KEY" \
-  --roles "code,review,explain,refactor,draft,execute,summarize,plan,validate,diagnose" \
-  --default 2>&1 | grep -Ev "^$" || true
-
-nehanda config set provider nehanda 2>&1 | grep -Ev "^$" || true
-ok "Nehanda registered as primary → $NEHANDA_ENDPOINT"
-
-# ── Step 11: Local Ollama delegates ───────────────────────────────────────────
-if [ "${SKIP_DELEGATES:-0}" != "1" ]; then
-  step "Local Ollama delegates"
-
-  if curl -s --max-time 3 http://localhost:11434/api/tags &>/dev/null; then
-    MODELS="$(curl -s http://localhost:11434/api/tags \
-      | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for m in data.get('models', []):
-    print(m['name'])
-" 2>/dev/null || true)"
-    if [ -n "$MODELS" ]; then
-      while IFS= read -r model; do
-        [ -z "$model" ] && continue
-        slug="ollama-local-$(echo "$model" | tr ':/' '--')"
-        nehanda agent local "$slug" http://localhost:11434/v1 \
-          --model "$model" --slots 2 --ctx 16384 2>&1 | grep -Ev "^$|warning" || true
-        ok "Delegate: $model"
-      done <<< "$MODELS"
-    else
-      warn "Ollama running but no models found. Pull one: ollama pull llama3"
-    fi
-  else
-    warn "Ollama not running locally — skipping. Start with: ollama serve"
-    warn "Re-register delegates anytime: nehanda agent local ollama-local http://localhost:11434/v1 --model llama3:latest"
-  fi
-fi
-
-# ── Step 12: Install plan enforcement hooks ───────────────────────────────────
-step "Plan enforcement hooks"
-
-HOOKS_SHARE="$HOME/.local/share/nehanda-cli/hooks"
-mkdir -p "$HOOKS_SHARE"
-
-# Copy hooks from repo
-for f in "$REPO_ROOT/hooks/"*.sh "$REPO_ROOT/hooks/nehanda-plan"; do
-  [ -f "$f" ] || continue
-  cp "$f" "$HOOKS_SHARE/"
-  chmod +x "$HOOKS_SHARE/$(basename "$f")"
-done
-
-# Install nehanda-plan CLI to PATH
-cp "$REPO_ROOT/hooks/nehanda-plan" "$INSTALL_DIR/nehanda-plan"
-chmod +x "$INSTALL_DIR/nehanda-plan"
-ok "Hooks installed to $HOOKS_SHARE"
-ok "nehanda-plan CLI installed to $INSTALL_DIR/nehanda-plan"
-
-# Register hooks with the aimee server
-if nehanda hooks list 2>/dev/null | grep -q "require_plan_approval" 2>/dev/null; then
-  ok "Plan enforcement hooks already registered"
-else
-  nehanda hooks add PreToolUse \
-    --matcher "Edit|Write|MultiEdit" \
-    --command "bash $HOOKS_SHARE/require_plan_approval.sh" 2>&1 | grep -Ev "^$" || true
-
-  nehanda hooks add PostToolUse \
-    --matcher "Edit|Write|MultiEdit" \
-    --command "bash $HOOKS_SHARE/track_dirty.sh" 2>&1 | grep -Ev "^$" || true
-
-  nehanda hooks add PostToolUse \
-    --matcher "Bash" \
-    --command "bash $HOOKS_SHARE/track_validation.sh" 2>&1 | grep -Ev "^$" || true
-
-  ok "Plan enforcement hooks registered"
-fi
-
-# ── Complete ──────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}──────────────────────────────────────────────${RESET}"
-echo -e "${GREEN}✓ nehanda-cli is ready${RESET}"
-echo ""
-echo "Add to your shell profile (~/.zshrc or ~/.bashrc):"
-echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
-if [ -n "${TOKEN:-}" ]; then
-  echo "  export AIMEE_SERVER_URL=https://localhost:8743"
-  echo "  export AIMEE_SERVER_TOKEN=$TOKEN"
-fi
-echo ""
-echo "Start a session:"
-echo "  nehanda"
-echo ""
-echo "Plan-enforced workflow:"
-echo "  nehanda-plan start   # create a plan"
-echo "  nehanda-plan approve # approve it"
-echo "  nehanda              # edits are now gated by plan + TDD"
-echo "  nehanda-plan clear   # done"
-echo ""
-echo "To add remote LAN delegates (Windows Ollama on AsobaCorp-1.local):"
-echo "  nehanda agent local ollama-remote-coder http://AsobaCorp-1.local:11434/v1 \\"
-echo "    --model deepseek-coder-v2:latest --slots 2 --ctx 32768"
+echo -e "${GREEN}✓ Ready${RESET} — run: ${BOLD}nehanda${RESET}"

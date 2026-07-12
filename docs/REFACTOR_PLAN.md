@@ -32,11 +32,14 @@ Every phase has a **pass/fail gate**. Nothing merges until green.
 
 | Component | Status |
 |---|---|
-| **Phase 0 smoke test** | **PASSED** on macOS — `scripts/phase0-smoke.sh` (steps 0.1–0.9) |
-| Native build | Client + `nehanda-server` + `nehanda-kb` build on Darwin (patches 001–002) |
+| **Phase 0** | **PASSED** on macOS — `nehanda` TUI + threaded chat verified |
+| **Phase 0 smoke test** | `scripts/phase0-smoke.sh` (steps 0.1–0.9) |
+| Native build | Client + `nehanda-server` + `nehanda-kb` on Darwin (patches 001–004) |
 | Native embedder | `scripts/start-embedder.sh` on `:8742` (stub mode for smoke; full GGUF for real ingest) |
-| `install.sh` | Still Docker + TLS + bearer token — **not yet rewritten** (Phase 2) |
-| Plan hooks | Scripts exist; not wired via plugin manifest |
+| `install.sh` | **Rewritten** — one-command native path (deps, build, services, prompt, agent, verify) |
+| Nehanda system prompt | `config/webchat_system_prompt.txt` installed by `install.sh` |
+| Native services | `scripts/start-native-services.sh`, `scripts/install-native-services.sh`, `service/*.plist` |
+| Plan hooks | Best-effort via `install.sh` (non-blocking timeouts) |
 | CI | Not gated yet (Phase 5) |
 
 ---

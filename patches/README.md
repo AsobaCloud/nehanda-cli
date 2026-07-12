@@ -38,3 +38,5 @@ git checkout .   # revert — the patch is the record, not the upstream file
 |---|---|
 | `001-macos-sock-compat.patch` | macOS `SOCK_CLOEXEC` / `accept4()` shims in `platform_ipc.c` |
 | `002-macos-native-build.patch` | macOS Makefile + compile fixes; pthread stack guards for ~722KB `config_t`; KB HTTP listener stack; provider chat respects `tools_enabled` (EC2 vLLM) |
+| `003-nehanda-chat-native-fallback.patch` | `nehanda chat` falls back to native TUI when OpenCode is not installed (same as bare `nehanda`) |
+| `004-qwen-reasoning-strip-fix.patch` | Fix flaky "no content in response" — Qwen reasoning scaffold stripping no longer discards valid answers |

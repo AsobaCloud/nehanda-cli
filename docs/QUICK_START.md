@@ -17,7 +17,13 @@ cd nehanda-cli
 ./install.sh
 ```
 
-Builds three binaries (`nehanda`, `nehanda-server`, `nehanda-kb`), installs postgres + pgvector, starts local services, and registers Nehanda as the primary agent.
+Builds three binaries (`nehanda`, `nehanda-server`, `nehanda-kb`), installs postgres + pgvector, starts local services, installs the Nehanda system prompt, registers the EC2 agent, and verifies chat — one command, no follow-up steps.
+
+```bash
+./install.sh    # ~40s on re-run with cached build; first cold compile takes longer
+nehanda         # interactive native TUI
+nehanda chat "…"  # one-shot message
+```
 
 Add to your shell profile:
 ```bash
@@ -29,6 +35,30 @@ export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"   # macOS only
 
 ```bash
 nehanda
+```
+
+The native TUI starts when OpenCode is not installed (`nehanda chat` uses the same fallback). Type `/quit` to exit.
+
+## Nehanda identity (system prompt)
+
+`install.sh` installs Nehanda-specific prompts so the model identifies correctly:
+
+| File | Installed to |
+|---|---|
+| `config/webchat_system_prompt.txt` | `~/.config/aimee/webchat_system_prompt.txt` |
+| `config/personas/engineer.md` | `~/.config/aimee/personas/engineer.md` |
+
+These override the upstream AIMEE engineer persona. Nehanda presents as a fine-tuned Qwen3.6 27B multimodal assistant with strengths in technical writing, deep research, coding, document review, and vision (images/diagrams the user provides).
+
+To customize identity or capabilities, edit the files in `config/` and re-run `./install.sh`, or copy them into `~/.config/aimee/` directly. Start a new session after changes.
+
+## Native services (optional persistence)
+
+`install.sh` starts embedder, kb, and server for the current session. To install launchd agents that survive reboot:
+
+```bash
+bash scripts/install-native-services.sh
+bash scripts/start-native-services.sh status   # embedder, kb, server all ok
 ```
 
 ## How the stack works
