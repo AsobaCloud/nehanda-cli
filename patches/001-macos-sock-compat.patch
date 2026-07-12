@@ -1,7 +1,7 @@
-diff --git a/upstream/src/posix/platform_ipc.c b/upstream/src/posix/platform_ipc.c
+diff --git a/src/posix/platform_ipc.c b/src/posix/platform_ipc.c
 index 33a0d742..ab6bd60b 100644
---- a/upstream/src/posix/platform_ipc.c
-+++ b/upstream/src/posix/platform_ipc.c
+--- a/src/posix/platform_ipc.c
++++ b/src/posix/platform_ipc.c
 @@ -13,6 +13,31 @@
  #include <sys/un.h>
  #include <unistd.h>
