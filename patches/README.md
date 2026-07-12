@@ -36,4 +36,5 @@ git checkout .   # revert — the patch is the record, not the upstream file
 
 | File | Description |
 |---|---|
-| *(none yet)* | Add patches as upstream modifications are needed |
+| `001-macos-sock-compat.patch` | macOS `SOCK_CLOEXEC` / `accept4()` compat |
+| `002-nehanda-monolithic.patch` | In-process SQLite hooks for unified nehanda binary |
