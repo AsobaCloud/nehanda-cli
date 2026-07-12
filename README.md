@@ -45,9 +45,13 @@ See [docs/SELF_HOST.md](docs/SELF_HOST.md) for running with a local model instea
 
 ## License
 
-AGPL-3.0. See [LICENSE](LICENSE).
+AGPL-3.0. See [LICENSE](LICENSE) and [LICENSE.md](LICENSE.md).
 
 This project is a fork of [aimee](https://github.com/RakuenSoftware/aimee) (AGPL-3.0, Copyright © 2026 The aimee authors). See [NOTICE](NOTICE) for third-party attributions.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for how to report vulnerabilities.
 
 ## Upstream
 
