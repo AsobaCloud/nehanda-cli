@@ -4,8 +4,10 @@
 
 - macOS or Linux
 - cmake 3.16+, make, git, C11 compiler
-- Docker (for the server stack)
-- Ollama (optional — for local delegate workers)
+- Homebrew (macOS) or apt/dnf (Linux)
+- Ollama (optional — for local and LAN delegate workers)
+
+**No Docker required.** `install.sh` handles postgres, pgvector, and all build dependencies.
 
 ## Install
 
@@ -15,13 +17,12 @@ cd nehanda-cli
 ./install.sh
 ```
 
-`install.sh` does everything: builds the binary, starts the Docker stack, trusts the server TLS cert, rotates the bearer token, and registers Nehanda as the primary agent. On completion it prints the `export` lines to add to your shell profile.
+Builds three binaries (`nehanda`, `nehanda-server`, `nehanda-kb`), installs postgres + pgvector, starts local services, and registers Nehanda as the primary agent.
 
-Add to your shell profile if not already there:
+Add to your shell profile:
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
-export AIMEE_SERVER_URL=https://localhost:8743
-export AIMEE_SERVER_TOKEN=<token printed by install.sh>
+export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"   # macOS only
 ```
 
 ## Start a session
@@ -30,41 +31,44 @@ export AIMEE_SERVER_TOKEN=<token printed by install.sh>
 nehanda
 ```
 
-## Use with ona-code (optional — adds SDLC workflow enforcement)
+## How the stack works
 
-ona-code connects to nehanda-server's OpenAI-compatible endpoint and adds a 6-phase state machine (plan → implement → test → verify) on top:
+```
+nehanda (TUI)
+  │  Unix domain socket
+  ▼
+nehanda-server  (~/.config/aimee/aimee-http.sock)
+  ├── nehanda-kb  (127.0.0.1:8741)
+  │       ├── postgres aimee_shared  (vectors, code graph, KB docs)
+  │       └── embedder  (127.0.0.1:8742 — local CPU, Qwen3-0.6B)
+  └── nehanda.asoba.co:8000  (EC2 — compacted chat payload only)
+```
+
+KB, memory, embeddings, and code index never leave the machine. Only the final compacted prompt goes to EC2.
+
+## Verify the full stack
 
 ```bash
-mkdir -p ~/.ona && cat > ~/.ona/settings.json << 'EOF'
-{
-  "model_config": {
-    "provider": "openai_compatible",
-    "model_id": "gpt_4o",
-    "base_url": "https://localhost:8743/v1"
-  }
-}
-EOF
-cd /path/to/ona-code && npm start
+bash scripts/phase0-smoke.sh
 ```
+
+Steps 0.1–0.9 must all pass. A passing client connection with failing KB (step 0.7) is a failed install.
 
 ## Register Ollama delegates (optional)
 
-Local Mac delegates:
 ```bash
+# Local Mac
 nehanda agent local ollama-local http://localhost:11434/v1 \
   --model llama3:latest --slots 2 --ctx 16384
-```
 
-Remote LAN delegates (Windows machine):
-```bash
+# Remote LAN (Windows machine)
 nehanda agent local ollama-remote-coder http://AsobaCorp-1.local:11434/v1 \
   --model deepseek-coder-v2:latest --slots 2 --ctx 32768
 ```
-
-See `docs/SELF_HOST.md` for full delegate setup options.
 
 ## Index your project
 
 ```bash
 nehanda workspace add ~/Workbench/your-project
+curl -sf 'http://127.0.0.1:8741/v1/health?status=1' | grep '"available":true'
 ```
