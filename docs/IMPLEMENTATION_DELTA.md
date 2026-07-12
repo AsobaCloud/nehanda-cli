@@ -25,18 +25,17 @@ These come from the upstream aimee subtree and require no nehanda-cli code:
 
 ## Gap 1 — ~~Build does not produce a working binary yet~~ ✓ RESOLVED
 
-**Resolved:** Binary builds and is installed at `~/.local/bin/nehanda`.
+**Resolved:** Monolithic binary builds to `build/nehanda` (SQLite3 + OpenSSL only, no libpq/Docker).
 
-- CMake target name confirmed as `aimee` (renamed to `nehanda` by our CMakeLists)
-- macOS compat patch created at `patches/001-macos-sock-compat.patch` — fixes `SOCK_CLOEXEC`, `SOCK_NONBLOCK`, and `accept4()` which don't exist on macOS
-- `test_db2_pool` test binary still fails to build (missing `log.h` include path in the test harness) — does not affect runtime
+- `CMakeLists.txt` compiles a single `nehanda` target with `NEHANDA_BUILD=1`
+- `patches/002-nehanda-monolithic.patch` hooks unified storage, in-process dispatch, token validation
+- `patches/001-macos-sock-compat.patch` — macOS socket compat
 
 **To build from source:**
 ```bash
-PKG_CONFIG_PATH="/opt/homebrew/opt/libpq/lib/pkgconfig:$PKG_CONFIG_PATH" \
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel $(sysctl -n hw.logicalcpu)
-cp build/upstream/nehanda ~/.local/bin/nehanda
+cp build/nehanda ~/.local/bin/nehanda
 ```
 
 ---
