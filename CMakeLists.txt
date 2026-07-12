@@ -3,9 +3,11 @@ project(nehanda-cli C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS ON)
 
-add_compile_definitions(NEHANDA_BUILD=1)
-
+# ── Version ───────────────────────────────────────────────────────────────────
+# Format: <nehanda-cli version>+aimee-<upstream commit>
+# Pass -DNEHANDA_VERSION_STR=vX.Y.Z at release time.
 if(NOT DEFINED NEHANDA_VERSION_STR)
   execute_process(
     COMMAND git -C ${CMAKE_SOURCE_DIR} describe --tags --always --dirty
@@ -19,61 +21,30 @@ if(NOT DEFINED NEHANDA_VERSION_STR)
 endif()
 add_compile_definitions(NEHANDA_VERSION_STR="${NEHANDA_VERSION_STR}")
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SQLITE3 REQUIRED sqlite3)
-pkg_check_modules(OPENSSL REQUIRED openssl)
+# ── Upstream aimee build ──────────────────────────────────────────────────────
+# Pull in all upstream targets. NEHANDA_BUILD=1 lets upstream code
+# #ifdef around anything we override.
+add_compile_definitions(NEHANDA_BUILD=1)
+add_subdirectory(upstream)
 
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/upstream/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/upstream/src/headers
-    ${SQLITE3_INCLUDE_DIRS}
-    ${OPENSSL_INCLUDE_DIRS}
+# ── nehanda-cli additions ─────────────────────────────────────────────────────
+add_library(nehanda_extensions STATIC
+  src/nehanda_auth.c           # device-flow login, session token storage
+  src/nehanda_config.c         # NEHANDA_API_KEY + gateway URL resolution
+  src/nehanda_header_inject.c  # wraps upstream agent_http.c, injects auth header
 )
 
-set(NEHANDA_SOURCES
-    src/nehanda_config.c
-    src/nehanda_auth.c
-    src/nehanda_header_inject.c
-    src/nehanda_unified_storage.c
-    src/nehanda_inprocess.c
-    src/nehanda_token.c
-    upstream/src/acp_server.c
-    upstream/src/cli_main.c
-    upstream/src/aimee_client.c
-    upstream/src/aimee_home.c
-    upstream/src/aimee_tls.c
-    upstream/src/conversation.c
-    upstream/src/conversation_context.c
-    upstream/src/compact.c
-    upstream/src/config.c
-    upstream/src/dstr.c
-    upstream/src/events.c
-    upstream/src/diff.c
-    upstream/src/db1/db.c
-    upstream/src/db1/db_schema.c
-    upstream/src/db1/runtime_state.c
-    upstream/src/db1/session_state.c
-    upstream/src/db1/user_memory.c
-    upstream/src/db1/server_sessions.c
-    upstream/src/db1/local_operator.c
-    upstream/src/db2/entity_nodes.c
-    upstream/src/db2/entity_edges.c
-    upstream/src/db2/kb_docs.c
-    upstream/src/db2/memory_vectors.c
-    upstream/src/db2/canonical_index.c
-    upstream/src/db2/code_index.c
-    upstream/src/db2/code_projection.c
-    upstream/src/db2/stopwords.c
+target_include_directories(nehanda_extensions PRIVATE
+  upstream/src
+  upstream/src/headers
 )
 
-add_executable(nehanda ${NEHANDA_SOURCES})
+# Rename the upstream 'aimee' binary to 'nehanda' and link our extensions.
+if(TARGET aimee)
+  set_target_properties(aimee PROPERTIES OUTPUT_NAME "nehanda")
+  target_link_libraries(aimee PRIVATE nehanda_extensions)
+endif()
 
-target_link_libraries(nehanda
-    PRIVATE
-    ${SQLITE3_LIBRARIES}
-    ${OPENSSL_LIBRARIES}
-    m
-)
-
-install(TARGETS nehanda DESTINATION bin)
+# ── Install ───────────────────────────────────────────────────────────────────
+install(TARGETS aimee DESTINATION bin)
+install(FILES config/nehanda.yaml.example DESTINATION share/nehanda-cli)
