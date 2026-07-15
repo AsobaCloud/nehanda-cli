@@ -1,0 +1,58 @@
+diff --git a/src/posix/agent_runtime.c b/src/posix/agent_runtime.c
+index 29cd7852..7a76b921 100644
+--- a/src/posix/agent_runtime.c
++++ b/src/posix/agent_runtime.c
+@@ -611,22 +611,37 @@ native_provider_http:
+       return -1;
+    }
+ 
+-   /* Build tools JSON (reused each turn, format depends on provider) */
+-   cJSON *tools = chatgpt     ? build_tools_array_responses()
+-                  : anthropic ? build_tools_array_anthropic()
+-                              : build_tools_array(); /* OpenAI format; Gemini driver converts */
+-   agent_tools_filter_for_role(tools, role);
+-   int inject_respond_tool = agent_should_inject_respond_tool(agent, role);
+-   if (inject_respond_tool)
+-      agent_tools_append_delegate_respond_tool(tools);
+-   agent_tools_set_dispatch_role(role);
+-   /* Provider-specific schema sanitization. Only fires for local llama.cpp-style
+-    * providers (including Qwen served behind an OpenAI-compatible endpoint)
+-    * and ollama (others pass through). Operates on the OpenAI-format
+-    * builder output — chatgpt's Responses API and the anthropic-specific
+-    * builder already shape the schema for their providers. */
+-   if (!chatgpt && !anthropic)
+-      agent_tools_sanitize_for_agent(tools, agent);
++   /* Build tools JSON (reused each turn, format depends on provider).
++    * Respect tools_enabled: when the agent has tools disabled (e.g. Nehanda
++    * vLLM registered with --no-tools), send NULL so the request builder omits
++    * the tools array entirely.  Sending tool definitions to a model that isn't
++    * configured for tool-calling causes it to either error or emit free-form
++    * tool call text the rescue parser can't reliably recover, producing
++    * spurious request failures. */
++   cJSON *tools = NULL;
++   int inject_respond_tool = 0;
++   if (agent->tools_enabled)
++   {
++      tools = chatgpt     ? build_tools_array_responses()
++              : anthropic ? build_tools_array_anthropic()
++                          : build_tools_array(); /* OpenAI format; Gemini driver converts */
++      agent_tools_filter_for_role(tools, role);
++      inject_respond_tool = agent_should_inject_respond_tool(agent, role);
++      if (inject_respond_tool)
++         agent_tools_append_delegate_respond_tool(tools);
++      agent_tools_set_dispatch_role(role);
++      /* Provider-specific schema sanitization. Only fires for local llama.cpp-style
++       * providers (including Qwen served behind an OpenAI-compatible endpoint)
++       * and ollama (others pass through). Operates on the OpenAI-format
++       * builder output — chatgpt's Responses API and the anthropic-specific
++       * builder already shape the schema for their providers. */
++      if (!chatgpt && !anthropic)
++         agent_tools_sanitize_for_agent(tools, agent);
++   }
++   else
++   {
++      agent_tools_set_dispatch_role(role); /* still needed for policy/dispatch state */
++   }
+ 
+    /* Gemini prompt cache: try to create a cached-content resource for the system prompt.
+     * Falls back silently to uncached requests if creation fails. */

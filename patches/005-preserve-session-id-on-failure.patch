@@ -1,0 +1,19 @@
+diff --git a/src/cli_tui_opencode_v2b.c b/src/cli_tui_opencode_v2b.c
+index b51ea54a..5c9a57c6 100644
+--- a/src/cli_tui_opencode_v2b.c
++++ b/src/cli_tui_opencode_v2b.c
+@@ -307,8 +307,12 @@ static cJSON *opencode_v2_run_turn(opencode_v2_bridge_t *b, opencode_v2_turn_t *
+    b->active_stream_fd = -1;
+    if (rc == 0 && next_provider[0])
+       snprintf(b->provider_session_id, sizeof(b->provider_session_id), "%s", next_provider);
+-   else if (rc != 0 && rc != BUILTIN_CHAT_SEND_TRANSPORT_ERROR && !aborted)
+-      b->provider_session_id[0] = '\0';
++   /* Do NOT clear provider_session_id on application errors (rc != 0 but not a
++    * transport error). The server-side session state is still intact; clearing
++    * the id here causes the next turn to start a brand-new session, losing all
++    * conversation history. Only transport errors (server unreachable / connection
++    * dropped) warrant a session reset — and those are already handled by the
++    * BUILTIN_CHAT_SEND_TRANSPORT_ERROR branch above. */
+    if (reply && (!turn->assistant_text || !turn->assistant_text[0]))
+    {
+       free(turn->assistant_text);
