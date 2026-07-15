@@ -40,3 +40,7 @@ git checkout .   # revert — the patch is the record, not the upstream file
 | `002-macos-native-build.patch` | macOS Makefile + compile fixes; pthread stack guards for ~722KB `config_t`; KB HTTP listener stack; provider chat respects `tools_enabled` (EC2 vLLM) |
 | `003-nehanda-chat-native-fallback.patch` | `nehanda chat` falls back to native TUI when OpenCode is not installed (same as bare `nehanda`) |
 | `004-qwen-reasoning-strip-fix.patch` | Fix flaky "no content in response" — Qwen reasoning scaffold stripping no longer discards valid answers |
+| `005-preserve-session-id-on-failure.patch` | Don't clear `provider_session_id` on application errors — preserves conversation history across failed turns |
+| `006-tools-enabled-gate-primary-session.patch` | Gate tools array construction on `agent->tools_enabled` in the primary session loop — stops tool definitions being sent to Nehanda vLLM (`--no-tools`) |
+| `007-vision-payload.patch` | Vision pipeline wiring: extract and forward base64 image attachments from OpenCode messages through the full agent stack to vLLM |
+| `008-vision-opencode-field-names.patch` | Fix vision hallucination: OpenCode 1.x sends `mime`/`url` fields in image parts; extractor was checking `mediaType`/`data`. Images were silently dropped, causing text-only requests and hallucinated descriptions. Patch accepts both field name variants. |
