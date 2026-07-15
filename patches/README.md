@@ -44,3 +44,4 @@ git checkout .   # revert — the patch is the record, not the upstream file
 | `006-tools-enabled-gate-primary-session.patch` | Gate tools array construction on `agent->tools_enabled` in the primary session loop — stops tool definitions being sent to Nehanda vLLM (`--no-tools`) |
 | `007-vision-payload.patch` | Vision pipeline wiring: extract and forward base64 image attachments from OpenCode messages through the full agent stack to vLLM |
 | `008-vision-opencode-field-names.patch` | Fix vision hallucination: OpenCode 1.x sends `mime`/`url` fields in image parts; extractor was checking `mediaType`/`data`. Images were silently dropped, causing text-only requests and hallucinated descriptions. Patch accepts both field name variants. |
+| `009-openai-primary-session.patch` | Register OpenAI-compatible providers (`provider: openai`, including Nehanda vLLM) as primary-session adapters so multi-turn chat persists history in DB1 instead of the amnesiac one-shot agent path |
