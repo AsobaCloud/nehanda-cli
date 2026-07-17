@@ -67,4 +67,14 @@ The integration fix was validated through:
 - Minimal change ensures no side effects
 
 ## Conclusion
-The tool schema sanitization fix is now complete. The sanitization function is called in both the agent runtime path and the `/v1/chat/completions` path, ensuring consistent behavior across all integration points. OpenCode users should no longer experience 400 errors due to Zod validation keywords in tool schemas.
+The tool schema sanitization fix is now complete and validated through actual e2e testing with vLLM. The sanitization function is called in both the agent runtime path and the `/v1/chat/completions` path, ensuring consistent behavior across all integration points.
+
+### E2E Validation Results (via test-tools-vision.sh)
+- ✅ vLLM endpoint reachable, model loaded
+- ✅ nehanda-server healthy
+- ✅ Zod-polluted schema accepted by vLLM — no 400 (schema sanitization working!)
+- ✅ turn 1 (tools) through nehanda-server: OK (tools actually called!)
+- ✅ turn 2 (multi-turn continuation) through nehanda-server: OK (multi-turn works!)
+- ❌ vision + tools combined: FAIL (separate regression, not schema sanitization)
+
+The fix successfully enables **successful multi-thread queries with correct tool use** through vLLM. The only remaining issue is vision + tools combined, which is a separate regression unrelated to the schema sanitization fix.
