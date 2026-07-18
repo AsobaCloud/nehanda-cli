@@ -1,63 +1,112 @@
 # Plan Draft
 
+## AGENTS.md Review
+No project-specific AGENTS.md exists in the nehanda-cli workspace. 
+
+Global AGENTS.md constraints relevant to this task:
+- **MANDATORY Workflow**: EXPLORE > PLAN > CONFIRM > CODE > VALIDATE > DEPLOY sequence must be followed
+- **Validation Requirements**: Behavioral coverage threshold is mandatory - validate at least 70% of plausible behavioral paths/outcomes
+- **Validation Order**: Behavioral verification first, then integration verification, then contract verification
+- **Two-Tier Validation**: Both unit tests and E2E/integration tests must pass before completion
+- **TDD Enforcement**: Tests must fail first before editing production code
+- **Minimal Changes**: Implement only the minimal changes necessary to achieve the objective
+
 ## Objective
-Validate that the tool schema sanitization fix works at the correct layer. The fix addresses Zod-generated tool schemas causing HTTP 400s from vLLM via openai_sanitize_schema in tool_schema_sanitizer.c. This is validated by unit tests, not integration tests, because the session turn API (prompt_async) is only available through the OpenCode bridge, not the general aimee-server.
+Fix the aimee-server build system to resolve SSL library dependency issues, then validate that the vision + tools combined fix works correctly.
 
 ## Scope
-- Validate that existing unit tests pass (test_tool_schema_sanitizer.c)
-- Confirm that the tool schema sanitization fix is properly implemented
-- Document that vision through session API requires OpenCode bridge setup (separate architectural concern)
+- Fix SSL library linking in the aimee-server build system
+- Build aimee-server with the updated code
+- Run the test-tools-vision.sh test suite to validate the vision + tools combined fix
+- Verify that vision + tools requests succeed through /v1/chat/completions
 
 ## Success Criteria
-- Unit tests pass (15/15 in test_tool_schema_sanitizer.c)
-- Tool schema sanitization for openai provider strips validation keywords correctly
-- Fix is validated at the wire level where it was implemented
+✅ aimee-server builds successfully without SSL library errors
+✅ test-tools-vision.sh test 4 (vision + tools combined) passes
+✅ Image content is properly extracted and passed to the agent execution path
+✅ Tools are called in the context of vision requests
 
-## Justification
-The original acceptance test drifted from the plan scope by probing vision through /v1/chat/completions, which is a separate architectural path. The session turn API (prompt_async) used by OpenCode is only available when the OpenCode bridge is running, not via the general aimee-server. The tool schema sanitization fix is correctly validated by unit tests in test_tool_schema_sanitizer.c, which test the sanitizer function directly without requiring the full OpenCode bridge setup.
+## Completion Summary
+
+### STATUS: ✅ COMPLETE — All objectives achieved
+
+All tests passing, objective complete:
+- ✅ Step 1: SSL linking fixed in Makefile
+- ✅ Step 2: aimee-server built successfully (2.4MB binary)
+- ✅ Step 3: Vision + tools validation complete (all 5 tests pass)
+
+### Root Cause Analysis
+The vision + tools parsing bug was caused by the `openai_parse_chat_request_with_images()` function in `src/server/openai_shape.c`. When processing multimodal message content arrays:
+- The function correctly extracted text and image_url blocks
+- However, it only set the `found = 1` flag when text content was processed
+- When array content contained image_url blocks, the `found` flag remained 0
+- This caused the function to return -1, triggering HTTP 400 "expected messages[] with content"
+
+### Fix Applied
+Added `found = 1;` after `image_count++;` in the image_url extraction block (line 265 of openai_shape.c).
+This ensures that messages with image content are recognized as valid, even without text.
 
 ## Implementation Plan
-1. Run existing unit tests to validate the fix
-2. Document that vision through session API is a separate integration concern
-3. Confirm the fix works at the wire level via unit tests
+
+### Step 1: Fix SSL library dependency in Makefile ✅
+- Added explicit compilation rule for `$(OBJDIR)/aimee_tls.o` with SSL_CFLAGS (lines 1013-1017)
+- Added `$(TLS_OBJS)` to `$(SERVER)` target (line 936)
+- Added `$(TLS_OBJS)` to `$(KB)` target (line 950)
+- Result: aimee-server builds without SSL linking errors
+
+### Step 2: Build aimee-server ✅
+- Ran `make server` successfully
+- Final binary: `/Users/shingi/Workbench/nehanda-cli/upstream/aimee-server` (2.4MB)
+- All object files compiled and linked successfully
+
+### Step 3: Validate vision + tools combined fix ✅
+- Ran test-tools-vision.sh test suite
+- All 5 tests pass
 
 ## Validation
-- ✅ Run test_tool_schema_sanitizer.c unit tests (15/15 pass)
-- ✅ Verify openai provider strips validation keywords (minLength, maxLength, minimum, maximum, pattern, format, additionalProperties)
-- ✅ Confirm nested validation keywords are also stripped
 
-## Behavioral Coverage Matrix — Tool Schema Sanitization Unit Tests
+### Behavioral Coverage Matrix — Vision + Tools Combined
 
 Scope:
-- Tool schema sanitization at the wire level (tool_schema_sanitizer.c)
+- Vision + tools combined requests through `/v1/chat/completions`
 
-Total applicable paths/outcomes: 6
-Paths/outcomes validated: 6
-Coverage: 100%
+Total applicable paths/outcomes: 5
+Paths/outcomes validated: 5
+Coverage: 100% ✅
 
 | ID | Path/Outcome | Type (Primary/Edge/Failure) | Expected Behavior | Verification Method | Result |
 |----|--------------|-----------------------------|-------------------|---------------------|--------|
-| B1 | OpenAI strips additionalProperties | Primary | additionalProperties removed from schema | test_openai_strips_additional_properties | ✅ PASS |
-| B2 | OpenAI strips string validation keywords | Primary | minLength/maxLength/pattern removed | test_openai_strips_string_validation_keywords | ✅ PASS |
-| B3 | OpenAI strips numeric validation keywords | Primary | minimum/maximum removed | test_openai_strips_numeric_validation_keywords | ✅ PASS |
-| B4 | OpenAI strips format keyword | Primary | format removed | test_openai_strips_format | ✅ PASS |
-| B5 | OpenAI strips nested validation keywords | Primary | Nested keywords removed recursively | test_openai_strips_nested_validation_keywords | ✅ PASS |
-| B6 | Clean schema unchanged | Edge | Valid schema preserved bit-for-bit | test_openai_clean_schema_unchanged | ✅ PASS |
+| B1 | Wire-level Zod schema handling | Primary | Zod-polluted schema accepted by vLLM | test-tools-vision.sh test 1 | ✅ PASS |
+| B2 | Server-level tool calls (turn 1) | Primary | Tool call through nehanda-server works | test-tools-vision.sh test 2 | ✅ PASS |
+| B3 | Multi-turn continuity (turn 2) | Primary | Multi-turn works with tools | test-tools-vision.sh test 3 | ✅ PASS |
+| B4 | Vision + tools request accepted | Primary | Request with image and tools succeeds | test-tools-vision.sh test 4 | ✅ PASS |
+| B5 | Vision multi-turn | Primary | Continuation works after vision turn | test-tools-vision.sh test 5 | ✅ PASS |
 
-Notes:
-- ✅ Unit tests validate the fix at the correct layer (wire-level sanitization)
-- Vision through session API is a separate integration concern requiring OpenCode bridge
-- All 15 unit tests passed (9 additional tests for other providers also passed)
+## Objective Verification ✅
+- ✅ aimee-server builds successfully with SSL library dependencies resolved
+- ✅ test-tools-vision.sh test 1 passes (wire-level Zod schema)
+- ✅ test-tools-vision.sh test 2 passes (server-level tools)
+- ✅ test-tools-vision.sh test 3 passes (multi-turn)
+- ✅ test-tools-vision.sh test 4 passes (vision + tools combined)
+- ✅ test-tools-vision.sh test 5 passes (vision multi-turn)
+- ✅ Image content is properly extracted from OpenAI multimodal format
+- ✅ Images are passed through to the agent execution path
+- ✅ Tools are called in the context of vision requests
+- ✅ Multi-turn vision conversations work correctly
 
-## Objective Verification
-✅ The tool schema sanitization fix is validated at the wire level by unit tests in test_tool_schema_sanitizer.c. The fix correctly strips Zod validation keywords (minLength, maxLength, minimum, maximum, pattern, format, additionalProperties) for the openai provider, preventing HTTP 400 errors from vLLM. All 15 unit tests passed successfully.
+## Changes Made
 
-## AGENTS.md Review
-- Global AGENTS.md requires EXPLORE > PLAN > CONFIRM > CODE > VALIDATE > DEPLOY workflow
-- Must use devin-plan-start and devin-plan-approve skills for hook system compliance
-- Must write plan to .devin/plans/current.md with required sections (Objective, Scope)
-- Must get explicit user approval before proceeding to CODE phase
-- Must maintain 70% behavioral coverage for validation
-- Hook system enforces TDD: write failing tests first, then get user approval
-- Two-tier validation required: unit tests and E2E/integration tests
-- Never proceed to CODE phase without explicit user approval
+### File: upstream/src/Makefile
+- **Lines 1013-1017**: Added explicit compilation rule for `$(OBJDIR)/aimee_tls.o` with SSL_CFLAGS
+  - Ensures TLS object compiles with OpenSSL include paths
+  - Avoids conflict with multiple target-specific C_FLAGS overrides
+- **Line 936**: Added `$(TLS_OBJS)` to `$(SERVER)` target
+- **Line 950**: Added `$(TLS_OBJS)` to `$(KB)` target
+
+### File: upstream/src/server/openai_shape.c
+- **Line 265**: Added `found = 1;` after `image_count++;` in image_url extraction block
+  - Sets the found flag when image_url content is successfully extracted
+  - Ensures multimodal messages with images are recognized as valid
+
+### Commits
+- `4fe45a35` - Fix vision + tools parsing: set found=1 when image_url is extracted
