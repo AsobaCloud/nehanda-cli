@@ -1,0 +1,40 @@
+diff --git a/src/cli_tui.c b/src/cli_tui.c
+index 155c7975..078adcd2 100644
+--- a/src/cli_tui.c
++++ b/src/cli_tui.c
+@@ -975,15 +975,28 @@ int builtin_chat_loop(const char *sock, const char *agent_name, const char *mode
+    chat_detect_model(agent_name, model, display_model, sizeof(display_model));
+    chat_detect_effort(agent_name, effort, sizeof(effort));
+ 
+-   int opencode_handled = 0;
+-   int opencode_rc = opencode_exec_tui(sock, agent_name, display_model[0] ? display_model : model,
+-                                       effort, session_id, autonomous, debug, default_launch, argc,
+-                                       argv, &opencode_handled);
+-   if (opencode_handled)
+-      return opencode_rc;
++   /* Launch aichat as the interactive TUI frontend.
++    * aichat is configured in ~/.config/aichat/config.yaml to point at
++    * nehanda-server's loopback HTTP API (127.0.0.1:8740/v1).
++    * NEHANDA_AICHAT_BIN overrides the binary path for testing. */
++   const char *aichat_bin = getenv("NEHANDA_AICHAT_BIN");
++   if (!aichat_bin || !aichat_bin[0])
++      aichat_bin = "aichat";
++
++   /* Check aichat is available */
++   char check[512];
++   snprintf(check, sizeof(check), "command -v %s >/dev/null 2>&1", aichat_bin);
++   if (system(check) == 0)
++   {
++      execlp(aichat_bin, aichat_bin, NULL);
++      /* execlp only returns on error */
++      fprintf(stderr, "aimee: failed to exec aichat: %s\n", strerror(errno));
++      return 1;
++   }
++
+    if (default_launch)
+       return builtin_chat_native_loop(sock, provider_session_id, session_id, provider_session_id,
+                                       sizeof(provider_session_id));
+-   fprintf(stderr, "aimee chat: could not start OpenCode TUI\n");
++   fprintf(stderr, "aimee: aichat not found — install with: brew install aichat\n");
+    return 1;
+ }

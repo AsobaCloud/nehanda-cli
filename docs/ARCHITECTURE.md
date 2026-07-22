@@ -7,11 +7,10 @@ Source of truth for the three-tier design, AGPL boundary analysis, auth flow, an
 ```
 ┌───────────────────────────── USER MACHINE (AGPL Tier) ─────────────────────────────┐
 │                                                                                      │
-│   [ nehanda native TUI / OpenCode (via opencode attach) ]                           │
-│        │ UDS                              │ bridge 127.0.0.1:<port>                 │
-│        └──────────────────────────────────┴──────────────────────────────┐            │
-│                                                                         ▼            │
-│   [ nehanda-cli ]  (AGPL-3.0, source public)                                        │
+│   [ aichat (TUI) ] ── HTTP 127.0.0.1:8740/v1 ──────────────────────────────────── │
+│        │                                                                             │
+│        ▼                                                                             │
+│   [ nehanda-server (UDS) ]                                                          │
 │     • 4-tier memory compaction (~86% token reduction pre-egress)                    │
 │     • Supervisor/Delegate task decomposition                                         │
 │     • Delegate fan-out → local Ollama workers (free, zero network egress)           │
@@ -39,20 +38,17 @@ Source of truth for the three-tier design, AGPL boundary analysis, auth flow, an
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### OpenCode Integration
+### aichat Integration
 
-For interactive sessions (`nehanda` or `nehanda chat` on a tty), nehanda tries OpenCode before the built-in C TUI:
+For interactive sessions, `nehanda` execs [aichat](https://github.com/sigoden/aichat) as the TUI frontend:
 
-1. `opencode_exec_tui()` starts a local OpenCode v2 bridge on `127.0.0.1:<random-port>`
-2. It fork-execs `opencode attach http://127.0.0.1:<port> --dir <cwd>`
-3. The bridge translates OpenCode's protocol into turns against `nehanda-server` over the Unix domain socket
-4. Detection: `opencode` on `PATH`, or `AIMEE_OPENCODE_BIN=/path/to/opencode`
+1. `nehanda` execs `aichat` (or `$NEHANDA_AICHAT_BIN` if set)
+2. aichat reads `~/.config/aichat/config.yaml`, which points at nehanda-server's loopback HTTP API (`127.0.0.1:8740/v1`)
+3. aichat sends standard OpenAI-compatible chat completions requests; nehanda-server routes them through the full local pipeline (memory, KB, delegates) before forwarding to EC2
 
-If OpenCode is missing and `default_launch=1` (bare `nehanda`, `nehanda chat`), nehanda falls back to `builtin_chat_native_loop()` — a minimal readline loop (`> ` prompt, streamed reply, `/quit`). If `--opencode` was passed explicitly, nehanda prints an install hint and exits instead.
+If aichat is not installed and `default_launch=1`, nehanda falls back to `builtin_chat_native_loop()` — a minimal readline loop.
 
-One-shot `nehanda chat "message"` (inline text) never uses OpenCode; it goes straight to the server stream API.
-
-No manual OpenCode provider or `base_url` configuration is required for the attach flow — nehanda owns the wiring.
+One-shot `nehanda chat "message"` (inline text) never uses aichat; it goes straight to the server stream API.
 
 ## Why the AGPL Line Sits Where It Does
 

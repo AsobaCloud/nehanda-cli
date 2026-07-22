@@ -35,31 +35,22 @@ chat_stream_worker()          [posix/server_compute.c]
                            ]
 ```
 
-### OpenCode user path
+### aichat TUI user path
 
 ```
-OpenCode TUI (or AIMEE_OPENCODE_BIN mock)
+aichat TUI
   │
-  │  POST /session/<sid>/prompt
-  │  body.parts[] — [
-  │    { type: "file", mediaType: "image/png", data: "<b64>" },
-  │    { type: "text", text: "<prompt>" }
-  │  ]
+  │  POST /v1/chat/completions (HTTP to 127.0.0.1:8740)
+  │  body: { messages: [...], model: "nehanda", ... }
+  │         where messages[0].content contains image_url objects
   │
   ▼
-opencode_v2_handle_prompt()   [cli_tui_opencode_v2b.c]
-  │  opencode_v2_extract_images() → builds "data:<mediaType>;base64,<data>" URI strings
-  │  opencode_v2_extract_prompt() → reads "text" / "message" / "prompt" / "input" fields
-  │  turn->user_images = images   (attached to turn struct)
+openai_chat.c [nehanda-server]
+  │  Parses request body using standard OpenAI structure
+  │  Lifts images & text, routing via agent_execute_session_with_tools
   │
   ▼
-opencode_v2_run_turn()        [cli_tui_opencode_v2b.c]
-  │
-  ▼
-builtin_chat_send_streaming_control(..., images, image_count)
-  │
-  ▼
-POST /v1/chat/stream  (UDS to nehanda-server)  — same path as above
+POST /v1/chat/stream (UDS to nehanda-server) — same path as above
 ```
 
 ## Root Cause of the Vision Hallucination Bug
@@ -245,55 +236,15 @@ python3 test_vision.py
 bash scripts/start-native-services.sh stop
 ```
 
-### opencode_mock_probe.py — OpenCode user path
+### aichat TUI verification flow
 
-Starts a bridge by running `nehanda` with `AIMEE_OPENCODE_BIN` pointing at the
-script, then acts as a fake OpenCode client:
+Verify the `aichat` frontend end-to-end:
 
-1. `GET /session` — discovers the bridge session ID
-2. `POST /session/<sid>/prompt` — sends image `parts` (OpenCode wire format)
-3. Asserts a non-empty assistant turn response with no image-drop indicators
-
-```
-[mock-opencode] bridge        : http://127.0.0.1:50224
-[mock-opencode] GET /session  : status=200  id=ses_da9472684d707f98
-[mock-opencode] POST /session/ses_da9472684d707f98/prompt : status=200
-[mock-opencode] PASS ✓  OpenCode path: bridge accepted image parts, model replied
-```
-
-The bridge must be started on a tty (it is skipped in non-interactive pipes).
-The harness uses `script -q /dev/null` to provide one:
-
-```bash
-NEHANDA_RESTART=1 AIMEE_LLM_STUB=1 bash scripts/start-native-services.sh
-script -q /dev/null env AIMEE_OPENCODE_BIN="$(pwd)/opencode_mock_probe.py" nehanda
-# Ctrl-D once the probe prints PASS
-bash scripts/start-native-services.sh stop
-```
-
-Or run the self-contained harness (it handles the tty automatically):
-
-```bash
-python3 opencode_mock_probe.py
-```
-
-### OpenCode prompt body format
-
-The bridge's `POST /session/<sid>/prompt` expects parts-based JSON:
-
-```json
-{
-  "messageID": "msg_<id>",
-  "parts": [
-    { "type": "file", "mediaType": "image/png", "data": "<raw-base64>" },
-    { "type": "text", "text": "<prompt text>" }
-  ]
-}
-```
-
-`opencode_v2_extract_images` builds the `data:<mediaType>;base64,<data>` URI
-from `type=file` parts whose `mediaType` starts with `image/`. If `data`
-already starts with `data:` it is passed through unchanged.
-
-`opencode_v2_extract_prompt` reads from the first of: `text`, `message`,
-`prompt`, `input` top-level keys; or from `parts`/`content` text entries.
+1. Re-run `./install.sh` to construct the standard config files in `~/.config/aichat/config.yaml` or `~/Library/Application Support/aichat/config.yaml`.
+2. Ensure `nehanda-server` HTTP port `8740` is running.
+3. Start the interactive session:
+   ```bash
+   nehanda
+   ```
+   This will execute the `aichat` REPL frontend targeting the server loopback port.
+4. Input a test prompt, for example: `What is the capital of France?` and assert that the response is coherent and correct.
