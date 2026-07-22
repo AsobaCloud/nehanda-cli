@@ -10,7 +10,22 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const REPO_ROOT = path.resolve(__dirname, '..')
+// REPO_ROOT: if installed to ~/.local/bin, node_modules lives in nehanda-cli repo.
+// Resolve by checking for node_modules relative to __dirname, then walk up.
+function findRepoRoot(start) {
+  let dir = start
+  for (let i = 0; i < 6; i++) {
+    if (fs.existsSync(path.join(dir, 'node_modules', 'ink'))) return dir
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  // Fallback: check the scripts dir sibling (dev layout)
+  const sibling = path.resolve(start, '..', '..', 'nehanda-cli')
+  if (fs.existsSync(path.join(sibling, 'node_modules', 'ink'))) return sibling
+  throw new Error(`Cannot find nehanda-cli node_modules. Re-run install.sh.`)
+}
+const REPO_ROOT = findRepoRoot(__dirname)
 
 // Resolve deps from nehanda-cli's own node_modules
 const require = createRequire(import.meta.url)
@@ -123,6 +138,34 @@ const SLASH_COMMANDS = [
   { name: '/clear',   desc: 'New conversation' },
   { name: '/help',    desc: 'Show commands' },
   { name: '/exit',    desc: 'Quit' },
+]
+
+// ── Model registry ────────────────────────────────────────────
+const MODEL_REGISTRY = [
+  {
+    name: 'nehanda-rag-synthesis-27b',
+    endpoint: 'http://nehanda.asoba.co:8000',
+    label: 'Nehanda 27B (EC2)',
+    desc: 'Primary — fine-tuned Qwen3.6 27B, vLLM, af-south-1',
+  },
+  {
+    name: 'deepseek-coder-v2:latest',
+    endpoint: 'http://AsobaCorp-1.local:11434/v1',
+    label: 'DeepSeek Coder V2 (LAN)',
+    desc: 'Windows LAN delegate — coding specialist',
+  },
+  {
+    name: 'qwen2.5:14b',
+    endpoint: 'http://AsobaCorp-1.local:11434/v1',
+    label: 'Qwen 2.5 14B (LAN)',
+    desc: 'Windows LAN delegate — general reasoning',
+  },
+  {
+    name: 'deepseek-r1:14b',
+    endpoint: 'http://AsobaCorp-1.local:11434/v1',
+    label: 'DeepSeek R1 14B (LAN)',
+    desc: 'Windows LAN delegate — deep reasoning',
+  },
 ]
 
 // ── Cape Town skyline (from ona-code) ─────────────────────────
@@ -297,7 +340,7 @@ function InputArea({ onSubmit, isLoading }) {
   )
 }
 
-// ── Multi-step prompt (for /model, /bearer) ───────────────────
+// ── Multi-step prompt (for /bearer) ──────────────────────────
 function AskPrompt({ question, onAnswer }) {
   const [value, setValue] = React.useState('')
   return e(Box, { flexDirection: 'column' },
@@ -313,12 +356,43 @@ function AskPrompt({ question, onAnswer }) {
   )
 }
 
+// ── Select menu (for /model) ─────────────────────────────────
+// Renders a numbered list; user presses 1-N to select, Esc to cancel.
+function SelectMenu({ title, items, onSelect, onCancel }) {
+  useInput((input, key) => {
+    if (key.escape) { onCancel(); return }
+    const n = parseInt(input, 10)
+    if (!isNaN(n) && n >= 1 && n <= items.length) onSelect(items[n - 1])
+  })
+
+  return e(Box, { flexDirection: 'column', marginLeft: 1 },
+    e(Text, { bold: true, color: '#cc785c' }, title),
+    e(Box, { marginTop: 1, flexDirection: 'column' },
+      ...items.map((item, i) =>
+        e(Box, { key: String(i), flexDirection: 'column', marginBottom: 0 },
+          e(Box, {},
+            e(Text, { color: 'cyan' }, `  ${i + 1}. `),
+            e(Text, { bold: true }, item.label),
+          ),
+          e(Box, { marginLeft: 5 },
+            e(Text, { dimColor: true }, item.desc),
+          ),
+        )
+      ),
+    ),
+    e(Box, { marginTop: 1 },
+      e(Text, { dimColor: true }, 'Press 1–' + items.length + ' to select, Esc to cancel'),
+    ),
+  )
+}
+
 // ── Main App ──────────────────────────────────────────────────
 function App({ bridge }) {
   const { exit } = useApp()
   const [messages, setMessages] = React.useState([])
   const [isLoading, setIsLoading] = React.useState(false)
   const [askState, setAskState] = React.useState(null)
+  const [selectState, setSelectState] = React.useState(null)
   const [stats, setStats] = React.useState({ input: 0, output: 0, calls: 0 })
   const [agentCfg, setAgentCfg] = React.useState(() => {
     const data = readAgents()
@@ -340,6 +414,7 @@ function App({ bridge }) {
     bridge.addMessage = msg => setMessages(prev => [...prev, msg])
     bridge.setLoading = v => setIsLoading(v)
     bridge.ask = (question) => new Promise(resolve => setAskState({ question, resolve }))
+    bridge.select = (title, items) => new Promise(resolve => setSelectState({ title, items, resolve }))
     bridge.exit = () => { exit() }
     bridge.refreshAgent = () => {
       const data = readAgents()
@@ -356,13 +431,28 @@ function App({ bridge }) {
     setAskState(null)
   }, [askState])
 
+  const handleSelect = React.useCallback((item) => {
+    if (selectState?.resolve) {
+      setMessages(prev => [...prev, { role: 'system', text: `  Selected: ${item.label}` }])
+      selectState.resolve(item)
+    }
+    setSelectState(null)
+  }, [selectState])
+
+  const handleSelectCancel = React.useCallback(() => {
+    if (selectState?.resolve) selectState.resolve(null)
+    setSelectState(null)
+  }, [selectState])
+
   return e(Box, { flexDirection: 'column' },
     e(WelcomeBanner, { agent: agentCfg, bearerToken }),
     ...messages.map((msg, i) => e(MessageView, { key: String(i), msg })),
     isLoading ? e(Spinner, {}) : null,
     askState
       ? e(AskPrompt, { question: askState.question, onAnswer: handleAnswer })
-      : e(InputArea, { onSubmit: bridge.onSubmit, isLoading }),
+      : selectState
+        ? e(SelectMenu, { title: selectState.title, items: selectState.items, onSelect: handleSelect, onCancel: handleSelectCancel })
+        : e(InputArea, { onSubmit: bridge.onSubmit, isLoading }),
     e(TokenFooter, { stats, sessionStart: sessionStart.current }),
   )
 }
@@ -496,30 +586,47 @@ async function handleCommand(cmd, bridge) {
   }
 
   if (name === '/model') {
-    const choice = await bridge.ask('Change: [1] aimee agent model  [2] orchestrator model  (1/2):')
-    if (choice === '1') {
-      const current = readAgents().agents?.[0]?.model || ''
-      const model = await bridge.ask(`New agent model (current: ${current}):`)
-      if (!model) return
-      try {
-        writeAgentModel(model)
+    const choice = await bridge.select('Select target', [
+      { label: 'Aimee agent model', desc: 'Updates agents.json — the model nehanda-server uses for inference', value: 'agent' },
+      { label: 'Orchestrator model', desc: 'Updates aimee.yaml openai_model — used for planning/delegation', value: 'orchestrator' },
+    ])
+    if (!choice) return
+
+    const currentModel = choice.value === 'agent'
+      ? (readAgents().agents?.[0]?.model || '')
+      : (() => { const m = fs.readFileSync(AIMEE_YAML, 'utf8').match(/openai_model:\s*(\S+)/); return m ? m[1] : '' })()
+
+    // Mark current model in registry
+    const registryItems = MODEL_REGISTRY.map(m => ({
+      ...m,
+      label: m.name === currentModel ? `${m.label} ✓` : m.label,
+    }))
+
+    const selected = await bridge.select(
+      `Select model for ${choice.label}`,
+      registryItems,
+    )
+    if (!selected) return
+
+    try {
+      if (choice.value === 'agent') {
+        writeAgentModel(selected.name)
+        // Also update the endpoint in agents.json to match selected model's endpoint
+        const data = readAgents()
+        const agent = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
+        if (agent) {
+          agent.endpoint = selected.endpoint
+          agent.model = selected.name
+        }
+        fs.writeFileSync(AGENTS_JSON, JSON.stringify(data, null, 2), 'utf8')
         bridge.refreshAgent()
-        bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Agent model updated to ${chalk.bold(model)}` })
-      } catch (err) {
-        bridge.addMessage({ role: 'error', text: 'Failed: ' + err.message })
+        bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Agent model → ${chalk.bold(selected.name)} @ ${chalk.dim(selected.endpoint)}` })
+      } else {
+        writeOrchestratorModel(selected.name)
+        bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Orchestrator model → ${chalk.bold(selected.name)}` })
       }
-    } else if (choice === '2') {
-      const yaml = fs.readFileSync(AIMEE_YAML, 'utf8')
-      const m = yaml.match(/openai_model:\s*(\S+)/)
-      const current = m ? m[1] : ''
-      const model = await bridge.ask(`New orchestrator model (current: ${current}):`)
-      if (!model) return
-      try {
-        writeOrchestratorModel(model)
-        bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Orchestrator model updated to ${chalk.bold(model)}` })
-      } catch (err) {
-        bridge.addMessage({ role: 'error', text: 'Failed: ' + err.message })
-      }
+    } catch (err) {
+      bridge.addMessage({ role: 'error', text: 'Failed: ' + err.message })
     }
     return
   }
