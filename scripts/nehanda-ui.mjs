@@ -127,6 +127,7 @@ const SLASH_COMMANDS = [
   { name: '/model',   desc: 'Change model (aimee agent or orchestrator)' },
   { name: '/bearer',  desc: 'Change bearer token' },
   { name: '/token',   desc: 'Session token usage' },
+  { name: '/stats',   desc: 'KB, memory, token, and health statistics' },
   { name: '/auth',    desc: 'Auth status / login stub' },
   { name: '/config',  desc: 'Show current config' },
   { name: '/clear',   desc: 'New conversation' },
@@ -330,7 +331,109 @@ function SlashMenu({ filter }) {
   )
 }
 
-// ── Token stats footer ────────────────────────────────────────
+// ── Stats queries ─────────────────────────────────────────────
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+const execFileAsync = promisify(execFile)
+
+async function psqlQuery(sql) {
+  try {
+    const { stdout } = await execFileAsync('psql', ['-d', 'aimee_shared', '-t', '-A', '-F', '\t', '-c', sql], { timeout: 5000 })
+    return stdout.trim()
+  } catch { return null }
+}
+
+async function sqliteQuery(sql) {
+  try {
+    const { stdout } = await execFileAsync('sqlite3', [AIMEE_DB, '-separator', '\t', sql], { timeout: 5000 })
+    return stdout.trim()
+  } catch { return null }
+}
+
+function parseRows(raw) {
+  if (!raw) return []
+  return raw.split('\n').filter(Boolean).map(l => l.split('\t'))
+}
+
+async function fetchStats() {
+  const [
+    kbRaw, memRaw, tokenTodayRaw, token7dRaw, tokenAllRaw,
+    kbHealth, embedderHealth
+  ] = await Promise.all([
+    // KB stats from postgres
+    psqlQuery(`
+      SELECT
+        (SELECT COUNT(*) FROM kb_documents) AS docs,
+        (SELECT COUNT(*) FROM kb_embeddings) AS embeddings,
+        (SELECT COUNT(*) FROM files) AS files,
+        (SELECT COUNT(*) FROM entity_edges) AS entity_edges,
+        (SELECT COUNT(*) FROM code_embeddings) AS code_embeddings,
+        (SELECT COUNT(*) FROM artifacts) AS artifacts
+    `),
+    // Memory stats from postgres
+    psqlQuery(`
+      SELECT
+        (SELECT COUNT(*) FROM memory_units) AS units,
+        (SELECT COUNT(*) FROM memory_embeddings) AS embeddings,
+        (SELECT COUNT(*) FROM memory_episodes) AS episodes,
+        (SELECT COUNT(*) FROM memory_summaries) AS summaries,
+        (SELECT COUNT(*) FROM memory_relations) AS relations,
+        (SELECT COUNT(*) FROM memories) AS raw
+    `),
+    // Token usage — today (SQLite)
+    sqliteQuery(`SELECT COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COUNT(*) FROM token_audit WHERE created_at >= date('now')`),
+    // Token usage — last 7 days
+    sqliteQuery(`SELECT COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COUNT(*) FROM token_audit WHERE created_at >= date('now','-7 days')`),
+    // Token usage — all time
+    sqliteQuery(`SELECT COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COUNT(*) FROM token_audit`),
+    // KB health check
+    fetch('http://127.0.0.1:8741/v1/health?status=1', { signal: AbortSignal.timeout(2000) })
+      .then(r => r.json()).catch(() => null),
+    // Embedder health check
+    fetch('http://127.0.0.1:8742/health', { signal: AbortSignal.timeout(2000) })
+      .then(r => r.json()).catch(() => null),
+  ])
+
+  // Parse postgres single-row results
+  const kb = kbRaw ? kbRaw.split('\t') : Array(6).fill('0')
+  const mem = memRaw ? memRaw.split('\t') : Array(6).fill('0')
+
+  // Parse sqlite results
+  const [todayIn=0, todayOut=0, todayCalls=0] = (tokenTodayRaw||'').split('\t').map(Number)
+  const [d7In=0, d7Out=0, d7Calls=0] = (token7dRaw||'').split('\t').map(Number)
+  const [allIn=0, allOut=0, allCalls=0] = (tokenAllRaw||'').split('\t').map(Number)
+
+  return {
+    kb: {
+      docs: parseInt(kb[0])||0,
+      embeddings: parseInt(kb[1])||0,
+      files: parseInt(kb[2])||0,
+      entityEdges: parseInt(kb[3])||0,
+      codeEmbeddings: parseInt(kb[4])||0,
+      artifacts: parseInt(kb[5])||0,
+      available: kbHealth?.available === true,
+    },
+    memory: {
+      units: parseInt(mem[0])||0,
+      embeddings: parseInt(mem[1])||0,
+      episodes: parseInt(mem[2])||0,
+      summaries: parseInt(mem[3])||0,
+      relations: parseInt(mem[4])||0,
+      raw: parseInt(mem[5])||0,
+    },
+    tokens: {
+      today: { in: todayIn, out: todayOut, calls: todayCalls },
+      week:  { in: d7In,    out: d7Out,    calls: d7Calls },
+      all:   { in: allIn,   out: allOut,   calls: allCalls },
+    },
+    health: {
+      kb: kbHealth != null,
+      embedder: embedderHealth != null,
+    },
+    _kbHealth: kbHealth,
+    _embedderModel: embedderHealth?.model || null,
+  }
+}
 function TokenFooter({ stats, sessionStart }) {
   const { input = 0, output = 0, calls = 0 } = stats
   let cols = 80
@@ -558,6 +661,62 @@ async function handleCommand(cmd, bridge) {
       `  Bearer:   ${bearer ? chalk.dim(bearer.slice(0, 8) + '…') : chalk.red('(none)')}`,
       '',
     ].join('\n') })
+    return
+  }
+
+  if (name === '/stats') {
+    bridge.addMessage({ role: 'system', text: '  Gathering stats…' })
+    let s
+    try {
+      s = await fetchStats()
+    } catch (err) {
+      bridge.addMessage({ role: 'error', text: 'Stats failed: ' + err.message })
+      return
+    }
+
+    const ok  = chalk.green('●')
+    const off = chalk.red('○')
+    const num = n => chalk.white(Number(n).toLocaleString())
+    const dim = chalk.dim
+
+    // KB health endpoint returns richer data — extract it
+    const kbHealth = s._kbHealth
+    const ingest = kbHealth?.ingest_queue || {}
+    const vec = kbHealth?.vector || {}
+
+    const lines = [
+      '',
+      chalk.bold.underline('Knowledge Base'),
+      `  ${s.health.kb ? ok : off} Service          ${s.health.kb ? chalk.green('available') : chalk.red('unavailable')}`,
+      `  ${dim('Documents:')}       ${num(s.kb.docs)}`,
+      `  ${dim('Embeddings:')}      ${num(s.kb.embeddings)}`,
+      `  ${dim('Files indexed:')}   ${num(s.kb.files)}`,
+      `  ${dim('Entity edges:')}    ${num(s.kb.entityEdges)}`,
+      `  ${dim('Code embeddings:')} ${num(s.kb.codeEmbeddings)}`,
+      `  ${dim('Artifacts:')}       ${num(s.kb.artifacts)}`,
+      ...(Object.keys(ingest).length ? [
+        `  ${dim('Ingest queue:')}    pending ${num(ingest.pending||0)}  done 24h ${num(ingest.done_last_24h||0)}  failed ${num(ingest.failed_last_24h||0)}`,
+      ] : []),
+      '',
+      chalk.bold.underline('Memory'),
+      `  ${dim('Units:')}           ${num(s.memory.units)}`,
+      `  ${dim('Embeddings:')}      ${num(s.memory.embeddings)}`,
+      `  ${dim('Episodes:')}        ${num(s.memory.episodes)}`,
+      `  ${dim('Summaries:')}       ${num(s.memory.summaries)}`,
+      `  ${dim('Relations:')}       ${num(s.memory.relations)}`,
+      '',
+      chalk.bold.underline('Token Usage'),
+      `  ${''.padEnd(12)}  ${chalk.dim('in'.padStart(10))}  ${chalk.dim('out'.padStart(10))}  ${chalk.dim('calls')}`,
+      `  ${'Today'.padEnd(12)}  ${String(s.tokens.today.in).padStart(10)}  ${String(s.tokens.today.out).padStart(10)}  ${s.tokens.today.calls}`,
+      `  ${'Last 7 days'.padEnd(12)}  ${String(s.tokens.week.in).padStart(10)}  ${String(s.tokens.week.out).padStart(10)}  ${s.tokens.week.calls}`,
+      `  ${'All time'.padEnd(12)}  ${String(s.tokens.all.in).padStart(10)}  ${String(s.tokens.all.out).padStart(10)}  ${s.tokens.all.calls}`,
+      '',
+      chalk.bold.underline('Services'),
+      `  ${s.health.kb       ? ok : off} KB        :8741  ${vec.backend ? chalk.dim('(' + vec.backend + ')') : ''}`,
+      `  ${s.health.embedder ? ok : off} Embedder  :8742  ${s._embedderModel ? chalk.dim('(' + s._embedderModel + ')') : ''}`,
+      '',
+    ]
+    bridge.addMessage({ role: 'system', text: lines.join('\n') })
     return
   }
 
