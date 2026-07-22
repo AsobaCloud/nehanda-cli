@@ -139,7 +139,10 @@ cargo install aichat         # any platform with Rust
 
 Verify aichat is configured:
 ```bash
-cat ~/.config/aichat/config.yaml   # should show nehanda client at 127.0.0.1:8740
+# macOS
+cat ~/Library/Application\ Support/aichat/config.yaml
+# Linux
+cat ~/.config/aichat/config.yaml
 aichat --list-models               # should show nehanda:nehanda-rag-synthesis-27b
 ```
 
@@ -148,6 +151,34 @@ Re-run `./install.sh` to regenerate the aichat config if it is missing or miscon
 Override the aichat binary path for testing:
 ```bash
 export NEHANDA_AICHAT_BIN=/path/to/aichat
+```
+
+---
+
+### 9. `missing or invalid bearer token` on every prompt
+
+**Symptom:** aichat launches but every message returns:
+```
+Error: Failed to call chat-completions api
+
+Caused by:
+    missing or invalid bearer token (type: authentication_error)
+```
+
+**Cause:** The loopback bearer token in aichat's config doesn't match the one nehanda-server expects. This happens when `install.sh` is run multiple times and the strip-and-rewrite of the `aimee:` block in `aimee.yaml` leaves a stale duplicate, causing the server to read an older token while aichat has the newer one.
+
+**Fix:** Re-run `./install.sh` — it regenerates a fresh token and writes it consistently to both `aimee.yaml` and the aichat config.
+
+If you need to fix it without a full reinstall, read the current token from `aimee.yaml`:
+```bash
+grep bearer_token ~/.config/aimee/aimee.yaml
+```
+Then write that value as `api_key` in the aichat config:
+```bash
+# macOS
+vi ~/Library/Application\ Support/aichat/config.yaml
+# Linux
+vi ~/.config/aichat/config.yaml
 ```
 
 ---

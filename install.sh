@@ -311,7 +311,7 @@ import re, sys
 path = sys.argv[1]
 try:
     with open(path) as f: content = f.read()
-    content = re.sub(r'\n# aichat TUI.*?(?=\n[^\s]|\Z)', '', content, flags=re.DOTALL)
+    content = re.sub(r'\naimee:\n  api:\n    http_port: 8740\n    bearer_token: [^\n]+', '', content)
     with open(path, 'w') as f: f.write(content)
 except FileNotFoundError:
     pass
