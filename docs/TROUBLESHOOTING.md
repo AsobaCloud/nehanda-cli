@@ -124,34 +124,33 @@ Start a new `nehanda` session after updating.
 
 ---
 
-### 8. `nehanda` doesn't launch aichat
+### 8. `nehanda` doesn't launch nehanda-ui
 
-**Symptom:** Running `nehanda` drops into the native C TUI (`> ` prompt) instead of aichat, or prints `aichat not found`.
+**Symptom:** Running `nehanda` drops into the native C TUI (`> ` prompt) or launches bare aichat instead of the Ink-based `nehanda-ui`.
 
-**Cause:** aichat is not installed or not on `PATH`.
+**Cause:** `NEHANDA_AICHAT_BIN` is not set to `nehanda-ui`, or the symlink at `~/.local/bin/nehanda-ui` is missing/broken.
 
 **Fix:**
 ```bash
-brew install aichat          # macOS
-# or
-cargo install aichat         # any platform with Rust
+# Verify the symlink exists and points to the repo
+ls -la ~/.local/bin/nehanda-ui
+
+# Re-create it if missing
+ln -sf ~/Workbench/nehanda-cli/scripts/nehanda-ui.mjs ~/.local/bin/nehanda-ui
+
+# Verify the env var is set
+echo $NEHANDA_AICHAT_BIN   # should print: nehanda-ui
 ```
 
-Verify aichat is configured:
+If `NEHANDA_AICHAT_BIN` is not in your shell profile, add it:
 ```bash
-# macOS
-cat ~/Library/Application\ Support/aichat/config.yaml
-# Linux
-cat ~/.config/aichat/config.yaml
-aichat --list-models               # should show nehanda:nehanda-rag-synthesis-27b
+echo 'export NEHANDA_AICHAT_BIN=nehanda-ui' >> ~/.zshrc
+source ~/.zshrc
 ```
 
-Re-run `./install.sh` to regenerate the aichat config if it is missing or misconfigured.
+Or re-run `./install.sh` — it sets both the symlink and the env var automatically.
 
-Override the aichat binary path for testing:
-```bash
-export NEHANDA_AICHAT_BIN=/path/to/aichat
-```
+**Note:** aichat is still used by nehanda-server internally for config. Do not uninstall it.
 
 ---
 
