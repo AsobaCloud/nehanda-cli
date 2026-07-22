@@ -124,29 +124,31 @@ Start a new `nehanda` session after updating.
 
 ---
 
-### 8. `nehanda chat` or bare `nehanda` and OpenCode TUI
+### 8. `nehanda` doesn't launch aichat
 
-**Symptom:** Error message about OpenCode TUI not found, or OpenCode is on `PATH` but the minimal native C TUI (`> ` prompt) always starts.
+**Symptom:** Running `nehanda` drops into the native C TUI (`> ` prompt) instead of aichat, or prints `aichat not found`.
 
-**Cause:** OpenCode is the preferred interactive TUI front-end. When `opencode` is on `PATH` (or `AIMEE_OPENCODE_BIN` is set), `nehanda` and `nehanda chat` attempt to launch an OpenCode v2 bridge session (`opencode attach http://127.0.0.1:<port> --dir <cwd>`). If OpenCode is not installed, the native C TUI starts instead — **unless** the `--opencode` flag was explicitly passed (which requires OpenCode).
-
-**Detection logic:**
-1. Checks `AIMEE_OPENCODE_BIN` env var → if set, uses that path
-2. Falls back to `opencode` on `PATH`
-3. If not found and `default_launch=1` (bare `nehanda`, `nehanda chat`): falls back to the native TUI
-4. If not found and `default_launch=0` (`--opencode`): prints install hint and exits
+**Cause:** aichat is not installed or not on `PATH`.
 
 **Fix:**
-- Install OpenCode and ensure `opencode` is on `PATH`
-- Or set `AIMEE_OPENCODE_BIN=/path/to/opencode`
-- Already applied: `patches/003-nehanda-chat-native-fallback.patch` ensures both bare `nehanda` and `nehanda chat` fall back to the native TUI when OpenCode is absent
-- If OpenCode is installed but you still get the native TUI, rebuild after pulling latest: the CMake client build must define `AIMEE_POSIX` so the OpenCode bridge module is linked (fixed in root `CMakeLists.txt`). Verify with:
-  ```bash
-  strings ~/.local/bin/nehanda | grep 'launching OpenCode'
-  ```
-  An empty result means the binary was built without OpenCode support — re-run `./install.sh`.
+```bash
+brew install aichat          # macOS
+# or
+cargo install aichat         # any platform with Rust
+```
 
-**Note:** One-shot `nehanda chat "message"` (with inline text) never uses OpenCode — it goes directly to the server stream API.
+Verify aichat is configured:
+```bash
+cat ~/.config/aichat/config.yaml   # should show nehanda client at 127.0.0.1:8740
+aichat --list-models               # should show nehanda:nehanda-rag-synthesis-27b
+```
+
+Re-run `./install.sh` to regenerate the aichat config if it is missing or misconfigured.
+
+Override the aichat binary path for testing:
+```bash
+export NEHANDA_AICHAT_BIN=/path/to/aichat
+```
 
 ---
 

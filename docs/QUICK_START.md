@@ -21,8 +21,8 @@ Builds three binaries (`nehanda`, `nehanda-server`, `nehanda-kb`), installs post
 
 ```bash
 ./install.sh    # ~40s on re-run with cached build; first cold compile takes longer
-nehanda         # interactive TUI (OpenCode if on PATH, else native C TUI)
-nehanda chat "…"  # one-shot message (server stream; OpenCode not used)
+nehanda         # interactive TUI (aichat, configured against nehanda-server)
+nehanda chat "…"  # one-shot message (server stream, no TUI)
 ```
 
 Add to your shell profile:
@@ -37,22 +37,9 @@ export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"   # macOS only
 nehanda
 ```
 
-Interactive sessions try OpenCode first: nehanda starts a local bridge and runs `opencode attach` when `opencode` is on `PATH`. If OpenCode is not installed, the native C TUI starts instead. Type `/quit` to exit.
+`nehanda` launches [aichat](https://github.com/sigoden/aichat), a REPL-style TUI, configured to talk to nehanda-server over its loopback HTTP API (`127.0.0.1:8740`). Type `/exit` to quit.
 
-`nehanda chat "message"` (one-shot, with inline text) always uses the server stream API directly — OpenCode only affects interactive TUI sessions.
-
-### Optional: Install OpenCode
-
-1. `./install.sh` — builds the nehanda stack, starts services, registers the EC2 agent
-2. Install [OpenCode](https://github.com/opencode-ai/opencode) separately (package manager or upstream repo)
-3. Ensure `opencode` is on `PATH`
-4. Run `nehanda` — no extra configuration needed
-
-Override detection when needed:
-
-```bash
-export AIMEE_OPENCODE_BIN=/path/to/opencode
-```
+`nehanda chat "message"` (one-shot, with inline text) sends directly to the server stream API without the TUI.
 
 ## Nehanda identity (system prompt)
 
@@ -80,8 +67,7 @@ bash scripts/start-native-services.sh status   # embedder, kb, server all ok
 
 ```
 nehanda (interactive)
-  ├── OpenCode on PATH → bridge :<port> → opencode attach → nehanda-server (UDS)
-  └── native C TUI (fallback) ───────────────────────────→ nehanda-server (UDS)
+  └── aichat (TUI) ──── HTTP 127.0.0.1:8740/v1 ──→ nehanda-server (UDS)
         ├── nehanda-kb  (127.0.0.1:8741)
         │       ├── postgres aimee_shared  (vectors, code graph, KB docs)
         │       └── embedder  (127.0.0.1:8742 — local CPU, Qwen3-0.6B)
