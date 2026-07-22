@@ -130,6 +130,7 @@ build_binaries() {
     cmake -S "$REPO_ROOT" -B "$BUILD_DIR" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX="$HOME/.local" \
+      -DAIMEE_THIN_CLIENT=ON \
       > "$BUILD_DIR/cmake-configure.log" 2>&1 \
       || die "cmake configure failed — see $BUILD_DIR/cmake-configure.log"
     cmake --build "$BUILD_DIR" --parallel "$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)" \
@@ -282,6 +283,76 @@ install_hooks() {
   ok "hooks installed"
 }
 
+# ── aichat TUI ───────────────────────────────────────────────────────────────
+install_aichat() {
+  step "aichat TUI"
+
+  # Install aichat if not present
+  if ! command -v aichat &>/dev/null; then
+    if [[ "$OS" == "Darwin" ]]; then
+      brew install aichat
+    elif command -v cargo &>/dev/null; then
+      cargo install aichat
+    else
+      die "aichat not found; install via: brew install aichat  or  cargo install aichat"
+    fi
+  fi
+  ok "aichat $(aichat --version 2>/dev/null | head -1)"
+
+  # Generate a bearer token for the loopback TCP listener
+  local token
+  token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+
+  # Enable nehanda-server TCP listener on localhost:8740
+  local aimee_cfg="$HOME/.config/aimee/aimee.yaml"
+  # Remove any prior aichat TCP block before re-adding
+  python3 - "$aimee_cfg" <<PY
+import re, sys
+path = sys.argv[1]
+try:
+    with open(path) as f: content = f.read()
+    content = re.sub(r'\n# aichat TUI.*?(?=\n[^\s]|\Z)', '', content, flags=re.DOTALL)
+    with open(path, 'w') as f: f.write(content)
+except FileNotFoundError:
+    pass
+PY
+  cat >> "$aimee_cfg" <<YAML
+
+# aichat TUI — nehanda-server loopback HTTP API
+aimee:
+  api:
+    http_port: 8740
+    bearer_token: "${token}"
+YAML
+  ok "enabled nehanda-server TCP on 127.0.0.1:8740"
+
+  # aichat config dir — macOS uses ~/Library/Application Support/aichat
+  local aichat_cfg_dir
+  if [[ "$OS" == "Darwin" ]]; then
+    aichat_cfg_dir="$HOME/Library/Application Support/aichat"
+  else
+    aichat_cfg_dir="$HOME/.config/aichat"
+  fi
+  mkdir -p "$aichat_cfg_dir"
+
+  cat > "$aichat_cfg_dir/config.yaml" <<YAML
+model: nehanda:nehanda
+function_calling: false
+save_session: false
+
+clients:
+  - type: openai-compatible
+    name: nehanda
+    api_base: http://127.0.0.1:8740/v1
+    api_key: "${token}"
+    models:
+      - name: nehanda
+        max_input_tokens: 32768
+YAML
+
+  ok "aichat configured → nehanda-server :8740"
+}
+
 # ── Verify user path ──────────────────────────────────────────────────────────
 verify() {
   step "Verify"
@@ -306,6 +377,7 @@ start_services
 install_prompt
 register_agent
 install_hooks
+install_aichat
 verify
 
 echo ""

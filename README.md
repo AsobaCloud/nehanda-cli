@@ -6,8 +6,7 @@ Built on [aimee](https://github.com/RakuenSoftware/aimee) — local memory subst
 
 ```
   Your Terminal
-    ├─ OpenCode (via opencode attach) ─→ bridge :<port> ─→ nehanda-server (UDS)
-    └─ nehanda native TUI (fallback)   ──────────────────→ nehanda-server (UDS)
+    └─ aichat (TUI) ──────────────────────────→ nehanda-server :8740 → nehanda-server (UDS)
   • 4-tier memory compaction (~86% token reduction pre-egress)
   • Code index + KB — postgres + pgvector, never leaves machine
   • Supervisor/Delegate task fan-out → local/LAN Ollama (free)
@@ -29,7 +28,7 @@ cd nehanda-cli
 nehanda
 ```
 
-`install.sh` builds only the nehanda stack. For the enhanced OpenCode TUI experience, install OpenCode separately and ensure `opencode` is on `PATH` — no additional configuration needed. See [docs/QUICK_START.md](docs/QUICK_START.md) for full setup and verification.
+`install.sh` builds the nehanda stack and installs [aichat](https://github.com/sigoden/aichat) as the interactive TUI. See [docs/QUICK_START.md](docs/QUICK_START.md) for full setup and verification.
 
 ## Architecture
 

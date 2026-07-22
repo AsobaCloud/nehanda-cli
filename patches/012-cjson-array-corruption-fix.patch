@@ -1,0 +1,20 @@
+diff --git a/src/posix/agent_runtime.c b/src/posix/agent_runtime.c
+index 5034d928..694c6d18 100644
+--- a/src/posix/agent_runtime.c
++++ b/src/posix/agent_runtime.c
+@@ -695,7 +695,14 @@ native_provider_http:
+             }
+             sys_msg->next = messages->child;
+             if (messages->child)
+-               messages->child->prev = sys_msg;
++            {
++               sys_msg->prev = messages->child->prev;
++               messages->child->prev = sys_msg;
++            }
++            else
++            {
++               sys_msg->prev = sys_msg;
++            }
+             messages->child = sys_msg;
+          }
+       }
