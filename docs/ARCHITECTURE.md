@@ -38,17 +38,19 @@ Source of truth for the three-tier design, AGPL boundary analysis, auth flow, an
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### aichat Integration
+### nehanda-ui Integration
 
-For interactive sessions, `nehanda` execs [aichat](https://github.com/sigoden/aichat) as the TUI frontend:
+For interactive sessions, `nehanda` execs `nehanda-ui` (via `$NEHANDA_AICHAT_BIN`), an Ink-based terminal UI:
 
-1. `nehanda` execs `aichat` (or `$NEHANDA_AICHAT_BIN` if set)
-2. aichat reads `~/.config/aichat/config.yaml`, which points at nehanda-server's loopback HTTP API (`127.0.0.1:8740/v1`)
-3. aichat sends standard OpenAI-compatible chat completions requests; nehanda-server routes them through the full local pipeline (memory, KB, delegates) before forwarding to EC2
+1. `nehanda` execs `$NEHANDA_AICHAT_BIN` (set to `nehanda-ui` by `install.sh`)
+2. `nehanda-ui` talks directly to nehanda-server's loopback HTTP API (`127.0.0.1:8740/v1`) using the bearer token from `~/.config/aimee/aimee.yaml`
+3. The UI provides model/agent config, bearer token management, token usage stats, and an auth stub — all without editing config files directly
 
-If aichat is not installed and `default_launch=1`, nehanda falls back to `builtin_chat_native_loop()` — a minimal readline loop.
+`nehanda-ui` does not replace nehanda-server's pipeline. Memory compaction, KB, and delegate fan-out all still run inside nehanda-server. `nehanda-ui` is purely a presentation layer.
 
-One-shot `nehanda chat "message"` (inline text) never uses aichat; it goes straight to the server stream API.
+If `$NEHANDA_AICHAT_BIN` is not set or the binary is not found, nehanda falls back to `aichat` (if installed), then to `builtin_chat_native_loop()` — a minimal readline loop.
+
+One-shot `nehanda chat "message"` (inline text) never uses nehanda-ui; it goes straight to the server stream API.
 
 ## Why the AGPL Line Sits Where It Does
 
