@@ -215,6 +215,18 @@ install_prompt() {
   ok "Nehanda identity prompt installed"
 }
 
+# ── Model registry ────────────────────────────────────────────────────────────
+install_model_registry() {
+  step "Model registry"
+  local dest="$HOME/.config/aimee/model-registry.json"
+  if [ ! -f "$dest" ]; then
+    cp "$REPO_ROOT/config/model-registry.json" "$dest"
+    ok "seeded model-registry.json → $dest"
+  else
+    ok "model-registry.json already present (not overwritten)"
+  fi
+}
+
 # ── EC2 agent ─────────────────────────────────────────────────────────────────
 register_agent() {
   step "Primary agent"
@@ -396,6 +408,7 @@ install_binaries
 configure_path
 start_services
 install_prompt
+install_model_registry
 register_agent
 install_hooks
 install_aichat
