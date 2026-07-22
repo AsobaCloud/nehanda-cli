@@ -283,6 +283,25 @@ install_hooks() {
   ok "hooks installed"
 }
 
+# ── nehanda-ui ────────────────────────────────────────────────────────────────
+install_nehanda_ui() {
+  step "nehanda-ui (terminal UI)"
+
+  if ! command -v node &>/dev/null; then
+    warn "node not found — skipping nehanda-ui install (run: brew install node)"
+    return
+  fi
+
+  # Install JS deps if needed
+  if [ ! -d "$REPO_ROOT/node_modules/ink" ]; then
+    npm install --prefix "$REPO_ROOT" --silent
+  fi
+
+  cp "$REPO_ROOT/scripts/nehanda-ui.mjs" "$INSTALL_DIR/nehanda-ui"
+  chmod +x "$INSTALL_DIR/nehanda-ui"
+  ok "nehanda-ui installed → $INSTALL_DIR/nehanda-ui"
+}
+
 # ── aichat TUI ───────────────────────────────────────────────────────────────
 install_aichat() {
   step "aichat TUI"
@@ -378,6 +397,7 @@ install_prompt
 register_agent
 install_hooks
 install_aichat
+install_nehanda_ui
 verify
 
 echo ""
