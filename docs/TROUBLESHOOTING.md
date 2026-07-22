@@ -194,6 +194,21 @@ nehanda agent local ollama-remote-reasoner http://AsobaCorp-1.local:11434/v1 \
 
 ---
 
+## Services report "ok" but chat doesn't work (stale embedder gateway)
+
+**Symptom:** `bash scripts/start-native-services.sh status` shows all three services healthy, but `nehanda chat` returns no response or stalls.
+
+**Cause:** Stale embedder process (Python gateway script) crashed but remained bound to port 8742. Health checks pass because they hit a different instance or a wrapper process that's still alive but non-functional.
+
+**Fix:** Aggressive restart with process cleanup:
+```bash
+bash scripts/restart-native-services.sh
+```
+
+This script force-kills all stale processes, clears socket files, and re-verifies the full stack with `phase0-smoke.sh`.
+
+---
+
 ## Services not running (`server unavailable` / `no final response from server`)
 
 **Symptom:** `nehanda` launches but chat fails, or you get `aimee: cannot launch session; server unavailable`.
@@ -223,3 +238,14 @@ bash scripts/install-native-services.sh
 # 4. Verify
 bash scripts/phase0-smoke.sh
 ```
+
+---
+
+## When to use each recovery method
+
+| Problem | Command |
+|---------|---------|
+| Services crashed completely | `bash scripts/start-native-services.sh` |
+| Services report ok but chat fails | `bash scripts/restart-native-services.sh` |
+| Services misconfigured / need EC2 re-registration | `bash scripts/install-native-services.sh` |
+| Full system reset (clear config, reinstall) | `bash scripts/phase0-smoke.sh` (with full recovery sequence above) |
