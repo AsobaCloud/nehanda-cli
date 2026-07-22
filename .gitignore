@@ -38,3 +38,5 @@ upstream/
 build/
 upstream/
 .aimee/
+node_modules/
+package-lock.json
