@@ -1,0 +1,31 @@
+{
+  "ollama_hosts": [
+    "http://AsobaCorp-1.local:11434"
+  ],
+  "models": [
+    {
+      "name": "nehanda-rag-synthesis-27b",
+      "endpoint": "http://nehanda.asoba.co:8000",
+      "label": "Nehanda 27B (EC2)",
+      "desc": "Primary — fine-tuned Qwen3.6 27B, vLLM, af-south-1"
+    },
+    {
+      "name": "deepseek-coder-v2:latest",
+      "endpoint": "http://AsobaCorp-1.local:11434/v1",
+      "label": "DeepSeek Coder V2 (LAN)",
+      "desc": "Windows LAN delegate — coding specialist"
+    },
+    {
+      "name": "qwen2.5:14b",
+      "endpoint": "http://AsobaCorp-1.local:11434/v1",
+      "label": "Qwen 2.5 14B (LAN)",
+      "desc": "Windows LAN delegate — general reasoning"
+    },
+    {
+      "name": "deepseek-r1:14b",
+      "endpoint": "http://AsobaCorp-1.local:11434/v1",
+      "label": "DeepSeek R1 14B (LAN)",
+      "desc": "Windows LAN delegate — deep reasoning"
+    }
+  ]
+}

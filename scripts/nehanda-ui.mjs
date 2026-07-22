@@ -74,12 +74,6 @@ function writeBearerToken(token) {
   fs.writeFileSync(AICHAT_CFG, aichat, 'utf8')
 }
 
-function writeAgentModel(model) {
-  const data = readAgents()
-  const agent = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
-  if (agent) agent.model = model
-  fs.writeFileSync(AGENTS_JSON, JSON.stringify(data, null, 2), 'utf8')
-}
 
 function writeOrchestratorModel(model) {
   let yaml = fs.readFileSync(AIMEE_YAML, 'utf8')
@@ -141,32 +135,65 @@ const SLASH_COMMANDS = [
 ]
 
 // ── Model registry ────────────────────────────────────────────
-const MODEL_REGISTRY = [
-  {
-    name: 'nehanda-rag-synthesis-27b',
-    endpoint: 'http://nehanda.asoba.co:8000',
-    label: 'Nehanda 27B (EC2)',
-    desc: 'Primary — fine-tuned Qwen3.6 27B, vLLM, af-south-1',
-  },
-  {
-    name: 'deepseek-coder-v2:latest',
-    endpoint: 'http://AsobaCorp-1.local:11434/v1',
-    label: 'DeepSeek Coder V2 (LAN)',
-    desc: 'Windows LAN delegate — coding specialist',
-  },
-  {
-    name: 'qwen2.5:14b',
-    endpoint: 'http://AsobaCorp-1.local:11434/v1',
-    label: 'Qwen 2.5 14B (LAN)',
-    desc: 'Windows LAN delegate — general reasoning',
-  },
-  {
-    name: 'deepseek-r1:14b',
-    endpoint: 'http://AsobaCorp-1.local:11434/v1',
-    label: 'DeepSeek R1 14B (LAN)',
-    desc: 'Windows LAN delegate — deep reasoning',
-  },
-]
+const REGISTRY_PATH = path.join(AIMEE_DIR, 'model-registry.json')
+
+// Fallback if registry file doesn't exist yet
+const DEFAULT_REGISTRY = {
+  ollama_hosts: ['http://AsobaCorp-1.local:11434'],
+  models: [
+    { name: 'nehanda-rag-synthesis-27b', endpoint: 'http://nehanda.asoba.co:8000', label: 'Nehanda 27B (EC2)', desc: 'Primary — fine-tuned Qwen3.6 27B, vLLM, af-south-1' },
+    { name: 'deepseek-coder-v2:latest', endpoint: 'http://AsobaCorp-1.local:11434/v1', label: 'DeepSeek Coder V2 (LAN)', desc: 'Windows LAN delegate — coding specialist' },
+    { name: 'qwen2.5:14b', endpoint: 'http://AsobaCorp-1.local:11434/v1', label: 'Qwen 2.5 14B (LAN)', desc: 'Windows LAN delegate — general reasoning' },
+    { name: 'deepseek-r1:14b', endpoint: 'http://AsobaCorp-1.local:11434/v1', label: 'DeepSeek R1 14B (LAN)', desc: 'Windows LAN delegate — deep reasoning' },
+  ],
+}
+
+function readRegistry() {
+  try {
+    return JSON.parse(fs.readFileSync(REGISTRY_PATH, 'utf8'))
+  } catch {
+    return DEFAULT_REGISTRY
+  }
+}
+
+async function discoverOllamaModels(hosts) {
+  const discovered = []
+  await Promise.all(hosts.map(async (host) => {
+    const base = host.replace(/\/$/, '')
+    try {
+      const res = await fetch(`${base}/api/tags`, {
+        signal: AbortSignal.timeout(2000),
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      for (const m of (data.models || [])) {
+        discovered.push({
+          name: m.name,
+          endpoint: `${base}/v1`,
+          label: `${m.name} (${new URL(base).hostname})`,
+          desc: `Discovered via Ollama — ${m.name}`,
+          discovered: true,
+        })
+      }
+    } catch { /* host unreachable — skip silently */ }
+  }))
+  return discovered
+}
+
+async function buildModelList() {
+  const registry = readRegistry()
+  const base = registry.models || []
+  const hosts = registry.ollama_hosts || []
+
+  // Discover live models from each Ollama host
+  const discovered = await discoverOllamaModels(hosts)
+
+  // Dedupe: discovered models already in base (same name+endpoint) are skipped
+  const baseKeys = new Set(base.map(m => `${m.name}|${m.endpoint}`))
+  const newModels = discovered.filter(m => !baseKeys.has(`${m.name}|${m.endpoint}`))
+
+  return [...base, ...newModels]
+}
 
 // ── Cape Town skyline (from ona-code) ─────────────────────────
 function CapeTownSkyline() {
@@ -596,8 +623,11 @@ async function handleCommand(cmd, bridge) {
       ? (readAgents().agents?.[0]?.model || '')
       : (() => { const m = fs.readFileSync(AIMEE_YAML, 'utf8').match(/openai_model:\s*(\S+)/); return m ? m[1] : '' })()
 
+    bridge.addMessage({ role: 'system', text: '  Discovering models…' })
+    const allModels = await buildModelList()
+
     // Mark current model in registry
-    const registryItems = MODEL_REGISTRY.map(m => ({
+    const registryItems = allModels.map(m => ({
       ...m,
       label: m.name === currentModel ? `${m.label} ✓` : m.label,
     }))
@@ -610,8 +640,6 @@ async function handleCommand(cmd, bridge) {
 
     try {
       if (choice.value === 'agent') {
-        writeAgentModel(selected.name)
-        // Also update the endpoint in agents.json to match selected model's endpoint
         const data = readAgents()
         const agent = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
         if (agent) {
