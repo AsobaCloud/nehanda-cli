@@ -46,6 +46,7 @@ Available slash commands in `nehanda-ui`:
 | `/model` | Change aimee agent model or orchestrator model |
 | `/bearer` | Update bearer token in `aimee.yaml` and aichat config atomically |
 | `/token` | Last 24h token usage breakdown |
+| `/stats` | KB, memory, token usage, and service health statistics |
 | `/auth` | Auth status / login stub |
 | `/config` | Show current config |
 | `/clear` | Start a new conversation |
@@ -66,6 +67,36 @@ Available slash commands in `nehanda-ui`:
 These override the upstream AIMEE engineer persona. Nehanda presents as a fine-tuned Qwen3.6 27B multimodal assistant with strengths in technical writing, deep research, coding, document review, and vision (images/diagrams the user provides).
 
 To customize identity or capabilities, edit the files in `config/` and re-run `./install.sh`, or copy them into `~/.config/aimee/` directly. Start a new session after changes.
+
+## Model registry
+
+`install.sh` seeds `~/.config/aimee/model-registry.json` with the default model pool (EC2 + LAN delegates). Edit this file to add or remove models without touching any code:
+
+```json
+{
+  "ollama_hosts": ["http://your-machine.local:11434"],
+  "models": [
+    { "name": "nehanda-rag-synthesis-27b", "endpoint": "http://nehanda.asoba.co:8000", "label": "Nehanda 27B (EC2)", "desc": "Primary" }
+  ]
+}
+```
+
+When you open `/model`, `nehanda-ui` queries each host in `ollama_hosts` (2s timeout) and appends any models found there that aren't already in the file. Models on unreachable hosts are skipped silently.
+
+## Model registry
+
+`install.sh` seeds `~/.config/aimee/model-registry.json` with the default model pool (EC2 + LAN delegates). Edit this file to add or remove models without touching any code:
+
+```json
+{
+  "ollama_hosts": ["http://your-machine.local:11434"],
+  "models": [
+    { "name": "nehanda-rag-synthesis-27b", "endpoint": "http://nehanda.asoba.co:8000", "label": "Nehanda 27B (EC2)", "desc": "Primary" }
+  ]
+}
+```
+
+When you open `/model`, `nehanda-ui` queries each host in `ollama_hosts` (2s timeout) and appends any models found there that aren't already in the file. Models on unreachable hosts are skipped silently.
 
 ## Native services (optional persistence)
 
