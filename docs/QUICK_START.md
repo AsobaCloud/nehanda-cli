@@ -21,7 +21,7 @@ Builds three binaries (`nehanda`, `nehanda-server`, `nehanda-kb`), installs post
 
 ```bash
 ./install.sh    # ~40s on re-run with cached build; first cold compile takes longer
-nehanda         # interactive TUI (aichat, configured against nehanda-server)
+nehanda         # interactive TUI (nehanda-ui, configured against nehanda-server)
 nehanda chat "…"  # one-shot message (server stream, no TUI)
 ```
 
@@ -37,7 +37,20 @@ export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"   # macOS only
 nehanda
 ```
 
-`nehanda` launches [aichat](https://github.com/sigoden/aichat), a REPL-style TUI, configured to talk to nehanda-server over its loopback HTTP API (`127.0.0.1:8740`). Type `/exit` to quit.
+`nehanda` launches `nehanda-ui`, an Ink-based terminal UI that talks directly to nehanda-server over the loopback HTTP API (`127.0.0.1:8740`). The UI shows the current agent, model, endpoint, bearer token, and live token usage. Type `/help` for available commands.
+
+Available slash commands in `nehanda-ui`:
+
+| Command | Description |
+|---|---|
+| `/model` | Change aimee agent model or orchestrator model |
+| `/bearer` | Update bearer token in `aimee.yaml` and aichat config atomically |
+| `/token` | Last 24h token usage breakdown |
+| `/auth` | Auth status / login stub |
+| `/config` | Show current config |
+| `/clear` | Start a new conversation |
+| `/help` | List all commands |
+| `/exit` | Quit |
 
 `nehanda chat "message"` (one-shot, with inline text) sends directly to the server stream API without the TUI.
 
@@ -67,7 +80,7 @@ bash scripts/start-native-services.sh status   # embedder, kb, server all ok
 
 ```
 nehanda (interactive)
-  └── aichat (TUI) ──── HTTP 127.0.0.1:8740/v1 ──→ nehanda-server (UDS)
+  └── nehanda-ui (Ink TUI) ── HTTP 127.0.0.1:8740/v1 ──→ nehanda-server (UDS)
         ├── nehanda-kb  (127.0.0.1:8741)
         │       ├── postgres aimee_shared  (vectors, code graph, KB docs)
         │       └── embedder  (127.0.0.1:8742 — local CPU, Qwen3-0.6B)
