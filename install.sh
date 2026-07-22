@@ -182,6 +182,8 @@ configure_path() {
     if [ -n "$pg_line" ]; then
       grep -qF 'postgresql@17/bin' "$rc" 2>/dev/null || echo "$pg_line" >> "$rc"
     fi
+    grep -qF 'NEHANDA_AICHAT_BIN' "$rc" 2>/dev/null || \
+      echo 'export NEHANDA_AICHAT_BIN=nehanda-ui' >> "$rc"
   done
 
   export PATH="$INSTALL_DIR:$PATH"
@@ -297,8 +299,8 @@ install_nehanda_ui() {
     npm install --prefix "$REPO_ROOT" --silent
   fi
 
-  cp "$REPO_ROOT/scripts/nehanda-ui.mjs" "$INSTALL_DIR/nehanda-ui"
-  chmod +x "$INSTALL_DIR/nehanda-ui"
+  ln -sf "$REPO_ROOT/scripts/nehanda-ui.mjs" "$INSTALL_DIR/nehanda-ui"
+  chmod +x "$REPO_ROOT/scripts/nehanda-ui.mjs"
   ok "nehanda-ui installed → $INSTALL_DIR/nehanda-ui"
 }
 
