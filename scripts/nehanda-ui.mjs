@@ -87,27 +87,6 @@ function writeOrchestratorModel(model) {
   fs.writeFileSync(AIMEE_YAML, yaml, 'utf8')
 }
 
-
-function recordTokenAudit(promptTokens, completionTokens, modelName) {
-  try {
-    const db = new Database(AIMEE_DB)
-    const now = new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "")
-    const agent = readAgents().agents?.[0]
-    db.prepare(`
-      INSERT INTO token_audit (
-        session_id, user_id, org_id, agent_name, agent_provider,
-        agent_model, flow_stage, prompt_tokens, completion_tokens,
-        total_tokens, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      "ui-session", "user", "org", agent?.name || "nehanda", agent?.provider || "openai",
-      modelName || agent?.model || "GLM-4.7-Flash", "stream_chat",
-      promptTokens, completionTokens, promptTokens + completionTokens, now
-    )
-    db.close()
-  } catch {}
-}
-
 function readTokenStats(since) {
   try {
     const db = new Database(AIMEE_DB, { readonly: true, fileMustExist: true })
