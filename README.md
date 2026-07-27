@@ -30,6 +30,14 @@ nehanda
 
 `install.sh` builds the nehanda stack and installs [aichat](https://github.com/sigoden/aichat) as the interactive TUI. See [docs/QUICK_START.md](docs/QUICK_START.md) for full setup and verification.
 
+### Automatic Workspace Registration
+
+When you run `nehanda` from any git repository, it automatically adds that directory as a workspace. This enables the agent to access files from your actual working directory instead of being sandboxed in worktrees. The workspace registration wrapper is installed automatically during the setup process.
+
+### Model Configuration
+
+Nehanda-cli supports any OpenAI-compatible model as your primary agent or orchestrator. You can configure models through the agent configuration system, allowing you to use models from various providers (including ZAI, OpenAI, or self-hosted models) without being locked to a specific provider. See [docs/QUICK_START.md](docs/QUICK_START.md) for model configuration details.
+
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the three-tier design and AGPL boundary analysis.
