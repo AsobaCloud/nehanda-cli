@@ -44,7 +44,6 @@ step "0.6 register EC2 agent"
 curl -sf "${NEHANDA_ENDPOINT}/v1/models" | grep -q "$NEHANDA_MODEL" || fail "EC2 unreachable"
 nehanda agent add nehanda "$NEHANDA_ENDPOINT" "$NEHANDA_MODEL" \
   --provider openai \
-  --no-tools \
   --roles "code,review,explain,refactor,draft,execute,summarize,plan,validate" \
   --default 2>/dev/null || true
 if [ -f "$HOME/.config/aimee/agents.json" ]; then
@@ -55,7 +54,7 @@ with open(p) as f:
     d = json.load(f)
 for a in d.get("agents", []):
     if a.get("name") == "nehanda":
-        a["tools_enabled"] = False
+        a["tools_enabled"] = True
 with open(p, "w") as f:
     json.dump(d, f, indent="\t")
 PY
