@@ -12,6 +12,83 @@ All steps 0.1–0.9 must pass. A passing client connection with failing KB (step
 
 ---
 
+## Workspace Registration Issues
+
+### Agent can't access files from current directory
+
+**Symptom:** The agent says it can't access files or seems to be in a different directory than where you launched nehanda.
+
+**Cause:** The current directory is not registered as a workspace, so the agent is operating in a sandboxed worktree.
+
+**Fix:** Run nehanda from a git repository and it will automatically register as a workspace. You can also manually register:
+```bash
+nehanda workspace add /path/to/your/project
+```
+
+Verify it's registered:
+```bash
+nehanda workspace list
+```
+
+### Automatic workspace registration not working
+
+**Symptom:** Running nehanda from a git repository doesn't automatically add it as a workspace.
+
+**Cause:** The workspace wrapper may not be installed correctly.
+
+**Fix:** Re-run install.sh to ensure the wrapper is properly set up:
+```bash
+./install.sh
+```
+
+The install script is idempotent and will fix the wrapper setup if it's broken.
+
+### Too many workspaces registered
+
+**Symptom:** nehanda workspace list shows many old or duplicate workspaces.
+
+**Fix:** Remove unwanted workspaces:
+```bash
+nehanda workspace remove /path/to/unwanted-workspace
+```
+
+---
+
+## Model Configuration Issues
+
+### Tool calls not working with OpenAI-compatible models
+
+**Symptom:** Your OpenAI-compatible model (from ZAI, OpenAI, or other providers) isn't executing tool calls properly.
+
+**Cause:** The model may be configured in non-streaming mode, which requires specific tool calling support.
+
+**Fix:** Ensure your model is properly configured with the correct provider and roles:
+```bash
+nehanda agent add my-model https://api.example.com/v1 my-model-name \
+  --provider openai \
+  --roles "code,review,explain,refactor,draft,execute,summarize,plan,validate,diagnose"
+```
+
+Check your current agent configuration:
+```bash
+cat ~/.config/aimee/agents.json
+```
+
+### Can't add custom models
+
+**Symptom:** `nehanda agent add` fails when trying to add a custom model.
+
+**Cause:** The endpoint may not be reachable, the API key may be invalid, or the model name may be incorrect.
+
+**Fix:** Verify the endpoint is accessible:
+```bash
+curl https://api.example.com/v1/models
+```
+
+Check that your API key is configured correctly in the agent configuration. For OpenAI-compatible models, ensure you're using the correct provider type.
+
+---
+
 ## Root causes found during Phase 0 (2026-07-12)
 
 ### 1. Stale `remote.conf` routing chat away from local server

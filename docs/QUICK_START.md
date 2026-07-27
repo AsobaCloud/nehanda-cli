@@ -31,6 +31,17 @@ export PATH="$HOME/.local/bin:$PATH"
 export PATH="/opt/homebrew/opt/postgresql@17/bin:$PATH"   # macOS only
 ```
 
+### Automatic Workspace Registration
+
+The install.sh script automatically sets up a workspace registration wrapper. When you run `nehanda` from any git repository, it automatically adds that directory as a workspace. This means:
+
+- **Automatic Context**: The agent can access files from your actual working directory
+- **No Manual Setup**: No need to manually register each project with `nehanda workspace add`
+- **Git-Aware**: Only git repositories are automatically registered (non-git directories are skipped)
+- **Sandbox Prevention**: Prevents the agent from being trapped in worktrees without access to your files
+
+If you prefer to manually manage workspaces, you can still use `nehanda workspace add <path>` to register specific directories.
+
 ## Start a session
 
 ```bash
@@ -81,6 +92,28 @@ To customize identity or capabilities, edit the files in `config/` and re-run `.
   ]
 }
 ```
+
+### Adding Custom Models
+
+Nehanda-cli supports any OpenAI-compatible model as your primary agent or orchestrator. You can add models from various providers:
+
+```bash
+# Add a custom OpenAI-compatible model
+nehanda agent add my-model https://api.example.com/v1 my-model-name \
+  --provider openai \
+  --roles "code,review,explain,refactor,draft,execute,summarize,plan,validate,diagnose"
+
+# Add a self-hosted model
+nehanda agent add local-model http://localhost:8000/v1 local-model-name \
+  --provider openai \
+  --roles "code,review,explain"
+```
+
+The system is provider-agnostic, so you can use models from:
+- **ZAI** (GLM series and other models)
+- **OpenAI** (GPT series)
+- **Self-hosted** (local or LAN models)
+- **Other OpenAI-compatible providers**
 
 When you open `/model`, `nehanda-ui` queries each host in `ollama_hosts` (2s timeout) and appends any models found there that aren't already in the file. Models on unreachable hosts are skipped silently.
 
