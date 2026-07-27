@@ -10,8 +10,15 @@ export PATH="/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/bin:/usr/local/bi
 
 echo "=== Aggressive Native Services Restart ==="
 echo ""
-echo "Step 1: Stopping services via normal shutdown..."
-bash "$SCRIPT_DIR/start-native-services.sh" stop
+echo "Step 1: Unloading launchd agents & stopping services via normal shutdown..."
+if [ "$(uname)" = "Darwin" ]; then
+  LA_DIR="$HOME/Library/LaunchAgents"
+  for svc in com.nehanda.server com.nehanda.kb com.nehanda.embedder; do
+    launchctl bootout "gui/$(id -u)/$svc" 2>/dev/null || true
+    launchctl unload "$LA_DIR/${svc}.plist" 2>/dev/null || true
+  done
+fi
+bash "$SCRIPT_DIR/start-native-services.sh" stop 2>/dev/null || true
 sleep 2
 
 echo ""
@@ -42,12 +49,22 @@ fi
 sleep 2
 
 echo ""
-echo "Step 3: Clearing socket files..."
-AIMEE_SOCK="${AIMEE_SOCK:-$HOME/.config/aimee/aimee-http.sock}"
-if [ -S "$AIMEE_SOCK" ]; then
-  rm -f "$AIMEE_SOCK"
-  echo "  Removed $AIMEE_SOCK"
-fi
+echo "Step 3: Clearing stale lock files, PIDs, and sockets..."
+CONFIG_DIR="$HOME/.config/aimee"
+rm -f "$CONFIG_DIR"/*.pid "$CONFIG_DIR"/*.sock /tmp/nehanda*.pid 2>/dev/null || true
+echo "  Purged stale .pid and .sock files from $CONFIG_DIR and /tmp"
+
+echo ""
+echo "Step 3.5: Verifying ports 8740, 8741, 8742 are free..."
+for port in 8740 8741 8742; do
+  if lsof -i ":$port" >/dev/null 2>&1; then
+    echo "ERROR: Port $port is currently in use by an external process!" >&2
+    lsof -i ":$port" >&2
+    echo "Please terminate the process on port $port before restarting." >&2
+    exit 1
+  fi
+done
+echo "  All required ports (8740, 8741, 8742) are verified free."
 
 echo ""
 echo "Step 4: Starting fresh services..."

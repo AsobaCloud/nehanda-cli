@@ -234,7 +234,7 @@ register_agent() {
     || die "EC2 unreachable at $NEHANDA_ENDPOINT"
 
   nehanda agent add nehanda "$NEHANDA_ENDPOINT" "$NEHANDA_MODEL" \
-    --provider openai --no-tools \
+    --provider openai \
     --roles "code,review,explain,refactor,draft,execute,summarize,plan,validate,diagnose" \
     --default 2>&1 | grep -Ev '^$' || true
 
@@ -247,7 +247,7 @@ with open(p) as f:
     d = json.load(f)
 for a in d.get("agents", []):
     if a.get("name") == "nehanda":
-        a["tools_enabled"] = False
+        a["tools_enabled"] = True
 with open(p, "w") as f:
     json.dump(d, f, indent="\t")
 PY
@@ -370,7 +370,7 @@ YAML
 
   cat > "$aichat_cfg_dir/config.yaml" <<YAML
 model: nehanda:nehanda
-function_calling: false
+function_calling: true
 save_session: false
 
 clients:
