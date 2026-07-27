@@ -1,0 +1,26 @@
+diff --git a/src/server/openai_chat.c b/src/server/openai_chat.c
+index 1bc53664..dedeca5d 100644
+--- a/src/server/openai_chat.c
++++ b/src/server/openai_chat.c
+@@ -793,7 +793,9 @@ static int chat_stream_handler(const char *body, server_http_sse_emit emit, void
+    }
+    else
+    {
+-      erc = agent_execute(ag, pi_env, prompt, max_tokens, temperature, &result);
++      agent_set_ingress_source("openai-ingress");
++      erc = agent_run_with_tools(&acfg, "execute", pi_env, prompt, max_tokens, &result);
++      agent_set_ingress_source("");
+    }
+    free(pi_env);
+    free(prompt);
+@@ -867,7 +869,9 @@ static int completion_stream_handler(const char *body, server_http_sse_emit emit
+    /* P1 pre-injection: prepend the <aimee-context> envelope as the system
+     * prompt (config ingress_preinject_enabled; no-op when off/empty). */
+    char *pi_env = gw_memory_system_prompt(prompt);
+-   int erc = agent_execute(ag, pi_env, prompt, max_tokens, temperature, &result);
++   agent_set_ingress_source("openai-ingress");
++   int erc = agent_run_with_tools(&acfg, "execute", pi_env, prompt, max_tokens, &result);
++   agent_set_ingress_source("");
+    free(pi_env);
+    free(prompt);
+ 
