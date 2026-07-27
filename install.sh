@@ -153,6 +153,96 @@ build_binaries() {
   fi
 }
 
+# ── Dynamic Workspace Registration Wrapper ───────────────────────────────────────
+create_nehanda_wrapper() {
+  local nehanda_bin="$INSTALL_DIR/nehanda"
+  local nehanda_real="$INSTALL_DIR/nehanda.real"
+  local wrapper_script="$INSTALL_DIR/nehanda"
+  
+  # Skip if wrapper already exists and nehanda.real exists (already set up)
+  if [ -f "$nehanda_real" ] && [ -f "$wrapper_script" ]; then
+    # Verify wrapper calls nehanda.real (not itself)
+    if grep -q "nehanda.real" "$wrapper_script" 2>/dev/null; then
+      ok "workspace wrapper already configured"
+      return 0
+    fi
+  fi
+  
+  # Rename nehanda to nehanda.real if it doesn't exist
+  if [ -f "$nehanda_bin" ] && [ ! -f "$nehanda_real" ]; then
+    mv "$nehanda_bin" "$nehanda_real" || {
+      warn "failed to rename nehanda to nehanda.real"
+      return 1
+    }
+  fi
+  
+  # Create the wrapper script
+  cat > "$wrapper_script" <<'WRAPPER_EOF'
+#!/bin/bash
+# nehanda-wrapper.sh - Dynamic workspace registration wrapper for nehanda
+# This script automatically adds the current directory as a workspace if it's a git repository
+# and not already registered, then forwards all arguments to the actual nehanda binary.
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NEHANDA_REAL="$SCRIPT_DIR/nehanda.real"
+
+# Function to check if current directory is a git repository
+is_git_repo() {
+    [ -d .git ] && return 0
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 && return 0
+    return 1
+}
+
+# Function to check if directory is already in workspace list
+is_workspace_registered() {
+    local dir="$1"
+    # Get absolute path (resolve symlinks)
+    local abs_dir
+    abs_dir=$(cd "$dir" && pwd -P) || return 1
+    
+    # Check if this directory is already in the workspace list
+    local workspaces
+    workspaces=$("$NEHANDA_REAL" workspace list 2>/dev/null) || return 1
+    # Check each line in workspace list
+    while IFS= read -r line; do
+        if [ "$line" = "$abs_dir" ]; then
+            return 0
+        fi
+    done <<< "$workspaces"
+    return 1
+}
+
+# Function to add current directory as workspace
+add_workspace() {
+    local dir="$1"
+    local abs_dir
+    abs_dir=$(cd "$dir" && pwd -P) || return 1
+    
+    echo "Auto-adding workspace: $abs_dir" >&2
+    "$NEHANDA_REAL" workspace add "$abs_dir" >/dev/null 2>&1
+}
+
+# Main logic
+if is_git_repo; then
+    current_dir=$(pwd)
+    if ! is_workspace_registered "$current_dir"; then
+        add_workspace "$current_dir"
+    fi
+fi
+
+# Forward all arguments to the actual nehanda binary
+exec "$NEHANDA_REAL" "$@"
+WRAPPER_EOF
+  
+  chmod +x "$wrapper_script" || {
+    warn "failed to make wrapper executable"
+    return 1
+  }
+  
+  ok "workspace wrapper installed"
+}
+
 install_binaries() {
   step "Install binaries"
   mkdir -p "$INSTALL_DIR"
@@ -167,6 +257,9 @@ install_binaries() {
     codesign -s - -f "$INSTALL_DIR/nehanda-kb" 2>/dev/null || true
   fi
   ok "installed to $INSTALL_DIR"
+  
+  # Create workspace registration wrapper
+  create_nehanda_wrapper
 }
 
 # ── PATH in shell profile ─────────────────────────────────────────────────────
