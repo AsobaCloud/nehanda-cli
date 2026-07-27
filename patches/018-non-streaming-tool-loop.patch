@@ -1,0 +1,35 @@
+diff --git a/src/server/openai_chat.c b/src/server/openai_chat.c
+index dedeca5d..14b722d6 100644
+--- a/src/server/openai_chat.c
++++ b/src/server/openai_chat.c
+@@ -261,7 +261,9 @@ static int run_completion(int chat, const char *body, char *resp, int cap)
+    }
+   else
+   {
+-      erc = agent_execute(ag, pi_env, prompt, max_tokens, temperature, &result);
++      agent_set_ingress_source("openai-ingress");
++      erc = agent_run_with_tools(&acfg, "execute", pi_env, prompt, max_tokens, &result);
++      agent_set_ingress_source("");
+    }
+   free(pi_env);
+   free(prompt);
+@@ -635,7 +637,7 @@ static int responses_handler(const char *body, char *resp, int cap)
+       return 503;
+    }
+ 
+-   double temperature = openai_request_double(body, "temperature", OPENAI_CHAT_TEMPERATURE, 2.0);
++   (void)openai_request_double(body, "temperature", OPENAI_CHAT_TEMPERATURE, 2.0); /* temperature not used by agent_run_with_tools */
+    int max_tokens = openai_request_int(body, "max_tokens", OPENAI_CHAT_MAX_TOKENS, 32768);
+ 
+    /* Continuation: if previous_response_id names a stored conversation, prepend
+@@ -660,7 +662,9 @@ static int responses_handler(const char *body, char *resp, int cap)
+    /* P1 pre-injection: prepend the <aimee-context> envelope as the system
+     * prompt (config ingress_preinject_enabled; no-op when off/empty). */
+    char *pi_env = gw_memory_system_prompt(full);
+-   int erc = agent_execute(ag, pi_env, full, max_tokens, temperature, &result);
++   agent_set_ingress_source("openai-ingress");
++   int erc = agent_run_with_tools(&acfg, "execute", pi_env, full, max_tokens, &result);
++   agent_set_ingress_source("");
+    free(pi_env);
+ 
+    if (erc != 0 || !result.response)
