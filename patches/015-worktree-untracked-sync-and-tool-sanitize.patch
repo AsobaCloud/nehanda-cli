@@ -1,0 +1,144 @@
+diff --git a/src/server/openai_chat.c b/src/server/openai_chat.c
+index 1bc53664..206c57c2 100644
+--- a/src/server/openai_chat.c
++++ b/src/server/openai_chat.c
+@@ -59,6 +59,22 @@
+  * previous_response_id. Bounds memory and the prompt we feed back to the agent. */
+ #define OPENAI_RESP_TRANSCRIPT_MAX (32 * 1024)
+ 
++/* Helper: Inspects incoming JSON body for client-provided "tools" array */
++static int request_has_client_tools(const char *body)
++{
++   if (!body || !body[0])
++      return 0;
++
++   cJSON *root = cJSON_Parse(body);
++   if (!root)
++      return 0;
++
++   cJSON *jtools = cJSON_GetObjectItemCaseSensitive(root, "tools");
++   int has_tools = (jtools && cJSON_IsArray(jtools) && cJSON_GetArraySize(jtools) > 0);
++   cJSON_Delete(root);
++   return has_tools;
++}
++
+ /* Record a dedup cache hit as a non-billable usage_kind=avoided audit row: the
+  * provider call was skipped, so the avoided estimated cost is logged separately
+  * and never added to spend totals (see db1_token_audit_spend_breakdown). Tokens
+@@ -139,7 +155,7 @@ static int run_completion(int chat, const char *body, char *resp, int cap)
+    const char **images = NULL;
+    int image_count = 0;
+    int prc = chat ? openai_parse_chat_request_with_images(body, model, sizeof(model), &prompt, &stream,
+-                                                          &images, &image_count)
++                                                         &images, &image_count)
+                   : openai_parse_completion_request(body, model, sizeof(model), &prompt, &stream);
+    if (prc != 0)
+    {
+@@ -254,14 +270,17 @@ static int run_completion(int chat, const char *body, char *resp, int cap)
+       cJSON *initial_messages = NULL;
+       cJSON *updated_messages = NULL;
+       erc = agent_execute_session_with_tools(ag, &acfg.network, pi_env, prompt, max_tokens,
+-                                              temperature, initial_messages, &updated_messages,
+-                                              images, image_count, &result);
++                                             temperature, initial_messages, &updated_messages,
++                                             images, image_count, &result);
+       if (updated_messages)
+          cJSON_Delete(updated_messages);
+    }
+    else
+    {
+-      erc = agent_execute(ag, pi_env, prompt, max_tokens, temperature, &result);
++      int has_tools = request_has_client_tools(body);
++      erc = has_tools 
++          ? agent_execute(ag, pi_env, prompt, max_tokens, temperature, &result) 
++          : agent_execute_with_tools(ag, NULL, pi_env, prompt, max_tokens, temperature, &result);
+    }
+    free(pi_env);
+    free(prompt);
+@@ -660,7 +679,10 @@ static int responses_handler(const char *body, char *resp, int cap)
+    /* P1 pre-injection: prepend the <aimee-context> envelope as the system
+     * prompt (config ingress_preinject_enabled; no-op when off/empty). */
+    char *pi_env = gw_memory_system_prompt(full);
+-   int erc = agent_execute(ag, pi_env, full, max_tokens, temperature, &result);
++   int has_tools = request_has_client_tools(body);
++   int erc = has_tools 
++       ? agent_execute(ag, pi_env, full, max_tokens, temperature, &result) 
++       : agent_execute_with_tools(ag, NULL, pi_env, full, max_tokens, temperature, &result);
+    free(pi_env);
+ 
+    if (erc != 0 || !result.response)
+@@ -786,14 +808,17 @@ static int chat_stream_handler(const char *body, server_http_sse_emit emit, void
+       cJSON *initial_messages = NULL;
+       cJSON *updated_messages = NULL;
+       erc = agent_execute_session_with_tools(ag, &acfg.network, pi_env, prompt, max_tokens,
+-                                              temperature, initial_messages, &updated_messages,
+-                                              images, image_count, &result);
++                                             temperature, initial_messages, &updated_messages,
++                                             images, image_count, &result);
+       if (updated_messages)
+          cJSON_Delete(updated_messages);
+    }
+    else
+    {
+-      erc = agent_execute(ag, pi_env, prompt, max_tokens, temperature, &result);
++      int has_tools = request_has_client_tools(body);
++      erc = has_tools 
++          ? agent_execute(ag, pi_env, prompt, max_tokens, temperature, &result) 
++          : agent_execute_with_tools(ag, NULL, pi_env, prompt, max_tokens, temperature, &result);
+    }
+    free(pi_env);
+    free(prompt);
+@@ -1247,7 +1272,7 @@ static int responses_stream_handler(const char *body, server_http_sse_event_emit
+        * (retry/backoff) instead of treating a failed turn as an empty success.
+        * Unknown `code` maps to ApiError::Retryable in Codex's parser. */
+       if (openai_format_responses_failed(id, model, created, "server_error",
+-                                         "upstream model request failed", frame, sizeof(frame)) > 0)
++                                          "upstream model request failed", frame, sizeof(frame)) > 0)
+          emit(ctx, "response.failed", frame);
+       agent_free_parsed_response(&parsed);
+       free(instructions);
+@@ -1288,8 +1313,8 @@ static int responses_stream_handler(const char *body, server_http_sse_event_emit
+       if (gateway_prevent_subagents_enabled())
+          police_drops = gateway_policy_police_parsed_response(&parsed);
+       (void)police_drops; /* drop count plumbed through the pipeline total
+-                             for the future P2b audit pass; today the only
+-                             visible effect is the parsed.calls[] mutation. */
++                              for the future P2b audit pass; today the only
++                              visible effect is the parsed.calls[] mutation. */
+ 
+       openai_responses_emit_policed(&parsed, id, model, created, emit, ctx);
+    }
+@@ -1342,7 +1367,7 @@ static int responses_stream_handler(const char *body, server_http_sse_event_emit
+                emit(ctx, "response.incomplete", cf);
+          }
+          else if (openai_format_responses_completed(id, model, txt, created, parsed.prompt_tokens,
+-                                                    parsed.completion_tokens, cf, (int)ccap) > 0)
++                                                   parsed.completion_tokens, cf, (int)ccap) > 0)
+             emit(ctx, "response.completed", cf);
+          free(cf);
+       }
+@@ -1465,7 +1490,7 @@ static void *run_job_worker(void *arg)
+     * row as ingress so the run's spend is distinguishable from internal agent
+     * execution, without writing a second row. */
+    agent_set_ingress_source((j->has_reqctx && j->reqctx.source[0]) ? j->reqctx.source
+-                                                                   : "openai-ingress");
++                                                                  : "openai-ingress");
+    int erc = agent_run_with_tools(&acfg, "execute", NULL, j->prompt, j->max_tokens, &result);
+    agent_set_ingress_source("");
+    if (j->has_reqctx)
+diff --git a/src/workspace.c b/src/workspace.c
+index a5696e47..d7be7c70 100644
+--- a/src/workspace.c
++++ b/src/workspace.c
+@@ -1044,8 +1044,9 @@ static int worktree_create_sibling_at_ref(const char *git_root, const char *sid,
+       free(out);
+       worktree_registry_record(git_root, wt_path, branch_name, sid, work_name);
+ 
+-      /* Register branch ownership so other sessions can't write to it.
+-       * Use the main repo root (git_root), not the worktree path. */
++      /* Copy untracked/uncommitted workspace files into the new session worktree */
++      worktree_apply_anchor_wip(git_root, wt_path);
++
+ #ifndef AIMEE_DB1_DISABLED
+       mcp_git_branch_own_register(git_root, branch_name);
+ #endif
