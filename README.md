@@ -34,6 +34,18 @@ nehanda
 
 When you run `nehanda` from any git repository, it automatically adds that directory as a workspace. This enables the agent to access files from your actual working directory instead of being sandboxed in worktrees. The workspace registration wrapper is installed automatically during the setup process.
 
+#### Working Directory Propagation
+
+The nehanda TUI (`nehanda-ui`) passes the current working directory (cwd) to the server on every request. This ensures that file operations and tool execution happen in the correct directory — the one where you invoked `nehanda`, not the nehanda-cli installation directory.
+
+**How it works:**
+1. The workspace wrapper (`~/.local/bin/nehanda`) captures `$(pwd)` when invoked
+2. `nehanda-ui` includes `cwd: process.cwd()` in every chat request
+3. The server uses `run_cmd_set_cwd()` to set a thread-local working directory for tool execution
+4. File read/write, bash commands, and other tools operate in the correct directory
+
+This propagation is critical for multi-project workflows where you may invoke `nehanda` from different repositories.
+
 ### Model Configuration
 
 Nehanda-cli supports any OpenAI-compatible model as your primary agent or orchestrator. You can configure models through the agent configuration system, allowing you to use models from various providers (including ZAI, OpenAI, or self-hosted models) without being locked to a specific provider. See [docs/QUICK_START.md](docs/QUICK_START.md) for model configuration details.

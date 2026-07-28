@@ -634,7 +634,7 @@ function applyDiffBlocks(text, bridge) {
 // ── Chat completion ───────────────────────────────────────────
 async function streamChat(messages, bearerToken, onChunk) {
   const url = 'http://127.0.0.1:8740/v1/chat/completions'
-  const body = { model: 'nehanda', messages, stream: true }
+  const body = { model: 'nehanda', messages, stream: true, cwd: process.cwd() }
 
   const res = await fetch(url, {
     method: 'POST',
