@@ -1,0 +1,70 @@
+From: Nehanda CLI <nehanda@asoba.co>
+Date: Mon, 27 Jul 2026 19:35:00 -0500
+Subject: [PATCH] Pass cwd through OpenAI chat/completions endpoint
+
+The OpenAI-compatible /v1/chat/completions endpoint was ignoring the cwd
+parameter in the request body, causing tools to run in the server's working
+directory (nehanda-cli root) instead of the directory where nehanda was
+invoked.
+
+This patch:
+- Extracts the cwd parameter from the OpenAI request body
+- Calls run_cmd_set_cwd(cwd) before agent execution
+- Cleans up by calling run_cmd_set_cwd(NULL) after execution
+
+This ensures that file operations and tool execution happen in the correct
+directory when using nehanda-ui or other OpenAI-compatible clients.
+---
+ upstream/src/server/openai_chat.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/upstream/src/server/openai_chat.c b/upstream/src/server/openai_chat.c
+index 1234567..abcdefg 100644
+--- a/upstream/src/server/openai_chat.c
++++ b/upstream/src/server/openai_chat.c
+@@ -745,6 +745,7 @@ static int chat_stream_handler(const char *body, server_http_sse_emit emit, void
+    char model[64] = "";
+    char *prompt = NULL;
+    int stream = 0;
++   char cwd[MAX_PATH_LEN] = "";
+    const char **images = NULL;
+    int image_count = 0;
+    long created = (long)time(NULL);
+@@ -758,6 +759,12 @@ static int chat_stream_handler(const char *body, server_http_sse_emit emit, void
+       return 0;
+    }
+ 
++   /* Extract cwd from request body for tool execution context */
++   cJSON *jcwd = cJSON_Parse(body);
++   if (jcwd) {
++      cJSON *cwd_item = cJSON_GetObjectItemCaseSensitive(jcwd, "cwd");
++      if (cJSON_IsString(cwd_item) && cwd_item->valuestring[0])
++         snprintf(cwd, sizeof(cwd), "%s", cwd_item->valuestring);
++      cJSON_Delete(jcwd);
++   }
++
+    agent_config_t acfg;
+    agent_t *ag = stream_pick_agent(&acfg, model);
+    if (!ag)
+@@ -780,6 +787,9 @@ static int chat_stream_handler(const char *body, server_http_sse_emit emit, void
+       free(images);
+       return 0;
+    }
++   
++   /* Set the working directory for tool execution */
++   if (cwd[0])
++      run_cmd_set_cwd(cwd);
+ 
+    double temperature = openai_request_double(body, "temperature", OPENAI_CHAT_TEMPERATURE, 2.0);
+    int max_tokens = openai_request_int(body, "max_tokens", OPENAI_CHAT_MAX_TOKENS, 32768);
+@@ -826,6 +836,8 @@ static int chat_stream_handler(const char *body, server_http_sse_emit emit, void
+    }
+    emit_chunk(emit, ctx, id, model, created, 0, NULL, 1); /* finish frame */
+    free(result.response);
++   
++   run_cmd_set_cwd(NULL); /* reset thread-local cwd */
+    return 0;
+ }
+ 
+-- 
+2.45.0

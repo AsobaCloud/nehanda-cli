@@ -52,6 +52,39 @@ If `$NEHANDA_AICHAT_BIN` is not set or the binary is not found, nehanda falls ba
 
 One-shot `nehanda chat "message"` (inline text) never uses nehanda-ui; it goes straight to the server stream API.
 
+#### Working Directory Propagation
+
+The OpenAI-compatible `/v1/chat/completions` endpoint propagates the client's working directory to the server's tool execution layer:
+
+```
+nehanda-ui (client)                nehanda-server
+       │                                  │
+       │ POST /v1/chat/completions        │
+       │ { cwd: process.cwd() }           │
+       │ ───────────────────────────────► │
+       │                                  │
+       │                          chat_stream_handler()
+       │                                  │
+       │                          run_cmd_set_cwd(cwd)
+       │                          (thread-local)
+       │                                  │
+       │                          agent_run_with_tools()
+       │                                  │
+       │                          Tool execution uses cwd
+       │                          (bash, file read/write)
+       │                                  │
+       │                          run_cmd_set_cwd(NULL)
+       │                          (cleanup)
+```
+
+**Implementation details:**
+- `nehanda-ui.mjs`: Includes `cwd: process.cwd()` in the request body
+- `openai_chat.c`: Extracts `cwd` from request JSON and calls `run_cmd_set_cwd(cwd)` before agent execution
+- `run_cmd_set_cwd()`: Sets a thread-local variable that `run_cmd()` uses to prefix shell commands with `cd '<dir>' &&`
+- Cleanup: `run_cmd_set_cwd(NULL)` resets the thread-local state after execution
+
+This ensures that file operations, bash commands, and other tools run in the directory where `nehanda` was invoked, not the nehanda-cli installation directory.
+
 ## Why the AGPL Line Sits Where It Does
 
 AGPL-3.0's network-use clause triggers on code you modify and let users interact with remotely. Aimee's design keeps the Supervisor link as a clean OpenAI/Anthropic-shaped HTTP boundary. That is the seam we inherit:
