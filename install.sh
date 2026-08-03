@@ -349,6 +349,7 @@ persona = open(persona_path).read() if os.path.isfile(persona_path) else ""
 for a in d.get("agents", []):
     if a.get("name") == "nehanda":
         a["tools_enabled"] = True
+        a["inject_respond_tool"] = True
         if persona:
             a["exec_system_prompt"] = persona
 with open(p, "w") as f:
