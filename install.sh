@@ -305,6 +305,7 @@ install_prompt() {
   mkdir -p "$HOME/.config/aimee/personas"
   cp "$REPO_ROOT/config/webchat_system_prompt.txt" "$HOME/.config/aimee/webchat_system_prompt.txt"
   cp "$REPO_ROOT/config/personas/engineer.md" "$HOME/.config/aimee/personas/engineer.md"
+  cp "$REPO_ROOT/config/personas/nehanda.md" "$HOME/.config/aimee/personas/nehanda.md"
   ok "Nehanda identity prompt installed"
 }
 
@@ -338,9 +339,13 @@ if not os.path.isfile(p):
     raise SystemExit("agents.json missing after agent add")
 with open(p) as f:
     d = json.load(f)
+persona_path = os.path.expanduser("~/.config/aimee/personas/nehanda.md")
+persona = open(persona_path).read() if os.path.isfile(persona_path) else ""
 for a in d.get("agents", []):
     if a.get("name") == "nehanda":
         a["tools_enabled"] = True
+        if persona:
+            a["exec_system_prompt"] = persona
 with open(p, "w") as f:
     json.dump(d, f, indent="\t")
 PY
