@@ -13,7 +13,7 @@ INSTALL_DIR="${NEHANDA_INSTALL_DIR:-$HOME/.local/bin}"
 BUILD_DIR="$REPO_ROOT/build"
 OS="$(uname -s)"
 
-NEHANDA_ENDPOINT="${NEHANDA_ENDPOINT:-http://nehanda.asoba.co:8000}"
+NEHANDA_ENDPOINT="${NEHANDA_ENDPOINT:-https://nehanda-ml.asoba.co/v1}"
 NEHANDA_MODEL="${NEHANDA_MODEL:-nehanda-rag-synthesis-27b}"
 
 if [ -t 1 ]; then
@@ -324,8 +324,13 @@ install_model_registry() {
 # ── EC2 agent ─────────────────────────────────────────────────────────────────
 register_agent() {
   step "Primary agent"
-  curl -sf "${NEHANDA_ENDPOINT}/v1/models" | grep -q "$NEHANDA_MODEL" \
-    || die "EC2 unreachable at $NEHANDA_ENDPOINT"
+  # nehandaMlProxy only exposes /v1/chat/completions, not /v1/models.
+  # Probe with a minimal chat request instead.
+  curl -sf -X POST "${NEHANDA_ENDPOINT}/chat/completions" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"'"$NEHANDA_MODEL"'","messages":[{"role":"user","content":"ping"}],"max_tokens":1}' \
+    | grep -q "choices" \
+    || die "Endpoint unreachable at $NEHANDA_ENDPOINT"
 
   nehanda agent add nehanda "$NEHANDA_ENDPOINT" "$NEHANDA_MODEL" \
     --provider openai \
