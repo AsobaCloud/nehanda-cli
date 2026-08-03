@@ -487,6 +487,22 @@ clients:
 YAML
 
   ok "aichat configured → nehanda-server :8740"
+
+  # Sync AIMEE_SERVER_TOKEN in shell profiles so every new shell gets the
+  # correct loopback bearer token.  On re-runs, replace the existing export
+  # line in-place (sed); on first install, append it.
+  local token_line="export AIMEE_SERVER_TOKEN=\"${token}\""
+  for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    [ -f "$rc" ] || touch "$rc"
+    if grep -q 'AIMEE_SERVER_TOKEN' "$rc" 2>/dev/null; then
+      # Replace existing value — works whether it was quoted or unquoted
+      sed -i.bak "s|export AIMEE_SERVER_TOKEN=.*|${token_line}|" "$rc"
+    else
+      echo "$token_line" >> "$rc"
+    fi
+  done
+  export AIMEE_SERVER_TOKEN="${token}"
+  ok "AIMEE_SERVER_TOKEN synced in ~/.zshrc and ~/.bashrc"
 }
 
 # ── Verify user path ──────────────────────────────────────────────────────────
