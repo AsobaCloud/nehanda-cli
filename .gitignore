@@ -1,42 +1,8 @@
-# Build outputs
-build/
-cmake-build-*/
-*.o
-*.a
-*.so
-*.dylib
-nehanda
-nehanda-server
-nehanda-kb
-
-# Config with secrets
-config/nehanda.yaml
-.env
-*.env
-
-# Tree-sitter grammars (fetched at build time, not committed)
-upstream/src/vendor/tree-sitter*/
-
-# Python
-__pycache__/
-*.pyc
-.venv/
-*.egg-info/
-
-# macOS
-.DS_Store
-
-# Editor
-.vscode/
-.idea/
-*.swp
-
-# Test artifacts
-*.db
-test-*.log
-upstream/
-build/
-upstream/
+tests/
 .aimee/
 node_modules/
-package-lock.json
+*.db
+*.log
+.DS_Store
+.devin/
+test.txt
