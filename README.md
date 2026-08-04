@@ -1,82 +1,220 @@
-# nehanda-cli
+# ona-code
 
-A local AI coding substrate powered by the [**Nehanda** fine-tuned model](https://huggingface.co/asoba/nehanda-v3-27b). Free and open-source (AGPL-3.0).
+A terminal REPL that turns any LLM into an agentic coding assistant. Point it at a local model running in LM Studio, or connect to Anthropic Claude or any OpenAI-compatible API. The model can read and write files, run shell commands, search code, and fetch web pages. Every interaction is stored in a single SQLite database you own — no cloud sync, no opaque state, no vendor lock-in.
 
-Built on [aimee](https://github.com/RakuenSoftware/aimee) — local memory substrate with 4-tier context compaction, supervisor/delegate task decomposition, and guardrails. This fork wires Nehanda in as the primary reasoning model: a fine-tuned Qwen3.6 27B multimodal stack (technical writing, deep research, coding, document review, vision).
+## Why we built it
 
-```
-  Your Terminal
-    └─ aichat (TUI) ──────────────────────────→ nehanda-server :8740 → nehanda-server (UDS)
-  • 4-tier memory compaction (~86% token reduction pre-egress)
-  • Code index + KB — postgres + pgvector, never leaves machine
-  • Supervisor/Delegate task fan-out → local/LAN Ollama (free)
-          │  compacted payload only
-          ▼
-  Nehanda 27B on EC2 (nehanda.asoba.co:8000)
-  • vLLM, tensor-parallel
-  • nehanda-rag-synthesis-27b
-```
+Agentic coding tools today require a specific vendor's API and store your session data somewhere you can't inspect. We wanted to run a local model on our own hardware with the same tool surface a cloud model gets — file editing, shell access, code search, web fetch — and have every turn persisted in a SQLite file we control. We also wanted an SDLC workflow that prevents shipping without planning and testing, with behavioral tests generated from the plan instead of mocking the implementation.
 
-**No Docker. Three native binaries + postgres + local embedder.**
+## Primary use cases
 
-## Quick start
+- **Local-first agentic coding** — Run a quantized model in LM Studio on your laptop. Private, offline, no API key, no cost per token, full tool use.
+- **Auditable AI-assisted development** — Every conversation turn, tool call, and permission decision is a queryable row in SQLite with timestamps and full payloads.
+- **Enforced SDLC workflow** — A 6-phase state machine requires a plan before code, behavioral tests before verification, and operator sign-off before completion.
+- **Multi-provider flexibility** — Switch between a local model, Claude, or an OpenAI-compatible endpoint mid-session with `/model`.
+
+## Getting started
+
+**Requirements:** Node.js 22+
+
+### 1. Clone and install
 
 ```bash
-git clone https://github.com/AsobaCloud/nehanda-cli.git
-cd nehanda-cli
-./install.sh
-nehanda
+git clone https://github.com/AsobaCloud/ona-code.git
+cd ona-code
+npm install
 ```
 
-`install.sh` builds the nehanda stack and installs [aichat](https://github.com/sigoden/aichat) as the interactive TUI. See [docs/QUICK_START.md](docs/QUICK_START.md) for full setup and verification.
+### 2. Choose your provider
 
-### Automatic Workspace Registration
+**Option A: Local model (LM Studio)**
 
-When you run `nehanda` from any git repository, it automatically adds that directory as a workspace. This enables the agent to access files from your actual working directory instead of being sandboxed in worktrees. The workspace registration wrapper is installed automatically during the setup process.
+Start LM Studio with a model loaded, then:
 
-#### Working Directory Propagation
+```bash
+npm start
+```
 
-The nehanda TUI (`nehanda-ui`) passes the current working directory (cwd) to the server on every request. This ensures that file operations and tool execution happen in the correct directory — the one where you invoked `nehanda`, not the nehanda-cli installation directory.
+The REPL will auto-detect LM Studio on `http://localhost:8000`.
 
-**How it works:**
-1. The workspace wrapper (`~/.local/bin/nehanda`) captures `$(pwd)` when invoked
-2. `nehanda-ui` includes `cwd: process.cwd()` in every chat request
-3. The server uses `run_cmd_set_cwd()` to set a thread-local working directory for tool execution
-4. File read/write, bash commands, and other tools operate in the correct directory
+**Option B: Anthropic Claude**
 
-This propagation is critical for multi-project workflows where you may invoke `nehanda` from different repositories.
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+npm start
+```
 
-### Model Configuration
+Then in the REPL:
 
-Nehanda-cli supports any OpenAI-compatible model as your primary agent or orchestrator. You can configure models through the agent configuration system, allowing you to use models from various providers (including ZAI, OpenAI, or self-hosted models) without being locked to a specific provider. See [docs/QUICK_START.md](docs/QUICK_START.md) for model configuration details.
+```
+ona> /model claude_sonnet_4
+```
 
+**Option C: OpenAI-compatible API**
+
+```bash
+export OPENAI_API_KEY=sk-...
+export OPENAI_BASE_URL=https://api.openai.com/v1
+npm start
+```
+
+Then in the REPL:
+
+```
+ona> /model gpt_4o
+```
+
+### 3. Start using it
+
+```
+ona 0.2.0 — AGENT_SDLC_DB=/Users/you/.ona/agent.db
+Provider: lm_studio_local
+Commands: /help /model /login /logout /status /config /clear /exit
+
+ona> what files are in this project?
+
+I'll take a look.
+
+[tool: Glob]
+Here are the files in the current directory:
+  bin/agent.mjs
+  lib/app.mjs
+  lib/auth.mjs
+  lib/tools.mjs
+  lib/workflow.mjs
+  package.json
+  ...
+```
+
+### Available commands
+
+- `/help` — List all commands
+- `/model <name>` — Switch model mid-session
+- `/login` — OAuth login for Anthropic
+- `/logout` — Clear stored credentials
+- `/status` — Show current auth status
+- `/config` — View/edit session settings
+- `/clear` — Clear conversation history
+- `/exit` — Exit the REPL
+
+### Database
+
+All conversation turns, tool calls, and permissions are stored in SQLite at `$AGENT_SDLC_DB` (default: `~/.ona/agent.db`). You own the data — no cloud sync, no vendor lock-in.
+
+### Testing
+
+Run the behavioral test suite:
+
+```bash
+npm run acceptance
+```
+
+Run bug regression tests:
+
+```bash
+npm run test:bugs
+```
+
+Verify SDLC hook ordering:
+
+```bash
+npm run verify
+```
 ## Architecture
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the three-tier design and AGPL boundary analysis.
+The codebase is organized around the **CLEAN_ROOM_SPEC** — a formal specification that defines:
 
-## Refactor plan
+- **Providers** (§2): Anthropic, OpenAI-compatible, LM Studio local
+- **Storage** (§4): SQLite schema with transcript, plans, hooks, permissions
+- **Hook plane** (§5): Event-driven extensibility with permission gates
+- **Tools** (§7): 21 built-in tools (file I/O, bash, web, search, etc.)
+- **Workflow** (§8): 6-phase SDLC state machine (idle → planning → implement → test → verify → done)
 
-See [docs/REFACTOR_PLAN.md](docs/REFACTOR_PLAN.md) for the phased roadmap. Phase 0 (full native stack smoke test) passed on macOS 2026-07-12.
+### Key directories
 
-## Self-hosting
+- `bin/` — Entry point (`agent.mjs`)
+- `lib/` — Core modules (app, auth, tools, workflow, permissions, orchestrate, etc.)
+- `tests/` — Behavioral tests and bug regression tests
+- `.kiro/specs/` — Spec documents and implementation plans
+- `.claude-code/` — Reference implementation (for traceability only)
 
-See [docs/SELF_HOST.md](docs/SELF_HOST.md) for running with a local model instead of the EC2 endpoint.
+### Behavioral test coverage
+
+The test suite validates **88% of normative requirements** from CLEAN_ROOM_SPEC:
+
+- **42 passing tests** covering authentication, hooks, tools, workflow state
+- **8 uncovered sections** identified for future implementation
+- Coverage matrix: `tests/spec-behavioral/coverage/matrix.json`
+
+See `.kiro/specs/missing-behavioral-test-coverage/` for the full spec and implementation plan.
+
+## SDLC workflow
+
+The tool enforces a structured development workflow:
+
+1. **Planning** — Write a plan with success criteria (tagged with test templates)
+2. **Implementation** — Code the solution
+3. **Testing** — Generate behavioral tests from the plan (epistemic isolation enforced)
+4. **Verification** — Operator reviews test results and coverage
+5. **Completion** — Mark as done
+
+This prevents shipping without planning and ensures tests validate the plan, not the implementation.
+
+## Development
+
+### Run tests
+
+```bash
+# Full acceptance test suite
+npm run acceptance
+
+# Bug regression tests
+npm run test:bugs
+
+# Verify SDLC hook ordering
+npm run verify
+```
+
+### Project structure
+
+```
+ona-code/
+├── bin/
+│   └── agent.mjs              # Entry point
+├── lib/
+│   ├── app.mjs                # Main REPL app
+│   ├── auth.mjs               # Authentication (OAuth, API keys, keychain)
+│   ├── tools.mjs              # Tool implementations
+│   ├── workflow.mjs           # SDLC phase transitions
+│   ├── permissions.mjs        # Permission evaluation
+│   ├── orchestrate.mjs        # Turn loop orchestration
+│   ├── compact.mjs            # Session compaction
+│   ├── openaiCompat.mjs       # OpenAI-compatible provider
+│   └── ...
+├── tests/
+│   ├── spec-behavioral/       # Behavioral tests (42 tests, 88% coverage)
+│   ├── bugs/                  # Bug regression tests
+│   └── test.db                # Test database
+├── scripts/
+│   ├── sdlc-acceptance.sh     # Acceptance test runner
+│   └── verify-sdlc-hook-order.mjs
+├── .kiro/specs/               # Spec documents
+│   ├── missing-behavioral-test-coverage/
+│   ├── ona-code-critical-bugs/
+│   └── zai-api-key-not-found/
+└── .claude-code/              # Reference implementation (read-only)
+```
+
+## Contributing
+
+This project uses spec-driven development. Before implementing:
+
+1. Check `.kiro/specs/` for existing specs
+2. Review `CLEAN_ROOM_SPEC.md` (in `.claude-code/`) for normative requirements
+3. Run behavioral tests to identify coverage gaps
+4. Create a spec document for your feature or bugfix
+5. Implement with tests
 
 ## License
 
-AGPL-3.0. See [LICENSE](LICENSE) and [LICENSE.md](LICENSE.md).
-
-This project is a fork of [aimee](https://github.com/RakuenSoftware/aimee) (AGPL-3.0, Copyright © 2026 The aimee authors). See [NOTICE](NOTICE) for third-party attributions.
-
-## Security
-
-See [SECURITY.md](SECURITY.md) for how to report vulnerabilities.
-
-## Upstream
-
-This repo tracks `RakuenSoftware/aimee` as a git subtree under `upstream/`. To pull upstream changes:
-
-```bash
-git fetch aimee-upstream
-git subtree pull --prefix=upstream aimee-upstream main --squash
-```
+See LICENSE file.

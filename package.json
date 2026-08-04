@@ -1,12 +1,27 @@
 {
-  "name": "nehanda-cli",
-  "version": "1.0.0",
+  "name": "ona-code",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "description": "Multi-provider SDLC SQLite REPL (CLEAN_ROOM_SPEC): Anthropic Messages, LM Studio / OpenAI-compatible chat. Node 22+.",
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "ona": "./bin/agent.mjs",
+    "ona-code": "./bin/agent.mjs"
+  },
+  "scripts": {
+    "start": "node ./bin/agent.mjs",
+    "repl": "node ./bin/agent.mjs",
+    "verify": "node ./scripts/verify-sdlc-hook-order.mjs",
+    "acceptance": "bash ./scripts/sdlc-acceptance.sh",
+    "test:bugs": "bash tests/bugs/run-all.sh",
+    "test:property": "bash tests/property/run-settings-persistence-tests.sh",
+    "test:unit": "bash tests/unit/run-all.sh"
+  },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
     "better-sqlite3": "^11.8.1",
     "chalk": "^5.6.2",
     "ink": "^6.8.0",
@@ -14,5 +29,8 @@
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
     "react": "^19.2.4"
+  },
+  "devDependencies": {
+    "fast-check": "^4.7.0"
   }
 }
