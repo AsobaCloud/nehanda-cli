@@ -1,220 +1,173 @@
-# ona-code
+# Nehanda CLI (`nehanda-cli`)
 
-A terminal REPL that turns any LLM into an agentic coding assistant. Point it at a local model running in LM Studio, or connect to Anthropic Claude or any OpenAI-compatible API. The model can read and write files, run shell commands, search code, and fetch web pages. Every interaction is stored in a single SQLite database you own — no cloud sync, no opaque state, no vendor lock-in.
+An agentic terminal REPL and single-process engine built for governed AI software development. Powered by the native `ona-code` core, `nehanda-cli` connects directly to local or remote endpoints—including Nehanda's fine-tuned 27B model on AWS SageMaker—without external daemons, cross-repository dependencies, or middleware servers.
 
-## Why we built it
+Every conversation turn, tool call, phase transition, and permission check is stored in a local, queryable SQLite database you own.
 
-Agentic coding tools today require a specific vendor's API and store your session data somewhere you can't inspect. We wanted to run a local model on our own hardware with the same tool surface a cloud model gets — file editing, shell access, code search, web fetch — and have every turn persisted in a SQLite file we control. We also wanted an SDLC workflow that prevents shipping without planning and testing, with behavioral tests generated from the plan instead of mocking the implementation.
+---
 
-## Primary use cases
+## Key Features
 
-- **Local-first agentic coding** — Run a quantized model in LM Studio on your laptop. Private, offline, no API key, no cost per token, full tool use.
-- **Auditable AI-assisted development** — Every conversation turn, tool call, and permission decision is a queryable row in SQLite with timestamps and full payloads.
-- **Enforced SDLC workflow** — A 6-phase state machine requires a plan before code, behavioral tests before verification, and operator sign-off before completion.
-- **Multi-provider flexibility** — Switch between a local model, Claude, or an OpenAI-compatible endpoint mid-session with `/model`.
+- **In-Process Engine:** Executes turns directly inside the process via `runUserTurn`, eliminating separate server daemons or background HTTP relays.
+- **Dynamic XML Tool Rescue:** Native support for endpoints that strip OpenAI tool schemas (such as `nehandaMlProxy`). The engine dynamically injects active tool schemas directly into system prompts as XML contracts (`<tool_call>`), parsing and executing tools locally without cloud-side function calling support.
+- **Deterministic SDLC Workflow:** Enforces a 6-phase state machine (`idle` → `plan` → `implement` → `test` → `verify` → `done`) to prevent unapproved code changes, hallucinated test passes, or unverified implementations.
+- **Interactive TUI & Pipe Support:** Rich Ink-based TUI (`bin/nehanda-ui.mjs`) for interactive development sessions, with headless pipe-mode support (`bin/agent.mjs`) for acceptance testing and automation.
+- **Multi-Provider Switching:** Seamlessly switch between Nehanda 27B, local LM Studio, Ollama instances over LAN, Anthropic Claude, or any OpenAI-compatible API using `/model`.
 
-## Getting started
+---
 
-**Requirements:** Node.js 22+
+## Architecture
 
-### 1. Clone and install
+`nehanda-cli` combines an Ink TUI with `ona-code`'s deterministic orchestration engine:
+
+
+```
+
+[bin/nehanda-ui.mjs] (TUI Layer)
+│
+
+│ (1) bridge.onSubmit -> runUserTurn(db, rt, text, io)
+▼
+[lib/orchestrate.mjs] (In-Process Engine)
+│
+
+│ (2) Checks omitToolChoice(provider)
+│ (3) Formats registered tools into system prompt XML instructions
+│ (4) Calls streamOpenAIChatCompletion({ omitToolChoice: true })
+▼
+[nehandaMlProxy / Endpoint]
+│
+
+│ (5) Model returns streamed plain-text response
+▼
+[lib/orchestrate.mjs]
+│
+
+│ (6) parseXmlToolCalls(fullText) rescues <tool_call> XML tags
+│ (7) Executes local shell/file tools & logs tool_result rows
+▼
+[~/.config/nehanda/ona-session.db] (SQLite State)
+
+```
+
+---
+
+## Getting Started
+
+### Requirements
+- **Node.js**: v22.0.0 or higher
+- **SQLite**: Local SQLite runtime support
+
+### 1. Installation
 
 ```bash
-git clone https://github.com/AsobaCloud/ona-code.git
-cd ona-code
+git clone [https://github.com/AsobaCloud/nehanda-cli.git](https://github.com/AsobaCloud/nehanda-cli.git)
+cd nehanda-cli
 npm install
+
 ```
 
-### 2. Choose your provider
+### 2. Launching the REPL
 
-**Option A: Local model (LM Studio)**
-
-Start LM Studio with a model loaded, then:
+Launch the interactive Ink TUI:
 
 ```bash
 npm start
-```
-
-The REPL will auto-detect LM Studio on `http://localhost:8000`.
-
-**Option B: Anthropic Claude**
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-npm start
-```
-
-Then in the REPL:
+# or directly run:
+node bin/nehanda-ui.mjs
 
 ```
-ona> /model claude_sonnet_4
-```
 
-**Option C: OpenAI-compatible API**
+### 3. Provider Setup
 
-```bash
-export OPENAI_API_KEY=sk-...
-export OPENAI_BASE_URL=https://api.openai.com/v1
-npm start
-```
+#### Option A: Nehanda Cloud (Default)
 
-Then in the REPL:
+The CLI defaults to the primary Nehanda endpoint (`https://nehanda-ml.asoba.co/v1`). If an API key is required:
 
 ```
-ona> /model gpt_4o
-```
-
-### 3. Start using it
+❯ /key
+New Nehanda API key: <your-key>
 
 ```
-ona 0.2.0 — AGENT_SDLC_DB=/Users/you/.ona/agent.db
-Provider: lm_studio_local
-Commands: /help /model /login /logout /status /config /clear /exit
 
-ona> what files are in this project?
+#### Option B: Local LM Studio
 
-I'll take a look.
+Start LM Studio locally on port `1234` or `8000`, then start the CLI. Select or switch models via:
 
-[tool: Glob]
-Here are the files in the current directory:
-  bin/agent.mjs
-  lib/app.mjs
-  lib/auth.mjs
-  lib/tools.mjs
-  lib/workflow.mjs
-  package.json
-  ...
+```
+❯ /model
+
 ```
 
-### Available commands
+#### Option C: Remote Ollama over LAN
 
-- `/help` — List all commands
-- `/model <name>` — Switch model mid-session
-- `/login` — OAuth login for Anthropic
-- `/logout` — Clear stored credentials
-- `/status` — Show current auth status
-- `/config` — View/edit session settings
-- `/clear` — Clear conversation history
-- `/exit` — Exit the REPL
+To connect to an Ollama instance running on your network:
 
-### Database
+```
+❯ /config base_url [http://AsobaCorp-1.local:11434/v1](http://AsobaCorp-1.local:11434/v1)
+❯ /model ollama/deepseek-coder-v2:latest
 
-All conversation turns, tool calls, and permissions are stored in SQLite at `$AGENT_SDLC_DB` (default: `~/.ona/agent.db`). You own the data — no cloud sync, no vendor lock-in.
+```
 
-### Testing
+---
 
-Run the behavioral test suite:
+## REPL Commands
+
+| Command | Description |
+| --- | --- |
+| `/help` | Display available commands |
+| `/model [name]` | Discover and switch active provider or model endpoint |
+| `/key` | Save Nehanda API key |
+| `/config` | View or set settings (e.g. `/config base_url <url>`) |
+| `/clear` | Clear conversation history and reset transcript state |
+| `/retry` | Resend the last failed request |
+| `/exit` | Exit the REPL |
+
+---
+
+## SDLC Workflow
+
+The engine enforces state transitions across six distinct phases:
+
+1. **`idle`**: Discovery and triage. Mutating file tools are physically masked out.
+2. **`plan`**: Model formulates success criteria and implementation steps (`EnterPlanMode`).
+3. **`implement`**: Code changes applied using file editing and shell execution (`ExitPlanMode`).
+4. **`test`**: Automated test generation and execution (`SubmitImplementation`).
+5. **`verify`**: Inspection of test outputs and coverage verification (`SubmitTest`).
+6. **`done`**: Final sign-off and git commit creation.
+
+---
+
+## Database Schema
+
+Session state is persisted locally at `~/.config/nehanda/ona-session.db`. Key tables include:
+
+* `conversations`: Active workflow phases and project roots.
+* `transcript_entries`: Sequence of user messages, assistant turns, tool calls, and results.
+* `plans`: Content, hashes, and approval status for technical plans.
+* `events`: SDLC milestones and test execution output.
+
+---
+
+## Testing & Verification
+
+Run the acceptance suite:
 
 ```bash
 npm run acceptance
-```
 
-Run bug regression tests:
-
-```bash
-npm run test:bugs
 ```
 
 Verify SDLC hook ordering:
 
 ```bash
 npm run verify
-```
-## Architecture
-
-The codebase is organized around the **CLEAN_ROOM_SPEC** — a formal specification that defines:
-
-- **Providers** (§2): Anthropic, OpenAI-compatible, LM Studio local
-- **Storage** (§4): SQLite schema with transcript, plans, hooks, permissions
-- **Hook plane** (§5): Event-driven extensibility with permission gates
-- **Tools** (§7): 21 built-in tools (file I/O, bash, web, search, etc.)
-- **Workflow** (§8): 6-phase SDLC state machine (idle → planning → implement → test → verify → done)
-
-### Key directories
-
-- `bin/` — Entry point (`agent.mjs`)
-- `lib/` — Core modules (app, auth, tools, workflow, permissions, orchestrate, etc.)
-- `tests/` — Behavioral tests and bug regression tests
-- `.kiro/specs/` — Spec documents and implementation plans
-- `.claude-code/` — Reference implementation (for traceability only)
-
-### Behavioral test coverage
-
-The test suite validates **88% of normative requirements** from CLEAN_ROOM_SPEC:
-
-- **42 passing tests** covering authentication, hooks, tools, workflow state
-- **8 uncovered sections** identified for future implementation
-- Coverage matrix: `tests/spec-behavioral/coverage/matrix.json`
-
-See `.kiro/specs/missing-behavioral-test-coverage/` for the full spec and implementation plan.
-
-## SDLC workflow
-
-The tool enforces a structured development workflow:
-
-1. **Planning** — Write a plan with success criteria (tagged with test templates)
-2. **Implementation** — Code the solution
-3. **Testing** — Generate behavioral tests from the plan (epistemic isolation enforced)
-4. **Verification** — Operator reviews test results and coverage
-5. **Completion** — Mark as done
-
-This prevents shipping without planning and ensures tests validate the plan, not the implementation.
-
-## Development
-
-### Run tests
-
-```bash
-# Full acceptance test suite
-npm run acceptance
-
-# Bug regression tests
-npm run test:bugs
-
-# Verify SDLC hook ordering
-npm run verify
-```
-
-### Project structure
 
 ```
-ona-code/
-├── bin/
-│   └── agent.mjs              # Entry point
-├── lib/
-│   ├── app.mjs                # Main REPL app
-│   ├── auth.mjs               # Authentication (OAuth, API keys, keychain)
-│   ├── tools.mjs              # Tool implementations
-│   ├── workflow.mjs           # SDLC phase transitions
-│   ├── permissions.mjs        # Permission evaluation
-│   ├── orchestrate.mjs        # Turn loop orchestration
-│   ├── compact.mjs            # Session compaction
-│   ├── openaiCompat.mjs       # OpenAI-compatible provider
-│   └── ...
-├── tests/
-│   ├── spec-behavioral/       # Behavioral tests (42 tests, 88% coverage)
-│   ├── bugs/                  # Bug regression tests
-│   └── test.db                # Test database
-├── scripts/
-│   ├── sdlc-acceptance.sh     # Acceptance test runner
-│   └── verify-sdlc-hook-order.mjs
-├── .kiro/specs/               # Spec documents
-│   ├── missing-behavioral-test-coverage/
-│   ├── ona-code-critical-bugs/
-│   └── zai-api-key-not-found/
-└── .claude-code/              # Reference implementation (read-only)
-```
 
-## Contributing
-
-This project uses spec-driven development. Before implementing:
-
-1. Check `.kiro/specs/` for existing specs
-2. Review `CLEAN_ROOM_SPEC.md` (in `.claude-code/`) for normative requirements
-3. Run behavioral tests to identify coverage gaps
-4. Create a spec document for your feature or bugfix
-5. Implement with tests
+---
 
 ## License
 
-See LICENSE file.
+See [LICENSE](https://www.google.com/search?q=LICENSE) for details.
+
