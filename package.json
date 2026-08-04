@@ -9,7 +9,8 @@
   },
   "bin": {
     "ona": "./bin/agent.mjs",
-    "ona-code": "./bin/agent.mjs"
+    "ona-code": "./bin/agent.mjs",
+    "nehanda": "./bin/nehanda-ui.mjs"
   },
   "scripts": {
     "start": "node ./bin/agent.mjs",
