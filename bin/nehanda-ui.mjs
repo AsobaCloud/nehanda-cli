@@ -541,7 +541,10 @@ bridge.onSubmit = async (text) => {
       cwd:             process.cwd(),
       runtimeDbPath:   null,
       bareMode:        false,
-      onaInstructions: null,
+      // Inject Nehanda identity + XML tool-call format from agents.json exec_system_prompt.
+      // This appends as "# Project Instructions" at the end of every phase prompt,
+      // giving the model its identity and instructing it to emit <tool_call> XML blocks.
+      onaInstructions: agent?.exec_system_prompt || null,
       settings: {
         model_config: {
           provider: 'nehanda',
