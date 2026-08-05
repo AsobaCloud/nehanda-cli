@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 600" width="100%" height="100%">
+  <defs>
+    <style>
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 12px;
+      }
+      .bold { font-weight: 700; }
+      .title { fill: #6b7280; font-size: 11px; letter-spacing: 1.5px; }
+      .blue { fill: #3b82f6; }
+      .purple { fill: #818cf8; }
+      .gold { fill: #facc15; }
+      .green { fill: #22c55e; }
+      .white { fill: #f3f4f6; }
+      .gray { fill: #9ca3af; }
+      .muted { fill: #6b7280; }
+    </style>
+
+    <!-- Arrow Markers -->
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3b82f6" />
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#818cf8" />
+    </marker>
+    <marker id="arrow-gold" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#facc15" />
+    </marker>
+  </defs>
+
+  <!-- Background Frame -->
+  <rect width="880" height="600" rx="10" fill="#0b0d12" stroke="#1d222e" stroke-width="1.5" />
+
+  <!-- Header -->
+  <text x="440" y="28" text-anchor="middle" class="mono bold title">ARCHITECTURE &amp; EXECUTION FLOW</text>
+  <line x1="0" y1="42" x2="880" y2="42" stroke="#1d222e" stroke-width="1" />
+
+  <!-- Node 1: TUI Layer -->
+  <rect x="160" y="60" width="560" height="44" rx="6" fill="#131722" stroke="#3b82f6" stroke-width="1.5" />
+  <text x="440" y="87" text-anchor="middle" class="mono">
+    <tspan class="bold white">bin/nehanda-ui.mjs</tspan> <tspan class="muted">(TUI Layer)</tspan>
+  </text>
+
+  <!-- Flow 1 -->
+  <line x1="220" y1="104" x2="220" y2="160" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)" />
+  <text x="240" y="136" class="mono">
+    <tspan class="blue bold">(1)</tspan> <tspan class="gray">bridge.onSubmit → </tspan><tspan class="purple">runUserTurn(db, rt, text, io)</tspan>
+  </text>
+
+  <!-- Node 2: In-Process Engine -->
+  <rect x="160" y="160" width="560" height="44" rx="6" fill="#131722" stroke="#818cf8" stroke-width="1.5" />
+  <text x="440" y="187" text-anchor="middle" class="mono">
+    <tspan class="bold white">lib/orchestrate.mjs</tspan> <tspan class="muted">(In-Process Engine)</tspan>
+  </text>
+
+  <!-- Flow 2 (Multiline) -->
+  <line x1="220" y1="204" x2="220" y2="304" stroke="#818cf8" stroke-width="1.5" marker-end="url(#arrow-purple)" />
+  <text x="240" y="232" class="mono">
+    <tspan class="purple bold">(2)</tspan> <tspan class="gray">Checks </tspan><tspan class="white">omitToolChoice(provider)</tspan>
+  </text>
+  <text x="240" y="256" class="mono">
+    <tspan class="purple bold">(3)</tspan> <tspan class="gray">Formats registered tools into system prompt XML instructions</tspan>
+  </text>
+  <text x="240" y="280" class="mono">
+    <tspan class="purple bold">(4)</tspan> <tspan class="gray">Calls </tspan><tspan class="white">streamOpenAIChatCompletion({ omitToolChoice: true })</tspan>
+  </text>
+
+  <!-- Node 3: Cloud Endpoint -->
+  <rect x="160" y="304" width="560" height="44" rx="6" fill="#131722" stroke="#facc15" stroke-width="1.5" />
+  <text x="440" y="331" text-anchor="middle" class="mono">
+    <tspan class="bold gold">nehandaMlProxy / Endpoint</tspan>
+  </text>
+
+  <!-- Flow 3 -->
+  <line x1="220" y1="348" x2="220" y2="404" stroke="#facc15" stroke-width="1.5" marker-end="url(#arrow-gold)" />
+  <text x="240" y="380" class="mono">
+    <tspan class="gold bold">(5)</tspan> <tspan class="gray">Model returns streamed plain-text response</tspan>
+  </text>
+
+  <!-- Node 4: Rescue Engine -->
+  <rect x="160" y="404" width="560" height="44" rx="6" fill="#131722" stroke="#818cf8" stroke-width="1.5" />
+  <text x="440" y="431" text-anchor="middle" class="mono">
+    <tspan class="bold white">lib/orchestrate.mjs</tspan> <tspan class="muted">(XML Tool Rescue &amp; Execution)</tspan>
+  </text>
+
+  <!-- Flow 4 (Multiline) -->
+  <line x1="220" y1="448" x2="220" y2="530" stroke="#818cf8" stroke-width="1.5" marker-end="url(#arrow-purple)" />
+  <text x="240" y="476" class="mono">
+    <tspan class="purple bold">(6)</tspan> <tspan class="white">parseXmlToolCalls(fullText)</tspan> <tspan class="gray">rescues </tspan><tspan class="gold">&lt;tool_call&gt;</tspan> <tspan class="gray">XML tags</tspan>
+  </text>
+  <text x="240" y="502" class="mono">
+    <tspan class="purple bold">(7)</tspan> <tspan class="gray">Executes local shell/file tools &amp; logs </tspan><tspan class="white">tool_result</tspan> <tspan class="gray">rows</tspan>
+  </text>
+
+  <!-- Node 5: SQLite Database -->
+  <rect x="160" y="530" width="560" height="44" rx="6" fill="#131722" stroke="#22c55e" stroke-width="1.5" />
+  <text x="440" y="557" text-anchor="middle" class="mono">
+    <tspan class="bold green">~/.config/nehanda/ona-session.db</tspan> <tspan class="muted">(SQLite State)</tspan>
+  </text>
+</svg>

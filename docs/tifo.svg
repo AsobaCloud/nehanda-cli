@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 565" width="100%" height="100%">
+  <defs>
+    <style>
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 13px;
+      }
+      .bold { font-weight: 700; }
+      .title { fill: #9ca3af; font-size: 12px; }
+      .blue { fill: #3b82f6; }
+      .gold { fill: #facc15; }
+      .purple { fill: #818cf8; }
+      .white { fill: #f3f4f6; }
+      .gray { fill: #9ca3af; }
+      .dark-gray { fill: #4b5563; }
+      .muted { fill: #6b7280; }
+    </style>
+  </defs>
+
+  <!-- Window Frame & Background -->
+  <rect width="900" height="565" rx="10" fill="#050508" stroke="#1f293d" stroke-width="1.5" />
+
+  <!-- macOS Window Buttons -->
+  <circle cx="24" cy="22" r="5.5" fill="#ef4444" />
+  <circle cx="40" cy="22" r="5.5" fill="#eab308" />
+  <circle cx="56" cy="22" r="5.5" fill="#22c55e" />
+
+  <!-- Title Bar -->
+  <text x="450" y="26" text-anchor="middle" class="mono title">nehanda-cli</text>
+
+  <!-- Splash Box -->
+  <rect x="24" y="60" width="852" height="150" rx="4" fill="none" stroke="#2563eb" stroke-width="1.5" />
+  <line x1="426" y1="60" x2="426" y2="210" stroke="#2563eb" stroke-width="1.5" />
+
+  <!-- Splash Box: Left Panel -->
+  <!-- GitHub Logo -->
+  <path transform="translate(52, 115) scale(1.3)" fill="#e5e7eb" d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+
+  <!-- Three Blue Bars -->
+  <rect x="235" y="82" width="6" height="18" rx="1" fill="#3b82f6" />
+  <rect x="244" y="82" width="6" height="18" rx="1" fill="#3b82f6" />
+  <rect x="253" y="82" width="6" height="18" rx="1" fill="#3b82f6" />
+
+  <!-- NEHANDA Text -->
+  <text x="247" y="123" text-anchor="middle" class="mono bold gold" font-size="16" letter-spacing="6">NEHANDA</text>
+  <text x="247" y="145" text-anchor="middle" class="mono gray">by Asoba</text>
+  <text x="247" y="167" text-anchor="middle" class="mono muted">nehanda-rag-synthesis-27b</text>
+
+  <!-- Splash Box: Right Panel -->
+  <text x="450" y="94" class="mono bold blue">Configuration</text>
+  
+  <text x="450" y="126" class="mono gray">Model:      <tspan class="purple">nehanda-rag-synthesis-27b</tspan></text>
+  <text x="450" y="148" class="mono gray">Endpoint:   <tspan class="purple">https://nehanda-ml.asoba.co/v1</tspan></text>
+  <text x="450" y="182" class="mono muted">Type /help for commands</text>
+
+  <!-- Prompt 1 -->
+  <text x="24" y="248" class="mono"><tspan class="blue bold">&gt; </tspan><tspan class="white">what is the name of this repo?</tspan></text>
+
+  <!-- Interaction / Output with solid bullet preceding model output -->
+  <text x="24" y="285" class="mono gray"><tspan class="white">● </tspan>The user is asking what the name of the repo is. The git remote output shows two remotes:</text>
+  
+  <text x="24" y="315" class="mono gray">   1. <tspan class="purple">`aimee-upstream`</tspan> &#8594; <tspan class="purple">`https://github.com/RakuenSoftware/aimee.git`</tspan></text>
+  <text x="24" y="335" class="mono gray">   2. <tspan class="purple">`origin`</tspan> &#8594; <tspan class="purple">`https://github.com/AsobaCloud/nehanda-cli.git`</tspan></text>
+
+  <text x="24" y="370" class="mono gray">The origin remote points to <tspan class="purple">https://github.com/AsobaCloud/nehanda-cli.git</tspan>,</text>
+  <text x="24" y="390" class="mono gray">so the repo name is <tspan class="gold bold">nehanda-cli</tspan>.</text>
+
+  <text x="24" y="425" class="mono gray">The origin remote is <tspan class="purple">https://github.com/AsobaCloud/nehanda-cli.git</tspan>,</text>
+  <text x="24" y="445" class="mono gray">which indicates this repo is the <tspan class="gold bold">AsobaCloud/nehanda-cli</tspan> repository.</text>
+
+  <!-- Active Prompt & Cursor -->
+  <text x="24" y="482" class="mono blue bold">&gt;</text>
+  <rect x="40" y="470" width="8" height="15" fill="#e5e7eb" />
+
+  <!-- Status Bar Line -->
+  <line x1="0" y1="518" x2="900" y2="518" stroke="#111827" stroke-width="1" />
+
+  <!-- Status Bar Items -->
+  <text x="24" y="542" class="mono dark-gray">calls 1</text>
+  <text x="450" y="542" text-anchor="middle" class="mono dark-gray">model: <tspan class="purple">nehanda-rag-synthesis-27b</tspan></text>
+  <text x="876" y="542" text-anchor="end" class="mono dark-gray">? /help   ^C exit</text>
+</svg>
