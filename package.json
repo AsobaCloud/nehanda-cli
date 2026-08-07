@@ -25,6 +25,7 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "better-sqlite3": "^11.8.1",
     "chalk": "^5.6.2",
+    "esprima": "^4.0.1",
     "ink": "^6.8.0",
     "ink-text-input": "^6.0.0",
     "marked": "^15.0.12",
