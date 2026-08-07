@@ -109,6 +109,65 @@ Switching to `[TOOL_CALL]...[/TOOL_CALL]` delimiters bypasses vLLM's stop-token 
 
 ---
 
+## Declarative Tool System
+
+`nehanda-cli` supports a **zero-code tool configuration** pattern. Tools are registered by dropping a JSON config into `lib/tools/` and a corresponding script into `lib/scripts/`. No JavaScript changes are required.
+
+### How It Works
+
+1. On startup, `lib/tools.mjs` scans `lib/tools/*.json` and dynamically registers each tool.
+2. Tool schemas are injected into the API `tools` array so the model can call them.
+3. Phase visibility (`explore_only`, `planning_blocked`) and mandatory enforcement (`mandatory_in`) are driven by config metadata.
+4. Prompt injection (`prompt.mandatory_instruction`, `prompt.available_hint`) is read from the config and injected into the appropriate SDLC phase system prompts automatically.
+
+### Shipped Tools
+
+| Tool | Script | What It Checks |
+| --- | --- | --- |
+| `AuditCodeIntegrity` | `lib/scripts/audit-code-integrity.py` | Lifecycle teardown parity, mock-theater tests, naming invariants, swallowed exceptions |
+| `ShellSafetyChecker` | `lib/scripts/shell-safety-checker.sh` | Missing `set -euo pipefail`, background job silent failure risk, hardcoded credentials |
+| `JsSafetyChecker` | `lib/scripts/js-safety-checker.cjs` | Duplicate functions, duplicate HTML element IDs, script block syntax errors |
+| `PythonSafetyChecker` | `lib/scripts/python-safety-checker.py` | Bandit security issues, ruff lint, mutable default args, `eval`/`exec`/`pickle` usage |
+
+All four are **mandatory in the test phase** and **available on-demand** in explore and idle phases.
+
+### Adding a New Tool
+
+Create a JSON config in `lib/tools/`:
+
+```json
+{
+  "name": "MyNewTool",
+  "description": "What the tool does.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "target": { "type": "string", "description": "Target path" }
+    }
+  },
+  "phases": {
+    "explore_only": true,
+    "planning_blocked": false,
+    "mandatory_in": ["test"]
+  },
+  "prompt": {
+    "mandatory_instruction": "Run MyNewTool on the workspace to check for X.",
+    "available_hint": "Checks for X, Y, and Z"
+  },
+  "execution": {
+    "runtime": "python3",
+    "script": "lib/scripts/my-new-tool.py",
+    "args": ["{{target}}"],
+    "default_timeout": 120000,
+    "max_timeout": 600000
+  }
+}
+```
+
+Place the script at `lib/scripts/my-new-tool.py`. It will receive arguments interpolated from `args` and run with `cwd` set to the target workspace. **No JS code changes needed.**
+
+---
+
 ## REPL Commands
 
 | Command | Description |
@@ -127,24 +186,17 @@ Switching to `[TOOL_CALL]...[/TOOL_CALL]` delimiters bypasses vLLM's stop-token 
 
 The engine enforces state transitions across six distinct phases:
 
-1. **`idle`**: Discovery and triage. Mutating file tools are physically masked out.
+1. **`idle`**: Discovery and triage. Mutating file tools are physically masked out. Safety and analysis tools are available on-demand.
 
-
-2. **`plan`**: Model formulates success criteria and implementation steps (`EnterPlanMode`).
-
+2. **`plan`**: Model formulates success criteria and implementation steps (`EnterPlanMode`). No tools available.
 
 3. **`implement`**: Code changes applied using file editing and shell execution (`ExitPlanMode`).
 
-
-4. **`test`**: Automated test generation and execution (`SubmitImplementation`).
-
+4. **`test`**: Automated test generation and execution (`SubmitImplementation`). **After tests pass, all tools marked `mandatory_in: ["test"]` must be run.** The system prompt enforces this — the model cannot declare success until all mandatory safety checkers pass.
 
 5. **`verify`**: Inspection of test outputs and coverage verification (`SubmitTest`).
 
-
 6. **`done`**: Final sign-off and git commit creation.
-
-
 
 ---
 
