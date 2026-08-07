@@ -4,13 +4,18 @@
   "input_schema": {
     "type": "object",
     "properties": {
-      "target": { "type": "string", "description": "Target directory to scan (default: cwd)" },
+      "target": { "type": "string", "description": "Target directory or file to scan (default: cwd)" },
       "timeout": { "type": "integer", "description": "Timeout in ms (max 600000)" }
     }
   },
   "phases": {
     "explore_only": true,
-    "planning_blocked": false
+    "planning_blocked": false,
+    "mandatory_in": ["test"]
+  },
+  "prompt": {
+    "mandatory_instruction": "Run JsSafetyChecker on JavaScript and HTML files in the workspace to validate syntax, duplicate functions, and duplicate IDs.",
+    "available_hint": "Validates JS/HTML for syntax errors, duplicate functions, and duplicate element IDs"
   },
   "execution": {
     "runtime": "node",
