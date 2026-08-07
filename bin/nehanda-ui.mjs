@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 
 // ── In-process engine imports (direct, single-repo) ──────────
 import { runUserTurn } from '../lib/orchestrate.mjs'
+import { loadInstructions } from '../lib/instructions.mjs'
 import Database from 'better-sqlite3'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -76,6 +77,7 @@ function writeApiKey(key) {
 // ── Session DB bootstrap ─────────────────────────────────────
 fs.mkdirSync(NEHANDA_DIR, { recursive: true })
 const sessionDb = new Database(NEHANDA_DB)
+const { content: onaInstructionsContent } = loadInstructions(process.cwd())
 sessionDb.exec(`
   CREATE TABLE IF NOT EXISTS conversations(
     id TEXT PRIMARY KEY, project_dir TEXT,
@@ -541,10 +543,11 @@ bridge.onSubmit = async (text) => {
       cwd:             process.cwd(),
       runtimeDbPath:   null,
       bareMode:        false,
-      // Inject Nehanda identity + XML tool-call format from agents.json exec_system_prompt.
-      // This appends as "# Project Instructions" at the end of every phase prompt,
-      // giving the model its identity and instructing it to emit <tool_call> XML blocks.
-      onaInstructions: agent?.exec_system_prompt || null,
+      // Project instructions sourced from nehanda's own loadInstructions() (Ona.md),
+      // matching bin/agent.mjs. Does NOT read agents.json exec_system_prompt — that
+      // field belongs to aimee and was silently reintroducing conflicting tool-call
+      // syntax (<tool_call><name>...) that fights orchestrate.mjs's [TOOL_CALL] format.
+      onaInstructions: onaInstructionsContent || null,
       settings: {
         model_config: {
           provider: 'nehanda',
