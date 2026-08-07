@@ -7,6 +7,7 @@ Audits repository files for:
 2. Behavioral Test Authenticity (Mock Theater Detection)
 3. Architectural Naming & Contract Alignment
 4. Error Handling & Hygiene (Swallowed Exceptions & Root Clutter)
+5. DRY Invariants & Duplicative Functions
 
 Outputs formatted terminal reports and saves structured JSON logs to .review/<M-D-YYYY-XXX>-audit-report.json
 """
@@ -19,9 +20,7 @@ import os
 import re
 import sys
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-WORKSPACE_ROOT = os.path.abspath(os.getcwd())
+WORKSPACE_ROOT = os.getcwd()
 
 
 class CodeIntegrityAuditor:
@@ -35,6 +34,13 @@ class CodeIntegrityAuditor:
             "behavioral_tests": [],
             "architectural_naming": [],
             "error_handling": [],
+            "dry_violations": [],
+        }
+        self.authenticity_stats = {
+            "tier_1_live": 0,
+            "tier_2_contract": 0,
+            "tier_3_theater": 0,
+            "total_test_functions": 0,
         }
 
     def run(self):
@@ -52,12 +58,14 @@ class CodeIntegrityAuditor:
             elif file_path.endswith(".py"):
                 self._audit_python_file(file_path, rel_path)
 
+        self._audit_duplicative_functions(files_to_scan, base_dir)
+
         report_path = self._save_json_report()
         return report_path
 
     def _get_files_to_scan(self, root_dir):
         files = []
-        skip_dirs = {"node_modules", "venv", "/tmp/"}
+        skip_dirs = {"node_modules", "venv", ".venv", "/tmp/"}
         for dirpath, dirnames, filenames in os.walk(root_dir):
             dirnames[:] = [d for d in dirnames if d not in skip_dirs and not d.startswith(".")]
             for f in filenames:
@@ -169,22 +177,152 @@ class CodeIntegrityAuditor:
                     })
 
     def _check_mock_theater(self, func_node, rel_path, content):
+        self.authenticity_stats["total_test_functions"] += 1
         func_name = func_node.name
-        # Extract target function name (e.g. test_discover_customer -> discover_customer)
         target_stem = func_name.replace("test_", "")
 
-        # Inspect decorators for @patch(target_stem)
-        for decorator in func_node.decorator_list:
-            dec_str = ast.unparse(decorator) if hasattr(ast, "unparse") else ""
-            if "patch" in dec_str and target_stem in dec_str:
-                self.findings["behavioral_tests"].append({
-                    "file": rel_path,
-                    "line": func_node.lineno,
-                    "severity": "WARN",
-                    "rule": "MOCK_THEATER_TARGET_MOCKED",
-                    "message": f"Test '{func_name}' mocks the primary function under test ('{target_stem}'). Behavioral tests must call the actual target function.",
-                })
+        allowed_external_prefixes = (
+            "boto3", "botocore", "requests", "urllib", "sys", "os", "subprocess",
+            "pgvector", "pymysql", "redis", "psycopg2", "aiohttp", "fitz", "pdfplumber",
+            "builtins", "datetime", "time", "json", "math", "numpy", "pandas", "sklearn", "scipy"
+        )
 
+        patched_targets = []
+        has_substantive_assert = False
+        has_any_assert = False
+        is_internal_mocked = False
+        is_live_aws = False
+
+        func_body_str = ast.unparse(func_node) if hasattr(ast, "unparse") else ""
+        if any(term in func_body_str for term in ["boto3.client", "boto3.resource", "requests.get", "requests.post", "urllib.request", "aws lambda", "aws e2e"]):
+            is_live_aws = True
+
+        # Walk nodes inside test function definition
+        for subnode in ast.walk(func_node):
+            # Inspect @patch(...) or with patch(...) or mocker.patch(...)
+            if isinstance(subnode, ast.Call):
+                func_str = ast.unparse(subnode.func) if hasattr(ast, "unparse") else ""
+                if "patch" in func_str and subnode.args:
+                    arg0 = subnode.args[0]
+                    if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
+                        target_str = arg0.value
+                        patched_targets.append(target_str)
+
+                        # Check if internal service function is mocked
+                        if ("services." in target_str or "app." in target_str or target_str.startswith("app")) and not any(target_str.startswith(p) for p in allowed_external_prefixes):
+                            is_internal_mocked = True
+                            self.findings["behavioral_tests"].append({
+                                "file": rel_path,
+                                "line": subnode.lineno,
+                                "severity": "WARN",
+                                "rule": "INTERNAL_FUNCTION_MOCKED",
+                                "message": f"Test '{func_name}' patches internal function/module '{target_str}'. Behavioral tests must call internal service logic directly and only mock external boundaries.",
+                            })
+                        elif target_stem and (target_stem in target_str or target_str.endswith(f".{target_stem}")):
+                            is_internal_mocked = True
+                            self.findings["behavioral_tests"].append({
+                                "file": rel_path,
+                                "line": subnode.lineno,
+                                "severity": "WARN",
+                                "rule": "MOCK_THEATER_TARGET_MOCKED",
+                                "message": f"Test '{func_name}' mocks the primary function under test ('{target_stem}'). Behavioral tests must call the actual target function directly.",
+                            })
+
+            # Inspect Assert statements
+            if isinstance(subnode, ast.Assert):
+                has_any_assert = True
+                assert_str = ast.unparse(subnode.test) if hasattr(ast, "unparse") else ""
+                # Substantive assertions check equality, subscripting, in-comparisons, or value bounds
+                if any(op in assert_str for op in ["==", "!=", " in ", ">", "<", "[", "]"]):
+                    has_substantive_assert = True
+
+            # Inspect mock assertion calls like mock.assert_called_once()
+            if isinstance(subnode, ast.Expr) and isinstance(subnode.value, ast.Call):
+                call_str = ast.unparse(subnode.value.func) if hasattr(ast, "unparse") else ""
+                if "assert_called" in call_str:
+                    has_any_assert = True
+
+        # Flag tests with zero substantive outcome assertions (Assertion Theater)
+        if not has_substantive_assert:
+            self.findings["behavioral_tests"].append({
+                "file": rel_path,
+                "line": func_node.lineno,
+                "severity": "WARN",
+                "rule": "ASSERTION_THEATER",
+                "message": f"Test '{func_name}' has no substantive outcome value assertions (e.g. data contract keys, non-zero ranges, schema checks). Testing mocks without outcome checks is Mock Theater.",
+            })
+
+        # Classify Tier
+        if is_live_aws:
+            self.authenticity_stats["tier_1_live"] += 1
+        elif has_substantive_assert and not is_internal_mocked:
+            self.authenticity_stats["tier_2_contract"] += 1
+        else:
+            self.authenticity_stats["tier_3_theater"] += 1
+
+    def _audit_duplicative_functions(self, files_to_scan, base_dir):
+        ignored_names = {
+            "main", "handler", "lambda_handler", "cleanup", "__init__", "setUp", "tearDown",
+            "run", "execute", "cleanup_on_failure", "require_cmd", "app"
+        }
+
+        func_names_seen = {}
+        ast_hashes_seen = {}
+
+        for file_path in files_to_scan:
+            if not file_path.endswith(".py"):
+                continue
+
+            rel_path = os.path.relpath(file_path, base_dir) if file_path.startswith(base_dir) else file_path
+
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                tree = ast.parse(content)
+            except Exception:
+                continue
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef):
+                    fname = node.name
+                    if fname.startswith("_") or fname in ignored_names or fname.startswith("test_"):
+                        continue
+
+                    # 1. Duplicate Function Name Check
+                    if fname in func_names_seen:
+                        first_rel, first_line = func_names_seen[fname]
+                        if first_rel != rel_path:
+                            self.findings["dry_violations"].append({
+                                "file": rel_path,
+                                "line": node.lineno,
+                                "severity": "WARN",
+                                "rule": "DUPLICATE_FUNCTION_NAME",
+                                "message": f"Function '{fname}' is duplicated across files (first defined in '{first_rel}:L{first_line}'). Share logic via central package import instead of repeating function definitions.",
+                            })
+                    else:
+                        func_names_seen[fname] = (rel_path, node.lineno)
+
+                    # 2. AST Structural Code Clone Check (>= 2 statements)
+                    if len(node.body) >= 2:
+                        try:
+                            node_copy = ast.parse(ast.unparse(node)) if hasattr(ast, "unparse") else node
+                            ast_str = ast.dump(node_copy, annotate_fields=False, include_attributes=False)
+                            norm_ast = re.sub(r"'[a-zA-Z0-9_]+'", "'VAR'", ast_str)
+
+                            if norm_ast in ast_hashes_seen:
+                                first_name, first_rel, first_line = ast_hashes_seen[norm_ast]
+                                if first_rel != rel_path or first_name != fname:
+                                    self.findings["dry_violations"].append({
+                                        "file": rel_path,
+                                        "line": node.lineno,
+                                        "severity": "WARN",
+                                        "rule": "DUPLICATE_FUNCTION_LOGIC",
+                                        "message": f"Function '{fname}' has identical AST code logic structure as '{first_name}' in '{first_rel}:L{first_line}'. Refactor into shared module.",
+                                    })
+                            else:
+                                ast_hashes_seen[norm_ast] = (fname, rel_path, node.lineno)
+                        except Exception:
+                            pass
 
     def _save_json_report(self):
         os.makedirs(self.output_dir, exist_ok=True)
@@ -207,6 +345,7 @@ class CodeIntegrityAuditor:
                 "total_failures": total_fails,
                 "total_warnings": total_warns,
                 "status": "FAIL" if total_fails > 0 else "PASS",
+                "authenticity_stats": self.authenticity_stats,
             },
             "findings": self.findings,
         }
@@ -222,6 +361,19 @@ def print_formatted_summary(auditor, report_path):
     print("                    ONA PLATFORM CODE INTEGRITY AUDIT REPORT                     ")
     print("=" * 80)
 
+    # Print Authenticity Breakdown Table
+    stats = auditor.authenticity_stats
+    total_tests = stats["total_test_functions"]
+    if total_tests > 0:
+        t1_pct = (stats["tier_1_live"] / total_tests) * 100
+        t2_pct = (stats["tier_2_contract"] / total_tests) * 100
+        t3_pct = (stats["tier_3_theater"] / total_tests) * 100
+        print("\nTEST SUITE AUTHENTICITY CLASSIFICATION:")
+        print(f"  Tier 1 (Live AWS / E2E Integration)  : {stats['tier_1_live']:3d} tests ({t1_pct:5.1f}%)  [GOLD STANDARD]")
+        print(f"  Tier 2 (Contract-Enforced Behavioral): {stats['tier_2_contract']:3d} tests ({t2_pct:5.1f}%)  [VALID LOGIC]")
+        print(f"  Tier 3 (Mock Theater / Superficial)  : {stats['tier_3_theater']:3d} tests ({t3_pct:5.1f}%)  [DECEPTIVE THEATER]")
+        print("-" * 80)
+
     total_fails = 0
     total_warns = 0
 
@@ -230,6 +382,7 @@ def print_formatted_summary(auditor, report_path):
         "behavioral_tests": "Behavioral Test Authenticity (Anti-Mock Theater)",
         "architectural_naming": "Architectural Naming & Contract Invariants",
         "error_handling": "Error Handling & Exception Hygiene",
+        "dry_violations": "DRY Invariants & Duplicative Functions",
     }
 
     for cat_key, items in auditor.findings.items():
