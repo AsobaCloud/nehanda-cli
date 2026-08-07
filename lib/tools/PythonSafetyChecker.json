@@ -1,0 +1,24 @@
+{
+  "name": "PythonSafetyChecker",
+  "description": "Run the Python safety checker (bandit security issues, ruff style/lint issues, AST mutable default arg checks) against Python files. Returns findings.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "target": { "type": "string", "description": "Target directory to scan (default: cwd)" },
+      "timeout": { "type": "integer", "description": "Timeout in ms (max 600000)" }
+    }
+  },
+  "phases": {
+    "explore_only": true,
+    "planning_blocked": false
+  },
+  "execution": {
+    "runtime": "python3",
+    "script": "lib/scripts/python-safety-checker.py",
+    "args": [
+      "{{target}}"
+    ],
+    "default_timeout": 120000,
+    "max_timeout": 600000
+  }
+}
