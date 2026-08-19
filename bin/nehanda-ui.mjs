@@ -17,6 +17,9 @@ import { fileURLToPath } from 'node:url'
 // ── In-process engine imports (direct, single-repo) ──────────
 import { runUserTurn } from '../lib/orchestrate.mjs'
 import { loadInstructions } from '../lib/instructions.mjs'
+import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfig, globalMcpConfigPath } from '../lib/mcp-config.mjs'
+import { getMcpServer, closeAllMcpServers, listMcpServers, mcpListResources } from '../lib/mcp.mjs'
+import { invalidateMcpToolCache } from '../lib/tools.mjs'
 import Database from 'better-sqlite3'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -133,6 +136,7 @@ const SLASH_COMMANDS = [
   { name: '/model',  desc: 'Change model endpoint' },
   { name: '/key',    desc: 'Set Nehanda API key' },
   { name: '/config', desc: 'Show current config' },
+  { name: '/mcp',    desc: 'Manage MCP servers (status|list|reload|add)' },
   { name: '/clear',  desc: 'New conversation' },
   { name: '/retry',  desc: 'Resend the last failed message' },
   { name: '/help',   desc: 'Show commands' },
@@ -508,6 +512,93 @@ async function handleCommand(cmd, bridge) {
     } catch (err) { bridge.addMessage({ role: 'error', text: 'Failed: ' + err.message }) }
     return
   }
+  if (name === '/mcp') {
+    const parts = cmd.trim().split(/\s+/)
+    const sub = parts[1] || 'status'
+    const servers = runtimeSettings.mcp_servers || {}
+    const serverNames = Object.keys(servers)
+
+    if (sub === 'status') {
+      if (!serverNames.length) {
+        bridge.addMessage({ role: 'system', text: '  No MCP servers configured.\n  Add servers to mcp.json in your project root or ~/.config/nehanda/mcp.json' })
+        return
+      }
+      const lines = ['\n  MCP Servers:']
+      for (const name of serverNames) {
+        const cfg = servers[name]
+        lines.push(`  ${chalk.hex(BRAND.accent)(name.padEnd(20))} ${chalk.dim(cfg.command + ' ' + (cfg.args || []).join(' '))}`)
+      }
+      bridge.addMessage({ role: 'system', text: lines.join('\n') + '\n' })
+      return
+    }
+
+    if (sub === 'list') {
+      if (!serverNames.length) {
+        bridge.addMessage({ role: 'system', text: '  No MCP servers configured.' })
+        return
+      }
+      bridge.addMessage({ role: 'system', text: '  Discovering MCP tools…' })
+      const lines = []
+      for (const srvName of serverNames) {
+        const cfg = servers[srvName]
+        try {
+          const srv = getMcpServer(srvName, cfg)
+          const resp = await srv.request('tools/list', {})
+          const tools = resp.result?.tools || []
+          if (resp.error) {
+            lines.push(`  ${chalk.hex(BRAND.red)('✗')} ${srvName}: ${resp.error.message}`)
+          } else if (!tools.length) {
+            lines.push(`  ${chalk.dim(srvName)}: (no tools)`)
+          } else {
+            lines.push(`  ${chalk.hex(BRAND.accent)(srvName)} (${tools.length} tool${tools.length === 1 ? '' : 's'}):`)
+            for (const t of tools) {
+              lines.push(`    ${chalk.hex(BRAND.lavender)(t.name.padEnd(30))} ${chalk.dim(t.description || '')}`)
+            }
+          }
+        } catch (err) {
+          lines.push(`  ${chalk.hex(BRAND.red)('✗')} ${srvName}: ${err.message}`)
+        }
+      }
+      bridge.addMessage({ role: 'system', text: '\n' + lines.join('\n') + '\n' })
+      return
+    }
+
+    if (sub === 'reload') {
+      const targetServer = parts[2] || null
+      // Re-read mcp.json into runtimeSettings
+      runtimeSettings.mcp_servers = {}
+      applyMcpConfig(runtimeSettings, process.cwd())
+      // Bust the tool discovery cache so next turn re-fetches
+      invalidateMcpToolCache(targetServer || undefined)
+      const count = Object.keys(runtimeSettings.mcp_servers).length
+      bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} MCP config reloaded. ${count} server${count === 1 ? '' : 's'} configured.` })
+      return
+    }
+
+    if (sub === 'add') {
+      // /mcp add <name> <command> [args...]
+      const srvName = parts[2]
+      const command = parts[3]
+      const args = parts.slice(4)
+      if (!srvName || !command) {
+        bridge.addMessage({ role: 'system', text: '  Usage: /mcp add <name> <command> [args…]\n  Example: /mcp add filesystem npx -y @modelcontextprotocol/server-filesystem /path' })
+        return
+      }
+      const existing = readGlobalMcpConfig()
+      existing[srvName] = { command, args, env: {} }
+      writeGlobalMcpConfig(existing)
+      // Reload immediately
+      runtimeSettings.mcp_servers = {}
+      applyMcpConfig(runtimeSettings, process.cwd())
+      invalidateMcpToolCache()
+      bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Added ${chalk.bold(srvName)} → ${command} ${args.join(' ')}\n  Saved to ${globalMcpConfigPath()}` })
+      return
+    }
+
+    bridge.addMessage({ role: 'system', text: '  /mcp sub-commands: status · list · reload [server] · add <name> <command> [args…]' })
+    return
+  }
+
   bridge.addMessage({ role: 'system', text: `  Unknown command: ${name}. Type /help.` })
 }
 
@@ -516,6 +607,21 @@ const bridge = {
   convId:          `nehanda-${Date.now()}`,
   lastFailedText:  null,
 }
+
+// ── Runtime settings — shared across turns ───────────────────
+// Built once here; applyMcpConfig merges mcp.json servers in.
+// Each turn reads this object for model_config and mcp_servers.
+const runtimeSettings = {
+  model_config: {
+    provider: 'nehanda',
+    model_id:  'nehanda_rag_synthesis_27b',
+    base_url:  null,   // resolved per-turn from agents.json
+    api_key:   null,   // resolved per-turn from agents.json
+  },
+  permissions: { defaultMode: 'default' },
+  mcp_servers: {},
+}
+applyMcpConfig(runtimeSettings, process.cwd())
 
 bridge.onSubmit = async (text) => {
   bridge.addMessage({ role: 'user', text })
@@ -549,13 +655,12 @@ bridge.onSubmit = async (text) => {
       // syntax (<tool_call><name>...) that fights orchestrate.mjs's [TOOL_CALL] format.
       onaInstructions: onaInstructionsContent || null,
       settings: {
+        ...runtimeSettings,
         model_config: {
-          provider: 'nehanda',
-          model_id:  'nehanda_rag_synthesis_27b',
-          base_url:  agent?.endpoint || process.env.NEHANDA_BASE_URL || 'https://nehanda-ml.asoba.co/v1',
-          api_key:   readApiKey(),
+          ...runtimeSettings.model_config,
+          base_url: agent?.endpoint || process.env.NEHANDA_BASE_URL || 'https://nehanda-ml.asoba.co/v1',
+          api_key:  readApiKey(),
         },
-        permissions: { defaultMode: 'default' },
       },
     }
 

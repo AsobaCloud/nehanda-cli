@@ -13,9 +13,10 @@ import { bootstrapSettings, getEffectiveSettings, updateEffectiveSettings } from
 import { resolveWireModel, allModelIds, supportsCustomModels, supportsDiscovery } from '../lib/modelConfig.mjs'
 import { runHooks } from '../lib/hookplane.mjs'
 import { runUserTurn } from '../lib/orchestrate.mjs'
-import { closeAllMcpServers } from '../lib/mcp.mjs'
+import { closeAllMcpServers, getMcpServer } from '../lib/mcp.mjs'
+import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfig, globalMcpConfigPath } from '../lib/mcp-config.mjs'
 import { getPhase, canTransition, setPhase } from '../lib/workflow.mjs'
-import { executeBuiltinTool } from '../lib/tools.mjs'
+import { executeBuiltinTool, invalidateMcpToolCache } from '../lib/tools.mjs'
 import { appendEntry, makeUserPayload, makeToolResultPayload } from '../lib/transcript.mjs'
 import { loadInstructions } from '../lib/instructions.mjs'
 import { discoverOllamaModels, formatModelList } from '../lib/modelDiscovery.mjs'
@@ -64,6 +65,7 @@ function bootstrap(opts) {
 
   const db = openStore(dbPath)
   let settings = bootstrapSettings(db, cwd)
+  applyMcpConfig(settings, cwd)   // merge mcp.json → settings.mcp_servers
   const pkg = JSON.parse(fs.readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8'))
 
   let conversationId = randomUUID()
@@ -494,6 +496,88 @@ Session:
     if (trimmed === '/done') {
       const phase = getPhase(db, conversationId)
       app.addSystemMessage(`Phase: ${phase}. Workflow completes automatically when all tests pass and you approve the coverage report.`)
+      return
+    }
+
+    if (trimmed.startsWith('/mcp')) {
+      const parts = trimmed.split(/\s+/)
+      const sub = parts[1] || 'status'
+      const mcpServers = settings?.mcp_servers || {}
+      const serverNames = Object.keys(mcpServers)
+
+      if (sub === 'status') {
+        if (!serverNames.length) {
+          app.addSystemMessage('No MCP servers configured.\nAdd servers to mcp.json in your project root or ~/.config/nehanda/mcp.json')
+          return
+        }
+        const lines = ['MCP Servers:']
+        for (const n of serverNames) {
+          const cfg = mcpServers[n]
+          lines.push(`  ${n.padEnd(22)} ${cfg.command} ${(cfg.args || []).join(' ')}`)
+        }
+        app.addSystemMessage(lines.join('\n'))
+        return
+      }
+
+      if (sub === 'list') {
+        if (!serverNames.length) {
+          app.addSystemMessage('No MCP servers configured.')
+          return
+        }
+        app.addSystemMessage('Discovering MCP tools…')
+        const lines = []
+        for (const n of serverNames) {
+          try {
+            const srv = getMcpServer(n, mcpServers[n])
+            const resp = await srv.request('tools/list', {})
+            const tools = resp.result?.tools || []
+            if (resp.error) {
+              lines.push(`✗ ${n}: ${resp.error.message}`)
+            } else if (!tools.length) {
+              lines.push(`${n}: (no tools)`)
+            } else {
+              lines.push(`${n} (${tools.length} tool${tools.length === 1 ? '' : 's'}):`)
+              for (const t of tools) {
+                lines.push(`  ${t.name.padEnd(32)} ${t.description || ''}`)
+              }
+            }
+          } catch (err) {
+            lines.push(`✗ ${n}: ${err.message}`)
+          }
+        }
+        app.addSystemMessage(lines.join('\n'))
+        return
+      }
+
+      if (sub === 'reload') {
+        const targetServer = parts[2] || null
+        settings.mcp_servers = {}
+        applyMcpConfig(settings, cwd)
+        invalidateMcpToolCache(targetServer || undefined)
+        const count = Object.keys(settings.mcp_servers || {}).length
+        app.addSystemMessage(`✓ MCP config reloaded. ${count} server${count === 1 ? '' : 's'} configured.`)
+        return
+      }
+
+      if (sub === 'add') {
+        const srvName = parts[2]
+        const command = parts[3]
+        const args = parts.slice(4)
+        if (!srvName || !command) {
+          app.addSystemMessage('Usage: /mcp add <name> <command> [args…]\nExample: /mcp add filesystem npx -y @modelcontextprotocol/server-filesystem /path')
+          return
+        }
+        const existing = readGlobalMcpConfig()
+        existing[srvName] = { command, args, env: {} }
+        writeGlobalMcpConfig(existing)
+        settings.mcp_servers = {}
+        applyMcpConfig(settings, cwd)
+        invalidateMcpToolCache()
+        app.addSystemMessage(`✓ Added ${srvName} → ${command} ${args.join(' ')}\nSaved to ${globalMcpConfigPath()}`)
+        return
+      }
+
+      app.addSystemMessage('/mcp sub-commands: status · list · reload [server] · add <name> <command> [args…]')
       return
     }
 
