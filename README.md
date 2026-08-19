@@ -176,9 +176,52 @@ Place the script at `lib/scripts/my-new-tool.py`. It will receive arguments inte
 | `/model [name]` | Discover and switch active provider or model endpoint |
 | `/key` | Save Nehanda API key |
 | `/config` | View or set settings (e.g., `/config base_url <url>`) |
+| `/mcp` | Manage MCP server connections (see below) |
 | `/clear` | Clear conversation history and reset transcript state |
 | `/retry` | Resend the last failed request |
 | `/exit` | Exit the REPL |
+
+### `/mcp` Sub-commands
+
+| Sub-command | Description |
+| --- | --- |
+| `/mcp status` | List all configured MCP servers and their commands |
+| `/mcp list` | Connect to each server and enumerate available tools |
+| `/mcp reload [server]` | Re-read `mcp.json` and bust the tool cache (optionally for one server) |
+| `/mcp add <name> <command> [args…]` | Register a new server and save it to `~/.config/nehanda/mcp.json` |
+
+---
+
+## MCP Client Configuration
+
+`nehanda-cli` can consume tools from any external MCP server. Servers are configured in a standard `mcp.json` file using the same schema as Claude Desktop and other MCP clients.
+
+**Config file locations** (both are read and merged at startup; project-local takes priority):
+
+- `./mcp.json` — project-local, committed with the repo
+- `~/.config/nehanda/mcp.json` — user global
+
+**Example `mcp.json`:**
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+    },
+    "powermcp": {
+      "command": "npx",
+      "args": ["-y", "harvard-powermcp"],
+      "env": { "API_KEY": "your-key" }
+    }
+  }
+}
+```
+
+At startup, `nehanda-cli` loads `mcp.json`, spawns the configured servers, and calls `tools/list` on each. Discovered tools are injected into the model's tool list under the namespace `mcp__<server>__<tool>` and are available for the model to call during any conversation turn — no additional configuration required.
+
+Use `/mcp list` to verify what tools are visible, and `/mcp reload` to pick up changes without restarting.
 
 ---
 
