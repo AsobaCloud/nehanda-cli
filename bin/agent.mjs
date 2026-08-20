@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -14,7 +15,7 @@ import { resolveWireModel, allModelIds, supportsCustomModels, supportsDiscovery 
 import { runHooks } from '../lib/hookplane.mjs'
 import { runUserTurn } from '../lib/orchestrate.mjs'
 import { closeAllMcpServers, getMcpServer } from '../lib/mcp.mjs'
-import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfig, globalMcpConfigPath } from '../lib/mcp-config.mjs'
+import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfig, globalMcpConfigPath, getMcpServerSource, updateMcpServerEnv } from '../lib/mcp-config.mjs'
 import { getPhase, canTransition, setPhase } from '../lib/workflow.mjs'
 import { executeBuiltinTool, invalidateMcpToolCache } from '../lib/tools.mjs'
 import { appendEntry, makeUserPayload, makeToolResultPayload } from '../lib/transcript.mjs'
@@ -168,7 +169,8 @@ Session:
   /login        Authenticate
   /logout       Clear credentials
   /status       Auth status
-  /config       Settings
+  /config       Settings (try /config set <key> <value>)
+  /mcp         MCP servers (try /mcp env)
   /clear        New conversation
   /exit         Quit`)
       return
@@ -395,6 +397,22 @@ Session:
         if (isNaN(n) || n < 512) { app.addSystemMessage('num_ctx must be a number ≥ 512'); return }
         settings = updateEffectiveSettings(db, { model_config: { num_ctx: n } })
         app.addSystemMessage(`✓ Saved num_ctx: ${n}`)
+      } else if (parts[1] === 'set' && parts[2] && parts.length >= 4) {
+        const dotPath = parts[2]
+        const value = parts.slice(3).join(' ')
+        // Build a nested patch from the dot path
+        const keys = dotPath.split('.')
+        let patch = {}
+        let node = patch
+        for (let i = 0; i < keys.length - 1; i++) {
+          node[keys[i]] = {}
+          node = node[keys[i]]
+        }
+        // Auto-convert numeric values
+        const leafKey = keys[keys.length - 1]
+        node[leafKey] = /^\d+$/.test(value) ? parseInt(value, 10) : value
+        settings = updateEffectiveSettings(db, patch)
+        app.addSystemMessage(`✓ Set ${dotPath}`)
       } else {
         app.addSystemMessage(JSON.stringify(settings, null, 2))
       }
@@ -577,7 +595,67 @@ Session:
         return
       }
 
-      app.addSystemMessage('/mcp sub-commands: status · list · reload [server] · add <name> <command> [args…]')
+      if (sub === 'env') {
+        const srvName = parts[2]
+        const envKey = parts[3]
+        if (!srvName) {
+          // Show env for all servers
+          const mcpServers = settings?.mcp_servers || {}
+          const names = Object.keys(mcpServers)
+          if (!names.length) { app.addSystemMessage('No MCP servers configured.'); return }
+          const lines = ['MCP server environment variables:']
+          for (const n of names) {
+            const src = getMcpServerSource(n, cwd)
+            const envKeys = Object.keys(mcpServers[n].env || {})
+            const srcLabel = src ? path.relative(os.homedir(), src.path) : 'programmatic'
+            if (!envKeys.length) {
+              lines.push(`  ${n}  (${srcLabel})  — no env vars set`)
+            } else {
+              lines.push(`  ${n}  (${srcLabel})`)
+              for (const k of envKeys) {
+                const v = mcpServers[n].env[k]
+                const masked = v ? v.slice(0, 6) + '…' + v.slice(-4) : '(empty)'
+                lines.push(`    ${k}=${masked}`)
+              }
+            }
+          }
+          app.addSystemMessage(lines.join('\n'))
+          return
+        }
+        if (!envKey) {
+          // Show env for a specific server
+          const cfg = (settings?.mcp_servers || {})[srvName]
+          if (!cfg) { app.addSystemMessage(`Server "${srvName}" not found. Use /mcp status to see configured servers.`); return }
+          const envKeys = Object.keys(cfg.env || {})
+          if (!envKeys.length) { app.addSystemMessage(`${srvName}: no env vars set\nUse /mcp env ${srvName} <KEY> <value> to set one.`); return }
+          const lines = [`${srvName} environment variables:`]
+          for (const k of envKeys) {
+            const v = cfg.env[k]
+            const masked = v ? v.slice(0, 6) + '…' + v.slice(-4) : '(empty)'
+            lines.push(`  ${k}=${masked}`)
+          }
+          app.addSystemMessage(lines.join('\n'))
+          return
+        }
+        // Set or clear an env var
+        const value = parts.slice(4).join(' ')
+        const result = updateMcpServerEnv(srvName, envKey, value, cwd)
+        if (!result.ok) {
+          app.addSystemMessage(`✗ ${result.error}`)
+          return
+        }
+        // Reload to pick up the change
+        settings.mcp_servers = {}
+        applyMcpConfig(settings, cwd)
+        invalidateMcpToolCache()
+        const action = result.set ? 'Set' : 'Cleared'
+        const display = result.set ? ' = ********' : ''
+        const relPath = path.relative(os.homedir(), result.path).startsWith('..') ? result.path : '~/' + path.relative(os.homedir(), result.path)
+        app.addSystemMessage(`✓ ${action} ${envKey}${display} on ${srvName}\n  Config file: ${relPath}`)
+        return
+      }
+
+      app.addSystemMessage('/mcp sub-commands: status · list · reload [server] · add <name> <command> [args…] · env [server] [KEY] [value]')
       return
     }
 
@@ -775,8 +853,23 @@ async function mainPipe(opts) {
       }
       continue
     }
-    if (line === '/config' || line === '/settings') {
-      io.println(ui.formatConfig(settings)); continue
+    if (line === '/config' || line === '/settings' || line.startsWith('/config ')) {
+      const parts = line.split(' ')
+      if (parts[1] === 'set' && parts[2] && parts.length >= 4) {
+        const dotPath = parts[2]
+        const value = parts.slice(3).join(' ')
+        const keys = dotPath.split('.')
+        let patch = {}
+        let node = patch
+        for (let i = 0; i < keys.length - 1; i++) { node[keys[i]] = {}; node = node[keys[i]] }
+        const leafKey = keys[keys.length - 1]
+        node[leafKey] = /^\d+$/.test(value) ? parseInt(value, 10) : value
+        settings = updateEffectiveSettings(db, patch)
+        io.println(ui.colors.success(`  ✓ Set ${dotPath}`))
+      } else {
+        io.println(ui.formatConfig(settings))
+      }
+      continue
     }
     if (line === '/clear' || line === '/reset' || line === '/new') {
       if (process.env.SDLC_DISABLE_ALL_HOOKS !== '1') await runHooks(db, makeHookRt(), 'SessionEnd', { reason: 'clear' })
@@ -1113,7 +1206,7 @@ Environment:
   ANTHROPIC_AUTH_TOKEN       Bearer token
   SDLC_DISABLE_ALL_HOOKS=1  Skip hooks
 
-Commands: /help /phase /plan /test /verify /done /model /login /logout /status /config /clear /exit`)
+Commands: /help /phase /plan /test /verify /done /model /login /logout /status /config /mcp /clear /exit`)
     return
   }
 
