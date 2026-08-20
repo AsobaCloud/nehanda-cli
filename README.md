@@ -189,6 +189,10 @@ Place the script at `lib/scripts/my-new-tool.py`. It will receive arguments inte
 | `/mcp list` | Connect to each server and enumerate available tools |
 | `/mcp reload [server]` | Re-read `mcp.json` and bust the tool cache (optionally for one server) |
 | `/mcp add <name> <command> [args…]` | Register a new server and save it to `~/.config/nehanda/mcp.json` |
+| `/mcp env` | Show environment variables for all configured servers |
+| `/mcp env <server>` | Show environment variables for a specific server |
+| `/mcp env <server> <KEY> <value>` | Set an environment variable (e.g. an API key) |
+| `/mcp env <server> <KEY>` | Clear an environment variable |
 
 ---
 
@@ -222,6 +226,42 @@ Place the script at `lib/scripts/my-new-tool.py`. It will receive arguments inte
 At startup, `nehanda-cli` loads `mcp.json`, spawns the configured servers, and calls `tools/list` on each. Discovered tools are injected into the model's tool list under the namespace `mcp__<server>__<tool>` and are available for the model to call during any conversation turn — no additional configuration required.
 
 Use `/mcp list` to verify what tools are visible, and `/mcp reload` to pick up changes without restarting.
+
+
+### Setting API Keys for MCP Servers
+
+Many MCP servers require an API key or other secrets. Rather than editing `mcp.json` by hand, use the `/mcp env` command directly from the REPL:
+
+```
+❯ /mcp env                    # show env vars for all servers
+❯ /mcp env asoba              # show env vars for 'asoba' server
+❯ /mcp env asoba ASOBA_API_KEY sk-abc123...   # set the key
+✓ Set ASOBA_API_KEY = ******** on asoba
+  Config file: ~/.config/nehanda/mcp.json
+```
+
+This writes the value to the `mcp.json` file where the server is defined (project-local `./mcp.json` takes priority over global `~/.config/nehanda/mcp.json`), then automatically reloads the server so the change takes effect immediately.
+
+To clear a key:
+
+```
+❯ /mcp env asoba ASOBA_API_KEY
+✓ Cleared ASOBA_API_KEY on asoba
+```
+
+**Tip:** Keys are masked in `/mcp env` output. Only the first 6 and last 4 characters are shown.
+
+### General Config from the REPL
+
+Use `/config set <dot.path> <value>` to set any configuration value without editing files:
+
+```
+❯ /config set model_config.base_url https://api.anthropic.com
+❯ /config set model_config.num_ctx 8192
+```
+
+Numeric values are auto-converted. Changes persist in the local settings database.
+
 
 ---
 
