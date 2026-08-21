@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 // ── In-process engine imports (direct, single-repo) ──────────
 import { runUserTurn } from '../lib/orchestrate.mjs'
 import { loadInstructions } from '../lib/instructions.mjs'
-import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfig, globalMcpConfigPath } from '../lib/mcp-config.mjs'
+import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfig, globalMcpConfigPath, updateMcpServerEnv } from '../lib/mcp-config.mjs'
 import { getMcpServer, closeAllMcpServers, listMcpServers, mcpListResources } from '../lib/mcp.mjs'
 import { invalidateMcpToolCache } from '../lib/tools.mjs'
 import Database from 'better-sqlite3'
@@ -136,7 +136,7 @@ const SLASH_COMMANDS = [
   { name: '/model',  desc: 'Change model endpoint' },
   { name: '/key',    desc: 'Set Nehanda API key' },
   { name: '/config', desc: 'Show current config' },
-  { name: '/mcp',    desc: 'Manage MCP servers (status|list|reload|add)' },
+  { name: '/mcp',    desc: 'Manage MCP servers (status|list|reload|add|env)' },
   { name: '/clear',  desc: 'New conversation' },
   { name: '/retry',  desc: 'Resend the last failed message' },
   { name: '/help',   desc: 'Show commands' },
@@ -595,7 +595,77 @@ async function handleCommand(cmd, bridge) {
       return
     }
 
-    bridge.addMessage({ role: 'system', text: '  /mcp sub-commands: status · list · reload [server] · add <name> <command> [args…]' })
+    if (sub === 'env') {
+      const targetServer = parts[2]
+      const envKey = parts[3]
+      const envVal = parts[4]
+
+      if (!targetServer) {
+        // Show env for all servers
+        if (!serverNames.length) {
+          bridge.addMessage({ role: 'system', text: '  No MCP servers configured.' })
+          return
+        }
+        const lines = ['\n  MCP Server Environment Variables:']
+        for (const name of serverNames) {
+          const cfg = servers[name]
+          const envKeys = Object.keys(cfg.env || {})
+          if (!envKeys.length) {
+            lines.push(`  ${chalk.hex(BRAND.accent)(name)}: (none)`)
+          } else {
+            lines.push(`  ${chalk.hex(BRAND.accent)(name)}:`)
+            for (const k of envKeys) {
+              const v = cfg.env[k]
+              const masked = v.length > 10 ? v.slice(0, 6) + '...' + v.slice(-4) : '********'
+              lines.push(`    ${k} = ${chalk.dim(masked)}`)
+            }
+          }
+        }
+        bridge.addMessage({ role: 'system', text: lines.join('\n') + '\n' })
+        return
+      }
+
+      if (!envKey) {
+        // Show env for a specific server
+        const cfg = servers[targetServer]
+        if (!cfg) {
+          bridge.addMessage({ role: 'system', text: `  Server "${targetServer}" not found.` })
+          return
+        }
+        const envKeys = Object.keys(cfg.env || {})
+        if (!envKeys.length) {
+          bridge.addMessage({ role: 'system', text: `  ${chalk.hex(BRAND.accent)(targetServer)}: (no env vars set)` })
+        } else {
+          const lines = [`  ${chalk.hex(BRAND.accent)(targetServer)}:`]
+          for (const k of envKeys) {
+            const v = cfg.env[k]
+            const masked = v.length > 10 ? v.slice(0, 6) + '...' + v.slice(-4) : '********'
+            lines.push(`    ${k} = ${chalk.dim(masked)}`)
+          }
+          bridge.addMessage({ role: 'system', text: lines.join('\n') + '\n' })
+        }
+        return
+      }
+
+      // Set or clear env var
+      const result = updateMcpServerEnv(targetServer, envKey, envVal || '', process.cwd())
+      if (!result.ok) {
+        bridge.addMessage({ role: 'system', text: `  ${chalk.hex(BRAND.red)('✗')} ${result.error}` })
+        return
+      }
+      // Reload runtime settings and bust cache
+      runtimeSettings.mcp_servers = {}
+      applyMcpConfig(runtimeSettings, process.cwd())
+      invalidateMcpToolCache()
+      if (result.set) {
+        bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Set ${chalk.bold(envKey)} = ${'********'} on ${chalk.bold(targetServer)}\n  Config file: ${result.path}` })
+      } else {
+        bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Cleared ${chalk.bold(envKey)} on ${chalk.bold(targetServer)}\n  Config file: ${result.path}` })
+      }
+      return
+    }
+
+    bridge.addMessage({ role: 'system', text: '  /mcp sub-commands: status · list · reload [server] · add <name> <command> [args…] · env [server] [KEY [VALUE]]' })
     return
   }
 
