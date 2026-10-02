@@ -79,12 +79,54 @@ CREATE TABLE IF NOT EXISTS memories (
     updated_at INTEGER NOT NULL,
     last_accessed INTEGER,
     access_count INTEGER DEFAULT 0,
-    attention_score REAL DEFAULT 0.5
+    attention_score REAL DEFAULT 0.5,
+    -- Jev-Mem canonical node extensions (schema_version >= 2)
+    conversation_id TEXT,
+    session_id TEXT,
+    provenance TEXT,
+    entities_json TEXT DEFAULT '[]',
+    t_episodic REAL DEFAULT 0,
+    t_semantic REAL DEFAULT 0,
+    t_procedural REAL DEFAULT 0,
+    t_preference REAL DEFAULT 0,
+    source_entry_id INTEGER,
+    observation_ts INTEGER
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     title, content, keywords, anticipated_queries,
     tokenize='porter unicode61'
+);
+
+-- Multi-relational memory plane: independent views over shared nodes
+CREATE TABLE IF NOT EXISTS memory_edges (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    src_id          TEXT NOT NULL REFERENCES memories(id),
+    dst_id          TEXT NOT NULL REFERENCES memories(id),
+    relation        TEXT NOT NULL CHECK (relation IN ('semantic', 'temporal', 'causal', 'entity')),
+    weight          REAL NOT NULL DEFAULT 0,
+    meta_json       TEXT,
+    created_at      INTEGER NOT NULL,
+    UNIQUE(src_id, dst_id, relation)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_edges_src ON memory_edges(src_id, relation);
+CREATE INDEX IF NOT EXISTS idx_memory_edges_dst ON memory_edges(dst_id, relation);
+CREATE INDEX IF NOT EXISTS idx_memories_conversation ON memories(conversation_id, observation_ts);
+
+-- System-1 session control block (canonical state header for System-2)
+CREATE TABLE IF NOT EXISTS laya_jev_state (
+    session_id          TEXT PRIMARY KEY REFERENCES sessions(session_id),
+    task_status         TEXT NOT NULL DEFAULT 'investigating'
+                        CHECK (task_status IN (
+                          'investigating', 'modifying_code', 'awaiting_user',
+                          'verifying', 'blocked', 'idle'
+                        )),
+    file_target         TEXT,
+    escalation_risk     INTEGER NOT NULL DEFAULT 0 CHECK (escalation_risk IN (0, 1)),
+    confidence_score    REAL NOT NULL DEFAULT 0,
+    state_json          TEXT,
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS transcript_entries (
