@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url'
 // ── In-process engine imports (direct, single-repo) ──────────
 import { runUserTurn } from '../lib/orchestrate.mjs'
 import { loadInstructions } from '../lib/instructions.mjs'
+import { modelConfigFromAgent } from '../lib/modelConfig.mjs'
 import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfig, globalMcpConfigPath, updateMcpServerEnv } from '../lib/mcp-config.mjs'
 import { getMcpServer, closeAllMcpServers, listMcpServers, mcpListResources } from '../lib/mcp.mjs'
 import { invalidateMcpToolCache } from '../lib/tools.mjs'
@@ -136,7 +137,7 @@ const SLASH_COMMANDS = [
   { name: '/model',  desc: 'Change model endpoint' },
   { name: '/key',    desc: 'Set Nehanda API key' },
   { name: '/config', desc: 'Show current config' },
-  { name: '/mcp',    desc: 'Manage MCP servers (status|list|reload|add|env)' },
+  { name: '/mcp',    desc: 'MCP server & tool management (/mcp list)' },
   { name: '/clear',  desc: 'New conversation' },
   { name: '/retry',  desc: 'Resend the last failed message' },
   { name: '/help',   desc: 'Show commands' },
@@ -498,7 +499,9 @@ async function handleCommand(cmd, bridge) {
   if (name === '/model') {
     bridge.addMessage({ role: 'system', text: '  Discovering models…' })
     const all   = await buildModelList()
-    const cur   = readAgents().agents?.[0]?.model || ''
+    const data0 = readAgents()
+    const curAg = data0.agents?.find(a => a.name === data0.default_agent) || data0.agents?.[0]
+    const cur   = curAg?.model || ''
     const items = all.map(m => ({ ...m, label: m.name === cur ? `${m.label} ✓` : m.label }))
     const sel   = await bridge.select('Select model', items)
     if (!sel) return
@@ -507,6 +510,11 @@ async function handleCommand(cmd, bridge) {
       const ag   = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
       if (ag) { ag.model = sel.name; ag.endpoint = sel.endpoint }
       fs.writeFileSync(AGENTS_JSON, JSON.stringify(data, null, 2), 'utf8')
+      // Keep in-session model_config in sync so the next turn uses the selected wire name
+      runtimeSettings.model_config = modelConfigFromAgent(
+        ag || { model: sel.name, endpoint: sel.endpoint },
+        { apiKey: readApiKey() },
+      )
       bridge.refreshModel()
       bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Model → ${chalk.bold(sel.name)}` })
     } catch (err) { bridge.addMessage({ role: 'error', text: 'Failed: ' + err.message }) }
@@ -514,9 +522,27 @@ async function handleCommand(cmd, bridge) {
   }
   if (name === '/mcp') {
     const parts = cmd.trim().split(/\s+/)
-    const sub = parts[1] || 'status'
+    const sub = parts[1] || ''
     const servers = runtimeSettings.mcp_servers || {}
     const serverNames = Object.keys(servers)
+
+    if (!sub || sub === 'help') {
+      const lines = [
+        '',
+        `  ${chalk.bold('MCP Server & Tool Commands:')}`,
+        `    ${chalk.hex(BRAND.accent)('/mcp list'.padEnd(28))} ${chalk.dim('Discover and list all available MCP tools')}`,
+        `    ${chalk.hex(BRAND.accent)('/mcp status'.padEnd(28))} ${chalk.dim('Show configured servers and command paths')}`,
+        `    ${chalk.hex(BRAND.accent)('/mcp reload [server]'.padEnd(28))} ${chalk.dim('Reload mcp.json configs into session')}`,
+        `    ${chalk.hex(BRAND.accent)('/mcp add <name> <cmd> […]'.padEnd(28))} ${chalk.dim('Register a new MCP server')}`,
+        `    ${chalk.hex(BRAND.accent)('/mcp env [server] [K] [V]'.padEnd(28))} ${chalk.dim('View or set server environment variables')}`,
+        '',
+        `  ${chalk.dim(`Configured servers: ${serverNames.length ? serverNames.join(', ') : 'none'}`)}`,
+        `  ${chalk.dim('Tip: Run /mcp list to inspect tools injected into the assistant.')}`,
+        '',
+      ]
+      bridge.addMessage({ role: 'system', text: lines.join('\n') })
+      return
+    }
 
     if (sub === 'status') {
       if (!serverNames.length) {
@@ -528,7 +554,9 @@ async function handleCommand(cmd, bridge) {
         const cfg = servers[name]
         lines.push(`  ${chalk.hex(BRAND.accent)(name.padEnd(20))} ${chalk.dim(cfg.command + ' ' + (cfg.args || []).join(' '))}`)
       }
-      bridge.addMessage({ role: 'system', text: lines.join('\n') + '\n' })
+      lines.push('')
+      lines.push(`  ${chalk.dim('Tip: Run /mcp list to view tools provided by these servers.')}\n`)
+      bridge.addMessage({ role: 'system', text: lines.join('\n') })
       return
     }
 
@@ -680,14 +708,17 @@ const bridge = {
 
 // ── Runtime settings — shared across turns ───────────────────
 // Built once here; applyMcpConfig merges mcp.json servers in.
-// Each turn reads this object for model_config and mcp_servers.
+// Each turn rebuilds model_config from agents.json via modelConfigFromAgent
+// so /model selection changes the wire model (not just the endpoint).
+const _bootAgent = (() => {
+  const data = readAgents()
+  return data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
+})()
 const runtimeSettings = {
-  model_config: {
-    provider: 'nehanda',
-    model_id:  'nehanda_rag_synthesis_27b',
-    base_url:  null,   // resolved per-turn from agents.json
-    api_key:   null,   // resolved per-turn from agents.json
-  },
+  model_config: modelConfigFromAgent(_bootAgent, {
+    apiKey: readApiKey(),
+    defaultEndpoint: process.env.NEHANDA_BASE_URL || 'https://nehanda-ml.asoba.co/v1',
+  }),
   permissions: { defaultMode: 'default' },
   mcp_servers: {},
 }
@@ -707,6 +738,11 @@ bridge.onSubmit = async (text) => {
 
     const agentsData = readAgents()
     const agent      = agentsData.agents?.find(a => a.name === agentsData.default_agent) || agentsData.agents?.[0]
+    const modelConfig = modelConfigFromAgent(agent, {
+      apiKey: readApiKey(),
+      defaultEndpoint: process.env.NEHANDA_BASE_URL || 'https://nehanda-ml.asoba.co/v1',
+    })
+    runtimeSettings.model_config = modelConfig
 
     // Ensure conversation row exists for this convId
     sessionDb.prepare(
@@ -726,11 +762,7 @@ bridge.onSubmit = async (text) => {
       onaInstructions: onaInstructionsContent || null,
       settings: {
         ...runtimeSettings,
-        model_config: {
-          ...runtimeSettings.model_config,
-          base_url: agent?.endpoint || process.env.NEHANDA_BASE_URL || 'https://nehanda-ml.asoba.co/v1',
-          api_key:  readApiKey(),
-        },
+        model_config: modelConfig,
       },
     }
 

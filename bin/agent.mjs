@@ -170,7 +170,10 @@ Session:
   /logout       Clear credentials
   /status       Auth status
   /config       Settings (try /config set <key> <value>)
-  /mcp         MCP servers (try /mcp env)
+  /mcp          MCP server management & guide
+  /mcp list     List all discovered tools & descriptions
+  /mcp status   Show configured MCP servers
+  /mcp env      Set MCP env vars (API keys)
   /clear        New conversation
   /exit         Quit`)
       return
@@ -519,9 +522,25 @@ Session:
 
     if (trimmed.startsWith('/mcp')) {
       const parts = trimmed.split(/\s+/)
-      const sub = parts[1] || 'status'
+      const sub = parts[1] || ''
       const mcpServers = settings?.mcp_servers || {}
       const serverNames = Object.keys(mcpServers)
+
+      if (!sub || sub === 'help') {
+        const lines = [
+          'MCP Server & Tool Commands:',
+          '  /mcp list                  Discover and list all available MCP tools',
+          '  /mcp status                Show configured servers and command paths',
+          '  /mcp reload [server]       Reload mcp.json configs into session',
+          '  /mcp add <name> <cmd> […]  Register a new MCP server',
+          '  /mcp env [server] [K] [V]  View or set server environment variables',
+          '',
+          `Configured servers: ${serverNames.length ? serverNames.join(', ') : 'none'}`,
+          'Tip: Run /mcp list to inspect tools injected into the assistant.',
+        ]
+        app.addSystemMessage(lines.join('\n'))
+        return
+      }
 
       if (sub === 'status') {
         if (!serverNames.length) {
@@ -533,6 +552,8 @@ Session:
           const cfg = mcpServers[n]
           lines.push(`  ${n.padEnd(22)} ${cfg.command} ${(cfg.args || []).join(' ')}`)
         }
+        lines.push('')
+        lines.push('Tip: Run /mcp list to view tools provided by these servers.')
         app.addSystemMessage(lines.join('\n'))
         return
       }
