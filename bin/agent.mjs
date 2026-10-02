@@ -23,6 +23,7 @@ import { loadInstructions } from '../lib/instructions.mjs'
 import { discoverOllamaModels, formatModelList } from '../lib/modelDiscovery.mjs'
 import { compactConversation } from '../lib/compact.mjs'
 import { createTeam, getTeam, listTeams, deleteTeam } from '../lib/team.mjs'
+import { ensureLayaReady } from '../lib/laya_sidecar.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PKG_ROOT = path.resolve(__dirname, '..')
@@ -1238,6 +1239,16 @@ Commands: /help /phase /plan /test /verify /done /model /login /logout /status /
   if (opts.transition) { runTransition(opts); return }
 
   await autoDetectLmStudioModel()
+
+  // Provision Laya venv and warm the sidecar before the first turn.
+  // This is mandatory — if it fails, print the error and abort.
+  try {
+    await ensureLayaReady()
+  } catch (e) {
+    process.stderr.write(`[startup] Laya provisioning failed: ${e.message}\n`)
+    process.stderr.write('[startup] Cannot start: Laya (System-1) is required. Fix the error above and retry.\n')
+    process.exit(1)
+  }
 
   if (process.stdin.isTTY) {
     await mainInteractive(opts)

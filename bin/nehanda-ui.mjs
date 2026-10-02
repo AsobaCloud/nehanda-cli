@@ -22,6 +22,7 @@ import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfi
 import { getMcpServer, closeAllMcpServers, listMcpServers, mcpListResources } from '../lib/mcp.mjs'
 import { invalidateMcpToolCache } from '../lib/tools.mjs'
 import Database from 'better-sqlite3'
+import { ensureLayaReady } from '../lib/laya_sidecar.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT  = path.resolve(__dirname, '..')
@@ -808,6 +809,16 @@ bridge.onSubmit = async (text) => {
     bridge.setLoading(false)
     bridge.abortCurrent = null
   }
+}
+
+// Provision Laya venv and warm the sidecar before the first turn.
+// This is mandatory — if it fails, abort with a clear error.
+try {
+  await ensureLayaReady()
+} catch (e) {
+  process.stderr.write(`[startup] Laya provisioning failed: ${e.message}\n`)
+  process.stderr.write('[startup] Cannot start: Laya (System-1) is required. Fix the error above and retry.\n')
+  process.exit(1)
 }
 
 render(e(App, { bridge }), { exitOnCtrlC: false })
