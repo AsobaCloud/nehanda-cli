@@ -411,7 +411,7 @@ node tests/unit/orchestrate_jev_hotpath_behavioral.mjs
 - Published as `@asobacloud/nehanda` on npm — install with `npm install -g @asobacloud/nehanda`
 - Laya System-1 venv provisioning moved to `npm install` time via `scripts/postinstall.mjs` — CLI starts instantly on every subsequent launch
 - Laya provisioning now streams live pip progress to the terminal instead of running silently
-- Added project-local `mcp.json` with `datalayer/jupyter-mcp-server` preconfigured for the JupyterLab instance on `asobacorp-1.local:8888` — set your token with `/mcp env jupyter JUPYTER_TOKEN <token>`
+- Added project-local `mcp.json` with `datalayer/jupyter-mcp-server` preconfigured for JupyterLab — set your server URL and token with `/mcp env jupyter JUPYTER_URL <url>` and `/mcp env jupyter JUPYTER_TOKEN <token>`
 
 ### 0.2.0
 - Jev-Mem memory architecture (System-1 Laya control plane)
