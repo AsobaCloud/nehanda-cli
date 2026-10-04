@@ -1,18 +1,32 @@
 {
-  "name": "ona-code",
+  "name": "@asobacloud/nehanda",
   "version": "0.2.0",
-  "private": true,
   "type": "module",
-  "description": "Multi-provider SDLC SQLite REPL (CLEAN_ROOM_SPEC): Anthropic Messages, LM Studio / OpenAI-compatible chat. Node 22+.",
+  "description": "Agentic terminal REPL and single-process engine for governed AI deep research and software development. Connects to Nehanda v3, Ollama, LM Studio, or any OpenAI-compatible API.",
   "engines": {
     "node": ">=22"
   },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "scripts/",
+    "templates/",
+    "schema.sql",
+    "README.md",
+    "LICENSE",
+    "LICENSE.md"
+  ],
   "bin": {
     "ona": "./bin/agent.mjs",
     "ona-code": "./bin/agent.mjs",
     "nehanda": "./bin/nehanda-ui.mjs"
   },
   "scripts": {
+    "postinstall": "node scripts/postinstall.mjs",
     "start": "node ./bin/agent.mjs",
     "repl": "node ./bin/agent.mjs",
     "verify": "node ./scripts/verify-sdlc-hook-order.mjs",

@@ -19,7 +19,7 @@ fi
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
 
-"$PIP" install --upgrade pip >/dev/null
+"$PIP" install --upgrade pip --quiet
 
 need_install=0
 if ! "$PY" -c "import laya, torch" 2>/dev/null; then
@@ -27,8 +27,8 @@ if ! "$PY" -c "import laya, torch" 2>/dev/null; then
 fi
 
 if [[ "$need_install" -eq 1 ]]; then
-  echo "[laya-env] installing laya + torch (this is required System-1, not optional)" >&2
-  "$PIP" install 'laya' 'torch'
+  echo "[laya-env] installing laya + torch (~808 MB download — this is a one-time setup, please wait)" >&2
+  "$PIP" install 'laya' 'torch' --progress-bar on
 fi
 
 # Hard verify imports
