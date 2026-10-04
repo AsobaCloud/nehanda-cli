@@ -335,6 +335,17 @@ To clear a key:
 
 **Tip:** Keys are masked in `/mcp env` output. Only the first 6 and last 4 characters are shown.
 
+#### Connecting to JupyterLab
+
+`mcp.json` ships with a `jupyter` server pre-configured pointing at `localhost:8888`. To connect it to your JupyterLab instance:
+
+```
+❯ /mcp env jupyter JUPYTER_URL http://my-server:8888
+❯ /mcp env jupyter JUPYTER_TOKEN <your-token>
+```
+
+Both values are written to `~/.config/nehanda/mcp.json` and never committed. The server reloads automatically.
+
 ### General Config from the REPL
 
 Use `/config set <dot.path> <value>` to set any configuration value without editing files:
