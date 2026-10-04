@@ -18,22 +18,35 @@ Every conversation turn, tool call, phase transition, and permission check is st
 
 ### 1. Installation
 
+**Global install (recommended):**
+
+```bash
+npm install -g @asobacloud/nehanda
+```
+
+During install, `npm` automatically provisions a dedicated Python venv and downloads the [Laya](https://huggingface.co/convaiinnovations/laya) checkpoint (~808 MB). This happens once — subsequent starts are instant.
+
+**From source:**
+
 ```bash
 git clone https://github.com/AsobaCloud/nehanda-cli.git
 cd nehanda-cli
 npm install
 ```
 
-On first launch, the CLI automatically provisions a dedicated Python venv and downloads the [Laya](https://huggingface.co/convaiinnovations/laya) checkpoint (~808 MB). This happens once. Subsequent starts are instant.
+The same one-time provisioning runs automatically as part of `npm install`.
 
 ### 2. Launching the REPL
 
-Launch the interactive Ink TUI:
+```bash
+nehanda
+```
+
+Or via the aliases installed with the package:
 
 ```bash
-npm start
-# or directly run:
-node bin/nehanda-ui.mjs
+ona
+ona-code
 ```
 
 ### 3. Provider Setup
