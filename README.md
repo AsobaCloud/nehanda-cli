@@ -405,6 +405,22 @@ node tests/unit/orchestrate_jev_hotpath_behavioral.mjs
 
 ---
 
+## Changelog
+
+### 0.3.0
+- Published as `@asobacloud/nehanda` on npm — install with `npm install -g @asobacloud/nehanda`
+- Laya System-1 venv provisioning moved to `npm install` time via `scripts/postinstall.mjs` — CLI starts instantly on every subsequent launch
+- Laya provisioning now streams live pip progress to the terminal instead of running silently
+- Added project-local `mcp.json` with `datalayer/jupyter-mcp-server` preconfigured for the JupyterLab instance on `asobacorp-1.local:8888` — set your token with `/mcp env jupyter JUPYTER_TOKEN <token>`
+
+### 0.2.0
+- Jev-Mem memory architecture (System-1 Laya control plane)
+- Dynamic Tool Rescue (`[TOOL_CALL]` delimiter path)
+- Deterministic 6-phase SDLC workflow
+- Multi-provider switching
+
+---
+
 ## References
 
 Jiang, Z., Li, Y., & Li, J. (2026). *System-One-Controlled Agentic Memory for Efficient AI Agents*. arXiv:2609.23986. https://arxiv.org/abs/2609.23986
