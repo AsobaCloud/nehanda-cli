@@ -4,7 +4,7 @@
       "command": "uvx",
       "args": ["jupyter-mcp-server@latest"],
       "env": {
-        "JUPYTER_URL": "http://asobacorp-1.local:8888",
+        "JUPYTER_URL": "http://localhost:8888",
         "JUPYTER_TOKEN": "",
         "ALLOW_IMG_OUTPUT": "true"
       }
