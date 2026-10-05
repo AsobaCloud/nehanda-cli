@@ -1,6 +1,6 @@
 {
   "name": "@asobacloud/nehanda",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "description": "Agentic terminal REPL and single-process engine for governed AI deep research and software development. Connects to Nehanda v3, Ollama, LM Studio, or any OpenAI-compatible API.",
   "engines": {
