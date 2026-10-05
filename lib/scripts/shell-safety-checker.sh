@@ -301,6 +301,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
         exit 0
     else
         echo "✗ Safety check failed"
+        # Emit structured blocked payload on stderr so tools.mjs _parseBlockedPayload
+        # can surface the interactive confirmation menu in the TUI.
+        printf '{"status":"blocked","reason":"ShellSafetyChecker: %d file(s) with issues","risk_score":"high","proposed_remediation":["review","sandbox"]}\n' \
+            "$totalIssues" >&2
         exit 1
     fi
 fi

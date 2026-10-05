@@ -418,6 +418,14 @@ node tests/unit/orchestrate_jev_hotpath_behavioral.mjs
 
 ## Changelog
 
+### 0.4.0
+- **Runtime Visibility (`lib/modelDiscovery.mjs`, `lib/ui.mjs`):** New `RuntimeHealthMonitor` class probes active inference endpoints (1s HEAD request, Kubernetes readiness pattern) and checks Laya sidecar liveness via `pgrep`. `renderStatusHeader` and `renderModelSwitchNotice` added to `lib/ui.mjs` — the TUI now shows active model, endpoint health + latency, sidecar PID, and context usage percentage after startup and on every `/model` switch.
+- **Structured Output Formatting (`lib/ui.mjs`, `lib/scripts/odse-transform.py`):** `formatToolResult` now detects JSON array payloads from tool responses and renders them as `cli-table3` box-drawing tables with column headers and row-count summaries (capped at 10 rows with overflow note), falling back to the plain-text preview for non-array content. `odse-transform.py` gains a `--format table|ndjson|summary` flag; defaults to `table` when stdout is a TTY and `ndjson` when piped.
+- **Interactive Safety Interventions (`lib/bashguard.mjs`, `lib/tools.mjs`, `bin/nehanda-ui.mjs`):** `validateBashCommand` now returns a structured `{ status, reason, risk_score, proposed_remediation }` payload instead of a flat string. When the TUI is active, blocked commands raise a `BlockConfirmMenu` (`[A] Approve for Session | [S] Run in Laya Sandbox | [C] Cancel`) wired directly into the Ink event loop — no blocking readline, no crash. Session approvals are cached in-memory via `cacheSessionApproval` so the same operation is not re-prompted within a session. Safety checker scripts (`python-safety-checker.py`, `shell-safety-checker.sh`) emit the structured JSON payload to stderr on exit 1 so the TUI can surface them identically. Headless pipe mode auto-denies without prompting.
+- **Pinned Context Preservation (`lib/store.mjs`, `lib/compact.mjs`):** New `pinned_context` table (schema v3) stores session-scoped invariants — ODSE schema mappings, asset specs, simulation bounds — keyed by string. `compactConversation` and `buildJevCollapseSummary` exclude pinned blocks from the distillation summariser and reattach them verbatim in the `collapse_commit` payload. `compactWithJev` prepends pinned blocks before the canonical System-1 header in every System-2 prompt, ensuring domain rules survive arbitrarily long sessions.
+- Added `cli-table3@0.6.5` as a production dependency.
+- Fixed dead `has_any_assert` variable in `lib/scripts/audit-code-integrity.py` (ruff F841).
+
 ### 0.3.0
 - Published as `@asobacloud/nehanda` on npm — install with `npm install -g @asobacloud/nehanda`
 - Laya System-1 venv provisioning moved to `npm install` time via `scripts/postinstall.mjs` — CLI starts instantly on every subsequent launch

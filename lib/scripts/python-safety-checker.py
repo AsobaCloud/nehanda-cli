@@ -189,6 +189,17 @@ class PythonSafetyChecker:
                 print(f"\n--- {tool} Issues ---")
                 print(issue)
             print(f"\n✗ Found {len(self.issues)} issues.")
+            # Emit structured blocked payload on stderr so the caller (tools.mjs
+            # _parseBlockedPayload) can surface the interactive confirmation menu.
+            import json as _json
+            reasons = "; ".join(tool for tool, _ in self.issues)
+            _payload = {
+                "status": "blocked",
+                "reason": f"PythonSafetyChecker: {reasons}",
+                "risk_score": "high",
+                "proposed_remediation": ["review", "sandbox"],
+            }
+            print(_json.dumps(_payload), file=sys.stderr)
             sys.exit(1)
 
 if __name__ == "__main__":
