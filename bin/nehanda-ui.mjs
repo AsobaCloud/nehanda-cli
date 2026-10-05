@@ -345,8 +345,45 @@ function SelectMenu({ title, items, onSelect, onCancel }) {
     e(Box, { marginTop: 1 }, e(Text, { dimColor: true },
       '↑↓ navigate · Enter select' + (items.length <= 9 ? ` · 1–${items.length} jump` : '') + ' · Esc cancel')))
 }
+
+// ── Block Confirmation Menu (Gap 3) ──────────────────────────
+// Raised when bashguard or a safety-checker script blocks a command.
+// Resolves the Promise with 'approve' | 'sandbox' | 'cancel'.
+function BlockConfirmMenu({ payload, onDecide }) {
+  useInput((input, key) => {
+    const ch = input.toLowerCase()
+    if (key.escape || ch === 'c') { onDecide('cancel'); return }
+    if (ch === 'a') { onDecide('approve'); return }
+    if (ch === 's') { onDecide('sandbox'); return }
+  })
+
+  const riskColor = payload.risk_score === 'high' ? BRAND.red : BRAND.coral
+  const remediation = (payload.proposed_remediation || []).join(', ')
+
+  return e(Box, { flexDirection: 'column', borderStyle: 'single', borderColor: BRAND.red, marginY: 1 },
+    e(Box, { paddingX: 1, paddingY: 0 },
+      e(Text, { bold: true, color: BRAND.red }, '⛔ Command Blocked')),
+    e(Box, { paddingX: 1 },
+      e(Text, { dimColor: true }, 'Reason:      '),
+      e(Text, { wrap: 'wrap' }, payload.reason || '(unknown)')),
+    e(Box, { paddingX: 1 },
+      e(Text, { dimColor: true }, 'Risk:        '),
+      e(Text, { color: riskColor, bold: true }, (payload.risk_score || 'unknown').toUpperCase())),
+    remediation
+      ? e(Box, { paddingX: 1 },
+          e(Text, { dimColor: true }, 'Remediation: '),
+          e(Text, { dimColor: true }, remediation))
+      : null,
+    e(Box, { paddingX: 1, marginTop: 1 },
+      e(Text, { bold: true, color: BRAND.accent }, '[A]'),
+      e(Text, {}, ' Approve for Session  '),
+      e(Text, { bold: true, color: BRAND.lavender }, '[S]'),
+      e(Text, {}, ' Run in Laya Sandbox  '),
+      e(Text, { bold: true, color: BRAND.dim }, '[C]'),
+      e(Text, {}, ' Cancel')))
+}
+
 function TokenFooter({ calls, model }) {
-  let cols = 80; try { cols = process.stdout.columns || 80 } catch {}
   return e(Box, { flexDirection: 'column' },
     e(Text, { dimColor: true }, '─'.repeat(cols)),
     e(Box, { flexDirection: 'row', paddingX: 1, justifyContent: 'space-between' },
@@ -365,6 +402,7 @@ function App({ bridge }) {
   const [isLoading,  setIsLoading]  = React.useState(false)
   const [askState,   setAskState]   = React.useState(null)
   const [selectState, setSelectState] = React.useState(null)
+  const [blockState,  setBlockState]  = React.useState(null)
   const [callCount,  setCallCount]  = React.useState(0)
   const [modelInfo,  setModelInfo]  = React.useState(() => {
     const data = readAgents()
@@ -385,6 +423,7 @@ function App({ bridge }) {
     bridge.setLoading     = v    => setIsLoading(v)
     bridge.ask    = q     => new Promise(resolve => setAskState({ question: q, resolve }))
     bridge.select = (t,i) => new Promise(resolve => setSelectState({ title: t, items: i, resolve }))
+    bridge.confirmBlock = payload => new Promise(resolve => setBlockState({ payload, resolve }))
     bridge.exit   = ()    => { exit() }
     bridge.refreshModel = () => {
       const data = readAgents()
@@ -403,6 +442,14 @@ function App({ bridge }) {
     setSelectState(null)
   }, [selectState])
   const handleSelectCancel = React.useCallback(() => { selectState?.resolve(null); setSelectState(null) }, [selectState])
+  const handleBlock = React.useCallback(decision => {
+    if (blockState?.resolve) {
+      const label = decision === 'approve' ? '✓ Approved for session' : decision === 'sandbox' ? '⚙ Running in sandbox' : '✗ Cancelled'
+      setFinalized(p => [...p, { role: 'system', text: `  ${label}` }])
+      blockState.resolve(decision)
+    }
+    setBlockState(null)
+  }, [blockState])
 
   useInput((input, key) => {
     if (key.escape) { if (isLoading && bridge.abortCurrent) bridge.abortCurrent(); return }
@@ -427,9 +474,11 @@ function App({ bridge }) {
     isLoading && (!streaming || !streaming.text) ? e(Spinner, {}) : null,
     askState
       ? e(AskPrompt, { question: askState.question, onAnswer: handleAnswer, onCancel: handleAskCancel })
-      : selectState
-        ? e(SelectMenu, { title: selectState.title, items: selectState.items, onSelect: handleSelect, onCancel: handleSelectCancel })
-        : e(InputArea, { onSubmit: bridge.onSubmit, isLoading }),
+      : blockState
+        ? e(BlockConfirmMenu, { payload: blockState.payload, onDecide: handleBlock })
+        : selectState
+          ? e(SelectMenu, { title: selectState.title, items: selectState.items, onSelect: handleSelect, onCancel: handleSelectCancel })
+          : e(InputArea, { onSubmit: bridge.onSubmit, isLoading }),
     e(TokenFooter, { calls: callCount, model: modelInfo.model }))
 }
 
@@ -780,6 +829,7 @@ bridge.onSubmit = async (text) => {
       println(msg)            { if (!aborted) bridge.addMessage({ role: 'system', text: '  ' + msg }) },
       spinner:                { start() {}, stop() {} },
       ask:                    bridge.ask,
+      confirmBlock:           payload => bridge.confirmBlock(payload),
       onToolStart(name)       { if (!aborted) bridge.addMessage({ role: 'system', text: `  ⚙ ${name}` }) },
       onToolResult(name, c, err) {
         if (aborted) return
