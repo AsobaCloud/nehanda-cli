@@ -1,6 +1,6 @@
 # Nehanda Command-Line Interface (`nehanda-cli`)
 
-An agentic terminal REPL and single-process engine built for governed AI deep research and software development. `nehanda-cli` connects directly to our flagship [Nehanda v3](https://huggingface.co/asoba/nehanda-v3-27b), as well as local or cloud-based Ollama models, LM Studio instances, or any OpenAI-compatible API.
+An agentic terminal REPL and single-process engine built for energy systems research and software development. `nehanda-cli` connects directly to our flagship [Nehanda v3](https://huggingface.co/asoba/nehanda-v3-27b), normalizes multi-OEM energy telemetry through the ODSE protocol, and enforces a governed development workflow across the full research-to-production lifecycle. It also connects to local or cloud-based Ollama models, LM Studio instances, or any OpenAI-compatible API.
 
 Every conversation turn, tool call, phase transition, and permission check is stored in a local, queryable SQLite database you own, ensuring complete transcripts exist for auditing and debugging.
 
@@ -83,11 +83,17 @@ To connect to an Ollama instance running on your network:
 
 * **In-Process Engine:** Executes turns directly inside the process via `runUserTurn`, eliminating separate server daemons or background HTTP relays.
 
-* **Jev-Mem Memory Architecture:** Every turn, a System-1 control plane ([Laya](https://huggingface.co/convaiinnovations/laya)) classifies observations into a multi-relational memory graph (semantic / temporal / causal / entity edges), then adaptively retrieves evidence before each model call. System-2 receives a compact canonical header + retrieved evidence + last 2 turns, not a raw transcript — cutting prefill 70–85% on long sessions. See [Jev-Mem Architecture](#jev-mem-architecture) below.
+* **ODSE Energy Normalization:** `lib/energy-middleware.mjs` intercepts MCP tool results from energy data servers and automatically normalizes them to the ODS-E protocol before the model sees the payload. OEM brand is resolved from the MCP server name (e.g. `energy-huawei` → `huawei`) or inferred by field-signature fingerprinting across 20+ OEM schemas (Huawei FusionSolar, Enphase, SolarEdge, Fronius, Sungrow, SMA, Eskom, and others). Multi-channel SCADA arrays and inverter state records render as box-drawing terminal tables with column headers and row-count summaries rather than raw JSON dumps.
+
+* **Jev-Mem Memory Architecture:** Every turn, a System-1 control plane ([Laya](https://huggingface.co/convaiinnovations/laya)) classifies observations into a multi-relational memory graph (semantic / temporal / causal / entity edges), then adaptively retrieves evidence before each model call. System-2 receives a compact canonical header + retrieved evidence + last 2 turns, not a raw transcript — cutting prefill 70–85% on long sessions. Domain invariants (ODSE schema mappings, asset capacity limits, simulation bounds) are pinned in the `pinned_context` table and reattached verbatim before every System-2 prompt, preventing model drift and hallucinated parameters across arbitrarily long research sessions. See [Jev-Mem Architecture](#jev-mem-architecture) below.
 
 * **Dynamic Tool Rescue (`[TOOL_CALL]`):** Native support for endpoints that strip OpenAI tool schemas (such as `nehandaMlProxy`). The engine dynamically injects active tool schemas directly into system prompts as `[TOOL_CALL]` blocks, parsing and executing tools locally without server-side function-calling support. Uses `[TOOL_CALL]` delimiters instead of `<tool_call>` XML to prevent vLLM's `--tool-call-parser qwen3_xml` stop-token interception.
 
 * **Deterministic SDLC Workflow:** Enforces a 6-phase state machine (`idle` → `plan` → `implement` → `test` → `verify` → `done`) to prevent unapproved code changes, hallucinated test passes, or unverified implementations.
+
+* **Interactive Safety Interventions:** When execution checkers flag a command — opening local sockets, inspecting HIL testbed hardware paths, or writing outside the working directory — the engine raises a structured `{ status, reason, risk_score, proposed_remediation }` payload rather than crashing. In the TUI, blocked operations surface a `BlockConfirmMenu` (`[A] Approve for Session | [S] Run in Laya Sandbox | [C] Cancel`) wired directly into the Ink event loop. Session approvals are cached so the same operation is not re-prompted within a session. Headless pipe mode auto-denies without prompting.
+
+* **Runtime Visibility:** `RuntimeHealthMonitor` probes active inference endpoints (1s HEAD request) and checks Laya sidecar liveness before each session. The TUI status header shows active model, endpoint health and latency, sidecar PID, and context usage percentage — so researchers have immediate visual confirmation of whether the target backend is an internal local host or an external cloud endpoint before uploading grid telemetry.
 
 * **Interactive TUI & Pipe Support:** Rich Ink-based TUI (`bin/nehanda-ui.mjs`) for interactive development sessions, with headless pipe-mode support (`bin/agent.mjs`) for acceptance testing and automation.
 
@@ -103,9 +109,61 @@ To connect to an Ollama instance running on your network:
 
 ---
 
+## ODSE Energy Normalization
+
+`lib/energy-middleware.mjs` sits between MCP tool responses and the model. When an energy data MCP server returns a payload, the middleware resolves the OEM brand and normalizes the data to the [ODS-E](https://ona-protocol.org) schema via `lib/scripts/odse-transform.py` before the model sees it. This means the model always works with a consistent normalized schema regardless of which inverter brand, BESS, or SCADA system the data originated from.
+
+### OEM Detection
+
+Brand resolution happens in two passes:
+
+1. **Name-based:** The MCP server name is parsed for a known OEM key. `energy-huawei`, `mcp-solaredge`, `power-sungrow-v2` all resolve correctly. Any prefix before the OEM segment is stripped.
+2. **Payload fingerprinting:** If the server name doesn't resolve, field signatures are matched against known schemas — e.g. `{ inverter_state, run_state }` → Huawei FusionSolar; `{ end_at, wh_del, devices_reporting }` → Enphase Envoy; `{ data: { telemetries } }` → SolarEdge.
+
+If neither pass identifies the OEM, the payload is returned unchanged (pass-through).
+
+### Supported OEMs
+
+Huawei FusionSolar, Enphase Envoy, SolarEdge, Fronius, Solarman, SMA, Solis, Sungrow / iSolarCloud, Sungrow BESS / PowerTitan, BYD BESS, Fimer / AuroraVision, SolaxCloud, Eskom (portal, AMR, NRS049), Vestas, Siemens Gamesa, Nordex, Terraco, and generic CSV.
+
+### MCP Server Naming Convention
+
+Name energy MCP servers with the OEM as a segment in the server name:
+
+```json
+{
+  "mcpServers": {
+    "energy-huawei": { "command": "...", "args": ["..."] },
+    "energy-solaredge": { "command": "...", "args": ["..."] }
+  }
+}
+```
+
+No additional configuration is required — normalization is automatic.
+
+### `odse-transform.py` Output Formats
+
+The transform script accepts a `--format` flag for direct use:
+
+```bash
+echo '<payload>' | python3 lib/scripts/odse-transform.py --source huawei --format table
+echo '<payload>' | python3 lib/scripts/odse-transform.py --source solaredge --format ndjson
+echo '<payload>' | python3 lib/scripts/odse-transform.py --source sungrow --format summary
+```
+
+| Format | Output | Default when |
+|---|---|---|
+| `table` | Box-drawing ASCII table with column headers and row count | stdout is a TTY |
+| `ndjson` | One JSON object per line | stdout is piped |
+| `summary` | Metadata header (`rows`, `shape`, `source`) + JSON array | explicit flag only |
+
+---
+
 ## Jev-Mem Architecture
 
 `nehanda-cli` implements the memory architecture from **"System-One-Controlled Agentic Memory for Efficient AI Agents"** (Jiang, Li & Li, UT Dallas — [arXiv:2609.23986](https://arxiv.org/abs/2609.23986)). The core insight: the frequent, structured decisions of memory management — typing, relation judgment, retrieval routing, sufficiency assessment — don't need an autoregressive LLM. They need a fast, calibrated System-1 model.
+
+In the context of energy systems research, this matters directly: long multi-step sessions involving SCADA data ingestion, grid simulation, and iterative code generation accumulate enough context to trigger compaction. Standard sliding-window compaction indiscriminately discards ODSE schema mappings, asset capacity limits, and simulation bounds alongside routine tool outputs — causing the model to hallucinate parameters on subsequent turns. Jev-Mem's pinned context layer prevents this: domain invariants are stored in `pinned_context` and reattached verbatim before every System-2 prompt, surviving arbitrarily many compaction cycles.
 
 The System-1 control plane is [**Laya**](https://huggingface.co/convaiinnovations/laya) — a 421M-parameter, non-autoregressive decision model (open weights, Apache 2.0) that answers typed questions in a single forward pass (~33 ms on GPU, ~200 ms on CPU). It never generates text, so there is nothing to parse and nothing to hallucinate.
 
@@ -135,6 +193,7 @@ Observation (user / tool / assistant turn)
         │
         ▼
 ┌── SYSTEM 2 PROMPT ────────────────────────────────────────────┐
+│  [PINNED DOMAIN INVARIANTS]  (ODSE schema, asset specs, ...)  │
 │  [CANONICAL SYSTEM 1 STATE]  (task_status, file_target, ...)  │
 │  [RETRIEVED EVIDENCE]  (top-K memories, not raw transcript)   │
 │  last 2 turns + last failed tool result                       │
@@ -164,7 +223,7 @@ On first startup, `lib/scripts/ensure-laya-env.sh` creates a dedicated venv at `
 
 ### Memory plane (SQLite)
 
-The memory plane extends the existing `memories` table and adds `memory_edges` and `laya_jev_state`. All data lives in the same local SQLite database as the rest of the session state (`~/.config/nehanda/ona-session.db`).
+The memory plane extends the existing `memories` table and adds `memory_edges`, `laya_jev_state`, and `pinned_context`. All data lives in the same local SQLite database as the rest of the session state (`~/.config/nehanda/ona-session.db`).
 
 | Table | Purpose |
 |---|---|
@@ -172,6 +231,7 @@ The memory plane extends the existing `memories` table and adds `memory_edges` a
 | `memories_fts` | FTS5 index over memory content for lexical anchor retrieval |
 | `memory_edges` | Multi-relational edges — same node pair may have independent semantic, temporal, causal, and entity edges |
 | `laya_jev_state` | Session control block: `task_status`, `file_target`, `escalation_risk`, `confidence_score` |
+| `pinned_context` | Session-scoped domain invariants keyed by string — ODSE schema mappings, asset specs, simulation bounds. Never distilled by compaction; reattached verbatim before every System-2 prompt. |
 
 ---
 
@@ -388,6 +448,7 @@ Session state is persisted locally at `~/.config/nehanda/ona-session.db`. Key ta
 * `memories`: Jev-Mem canonical node store with overlapping type scores and entity provenance.
 * `memory_edges`: Multi-relational graph edges (semantic / temporal / causal / entity).
 * `laya_jev_state`: System-1 session control block (task_status, file_target, escalation_risk).
+* `pinned_context`: Session-scoped domain invariants (ODSE schema mappings, asset specs, simulation bounds) that survive compaction unchanged.
 
 ---
 
@@ -412,6 +473,15 @@ node tests/unit/jev_write_behavioral.mjs
 node tests/unit/jev_read_behavioral.mjs
 node tests/unit/compact_jev_behavioral.mjs
 node tests/unit/orchestrate_jev_hotpath_behavioral.mjs
+```
+
+Run the UX improvement behavioral suites:
+
+```bash
+node tests/unit/gap1_runtime_visibility_behavioral.mjs
+node tests/unit/gap2_output_formatting_behavioral.mjs
+node tests/unit/gap3_safety_intervention_behavioral.mjs
+node tests/unit/gap4_pinned_compaction_behavioral.mjs
 ```
 
 ---
