@@ -21,6 +21,7 @@ import { modelConfigFromAgent } from '../lib/modelConfig.mjs'
 import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfig, globalMcpConfigPath, updateMcpServerEnv } from '../lib/mcp-config.mjs'
 import { getMcpServer, closeAllMcpServers, listMcpServers, mcpListResources } from '../lib/mcp.mjs'
 import { invalidateMcpToolCache } from '../lib/tools.mjs'
+import { TOOL_VERBS, verbForTool, summarizeToolArgs, formatToolResultSuffix } from '../lib/ui.mjs'
 import Database from 'better-sqlite3'
 import { ensureLayaReady } from '../lib/laya_sidecar.mjs'
 
@@ -292,8 +293,12 @@ function MessageView({ msg }) {
 }
 function Spinner({ label }) {
   const [frame, setFrame] = React.useState(0)
-  React.useEffect(() => { const t = setInterval(() => setFrame(f => (f + 1) % SPINNER_FRAMES.length), 80); return () => clearInterval(t) }, [])
-  return e(Box, { marginLeft: 1 }, e(Text, { color: BRAND.accent }, SPINNER_FRAMES[frame] + ' '), e(Text, { dimColor: true }, label || 'Thinking…'))
+  React.useEffect(() => { const t = setInterval(() => setFrame(f => f + 1), 80); return () => clearInterval(t) }, [])
+  // Generic labels rotate plain-English verbs; specific labels (e.g. "Reading ui.mjs") stay static.
+  const verb = (!label || label === 'Thinking')
+    ? TOOL_VERBS[Math.floor(frame / 5) % TOOL_VERBS.length]
+    : label
+  return e(Box, { marginLeft: 1 }, e(Text, { color: BRAND.accent }, SPINNER_FRAMES[frame % SPINNER_FRAMES.length] + ' '), e(Text, { dimColor: true }, verb + '…'))
 }
 function SlashMenu({ filter }) {
   const matches = SLASH_COMMANDS.filter(c => c.name.startsWith(filter) || c.name.includes(filter.slice(1)))
@@ -404,6 +409,7 @@ function App({ bridge }) {
   const [selectState, setSelectState] = React.useState(null)
   const [blockState,  setBlockState]  = React.useState(null)
   const [callCount,  setCallCount]  = React.useState(0)
+  const [spinLabel,  setSpinLabel]  = React.useState(null)
   const [modelInfo,  setModelInfo]  = React.useState(() => {
     const data = readAgents()
     const ag = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
@@ -421,6 +427,7 @@ function App({ bridge }) {
     bridge.endAssistant   = msg  => { setFinalized(p => [...p, msg]); setStreaming(null); setCallCount(c => c + 1) }
     bridge.clearMessages  = ()   => { setFinalized([]); setStreaming(null); setClearGen(g => g + 1) }
     bridge.setLoading     = v    => setIsLoading(v)
+    bridge.updateSpinner  = text => setSpinLabel(text)
     bridge.ask    = q     => new Promise(resolve => setAskState({ question: q, resolve }))
     bridge.select = (t,i) => new Promise(resolve => setSelectState({ title: t, items: i, resolve }))
     bridge.confirmBlock = payload => new Promise(resolve => setBlockState({ payload, resolve }))
@@ -471,7 +478,7 @@ function App({ bridge }) {
         ? e(WelcomeBanner, { key: 'banner', model: modelInfo.model, endpoint: modelInfo.endpoint })
         : e(MessageView,   { key: String(i), msg: item })),
     streaming ? e(MessageView, { msg: { role: 'assistant', ...streaming } }) : null,
-    isLoading && (!streaming || !streaming.text) ? e(Spinner, {}) : null,
+    (isLoading && (!streaming || !streaming.text)) || spinLabel ? e(Spinner, { label: spinLabel || undefined }) : null,
     askState
       ? e(AskPrompt, { question: askState.question, onAnswer: handleAnswer, onCancel: handleAskCancel })
       : blockState
@@ -819,6 +826,8 @@ bridge.onSubmit = async (text) => {
     let fullText = '', aborted = false
     controller.signal.addEventListener('abort', () => { aborted = true })
 
+    const toolStarts  = new Map()
+    const lastToolArgs = new Map()
     const io = {
       write(chunk) {
         if (aborted) return
@@ -827,14 +836,26 @@ bridge.onSubmit = async (text) => {
         bridge.updateAssistant(lastPartial)
       },
       println(msg)            { if (!aborted) bridge.addMessage({ role: 'system', text: '  ' + msg }) },
-      spinner:                { start() {}, stop() {} },
+      spinner: {
+        start: label => bridge.updateSpinner(label),
+        stop:  ()    => bridge.updateSpinner(null),
+      },
       ask:                    bridge.ask,
       confirmBlock:           payload => bridge.confirmBlock(payload),
-      onToolStart(name)       { if (!aborted) bridge.addMessage({ role: 'system', text: `  ⚙ ${name}` }) },
+      onToolStart(name, args) {
+        if (aborted) return
+        lastToolArgs.set(name, args)
+        toolStarts.set(name, Date.now())
+        const summary = summarizeToolArgs(name, args)
+        bridge.addMessage({ role: 'system', text: `  ⚙ ${name}${summary ? `(${summary})` : ''}` })
+        bridge.updateSpinner(verbForTool(name) + (summary ? ' ' + summary : ''))
+      },
       onToolResult(name, c, err) {
         if (aborted) return
         const preview = String(c || '').slice(0, 120).replace(/\n/g, ' ')
-        bridge.addMessage({ role: 'system', text: `  ${err ? '✗' : '✓'} ${name}: ${preview}` })
+        const suffix = formatToolResultSuffix(name, c, { startedAt: toolStarts.get(name), args: lastToolArgs.get(name) })
+        bridge.addMessage({ role: 'system', text: `  ${err ? '✗' : '✓'} ${name}: ${preview}${suffix}` })
+        bridge.updateSpinner(null)
       },
     }
 
