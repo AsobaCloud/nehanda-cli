@@ -87,11 +87,17 @@ To connect to an Ollama instance running on your network:
 
 * **Jev-Mem Memory Architecture:** Every turn, a System-1 control plane ([Laya](https://huggingface.co/convaiinnovations/laya)) classifies observations into a multi-relational memory graph (semantic / temporal / causal / entity edges), then adaptively retrieves evidence before each model call. System-2 receives a compact canonical header + retrieved evidence + last 2 turns, not a raw transcript — cutting prefill 70–85% on long sessions. Domain invariants (ODSE schema mappings, asset capacity limits, simulation bounds) are pinned in the `pinned_context` table and reattached verbatim before every System-2 prompt, preventing model drift and hallucinated parameters across arbitrarily long research sessions. See [Jev-Mem Architecture](#jev-mem-architecture) below.
 
+  **Compaction entry scoring (Gap B, #4):** When the Jev-Mem compaction falls back to the prose summarizer, `scoreTranscriptEntries` scores old `tool_result` entries for relevance to the current task using Laya `scoreCandidate`. Entries with relevance < 0.25 are excluded from the distillation window. The last 6 entries are always kept. This operates on the fallback path only — memory-graph-level pruning (filtering `retrieveEvidence` output) requires a `session_prune_score` schema extension tracked in a follow-on issue; see `docs/MAP.md §Gap B`.
+
+  **Intent-driven instruction shaping (Gap C, #4):** Before each System-2 call in `idle`/`explore` phases, a 3-question Laya classification (`task_domain`, `task_scope`, `requires_domain_context`) runs on the user message. The result is injected as a `[TASK CONTEXT — System 1]` preamble into the system prompt, giving lower-parameter models (Nehanda 27B, DeepSeek Coder) precise task framing before generation begins rather than relying on them to infer intent from a generic prompt.
+
 * **Dynamic Tool Rescue (`[TOOL_CALL]`):** Native support for endpoints that strip OpenAI tool schemas (such as `nehandaMlProxy`). The engine dynamically injects active tool schemas directly into system prompts as `[TOOL_CALL]` blocks, parsing and executing tools locally without server-side function-calling support. Uses `[TOOL_CALL]` delimiters instead of `<tool_call>` XML to prevent vLLM's `--tool-call-parser qwen3_xml` stop-token interception.
 
 * **Deterministic SDLC Workflow:** Enforces a 6-phase state machine (`idle` → `plan` → `implement` → `test` → `verify` → `done`) to prevent unapproved code changes, hallucinated test passes, or unverified implementations.
 
 * **Interactive Safety Interventions:** When execution checkers flag a command — opening local sockets, inspecting HIL testbed hardware paths, or writing outside the working directory — the engine raises a structured `{ status, reason, risk_score, proposed_remediation }` payload rather than crashing. In the TUI, blocked operations surface a `BlockConfirmMenu` (`[A] Approve for Session | [S] Run in Laya Sandbox | [C] Cancel`) wired directly into the Ink event loop. Session approvals are cached so the same operation is not re-prompted within a session. Headless pipe mode auto-denies without prompting.
+
+  **Laya second-stage gate (Gap A, #4):** For `medium-risk` blocked commands, a Laya `noul` question (`is_safe_to_auto_approve`) runs before raising `BlockConfirmMenu`. If Laya returns `≥ 0.85` confidence the command is benign, it is auto-approved and cached without operator prompt. `high-risk` commands always bypass Laya and go directly to `BlockConfirmMenu`. Degraded Laya falls through to existing behavior — no regression. Implementation uses a flag variable (`layaAutoApproved`) rather than extracting the bash execution path into a named helper; see `docs/MAP.md §Gap A` for rationale.
 
 * **Runtime Visibility:** `RuntimeHealthMonitor` probes active inference endpoints (1s HEAD request) and checks Laya sidecar liveness before each session. The TUI status header shows active model, endpoint health and latency, sidecar PID, and context usage percentage — so researchers have immediate visual confirmation of whether the target backend is an internal local host or an external cloud endpoint before uploading grid telemetry.
 
@@ -490,6 +496,18 @@ node tests/unit/ui_legibility_behavioral.mjs
 ---
 
 ## Changelog
+
+### 0.6.0
+
+- **Provider API Key Management (`lib/auth.mjs`, `lib/orchestrate.mjs`, `bin/nehanda-ui.mjs`):** OpenRouter, ZhipuAI (z.ai), and generic OpenAI-compatible providers can now be configured entirely from within the REPL. `/key openrouter sk-or-v1-...` saves the key to the secure file and auto-sets `base_url`. `/key zhipu sk-zai-...` saves the ZhipuAI key. `/config` now shows compat and Zhipu key status (masked). Fixes a pre-existing gap where `resolveZhipuApiKey()` existed in `lib/auth.mjs` but was never called by the orchestrator — the `zhipu` provider fell through to `OPENAI_API_KEY`. Closes #1.
+
+- **Laya System-1 Bashguard Gate (`lib/tools.mjs`):** Medium-risk blocked shell commands now pass through a Laya `noul` question (`is_safe_to_auto_approve`) before raising `BlockConfirmMenu`. Commands with ≥ 0.85 confidence are auto-approved and cached without operator prompt. High-risk commands always bypass Laya. Degraded Laya falls through unchanged. Implementation uses a flag variable (`layaAutoApproved`) — see `docs/MAP.md §Gap A`. Closes #4 (Gap A).
+
+- **Compaction Entry Scoring (`lib/compact.mjs`):** When Jev-Mem compaction falls back to the prose summarizer, `scoreTranscriptEntries` scores old `tool_result` entries for relevance to the current task via Laya `scoreCandidate`. Entries with relevance < 0.25 are excluded from the distillation window. Last 6 entries always kept. Operates on the fallback path only — memory-graph-level pruning deferred to a follow-on issue; see `docs/MAP.md §Gap B`. Closes #4 (Gap B).
+
+- **Intent-Driven Instruction Shaping (`lib/laya.mjs`, `lib/orchestrate.mjs`):** Before each System-2 call in `idle`/`explore` phases, a 3-question Laya classification (`task_domain`, `task_scope`, `requires_domain_context`) runs on the user message and injects a `[TASK CONTEXT — System 1]` preamble into the system prompt. Gives lower-parameter models (Nehanda 27B, DeepSeek Coder) precise task framing before generation. Null `intentMeta` produces no regression. Closes #4 (Gap C).
+
+- **`docs/MAP.md` created** — architectural reference for module contracts, design decisions, and follow-on work.
 
 ### 0.5.1
 

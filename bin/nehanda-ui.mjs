@@ -21,6 +21,7 @@ import { modelConfigFromAgent } from '../lib/modelConfig.mjs'
 import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfig, globalMcpConfigPath, updateMcpServerEnv } from '../lib/mcp-config.mjs'
 import { getMcpServer, closeAllMcpServers, listMcpServers, mcpListResources } from '../lib/mcp.mjs'
 import { invalidateMcpToolCache } from '../lib/tools.mjs'
+import { saveOpenAiCompatKey, resolveOpenAiCompatKey, saveSecureCredentials, resolveZhipuApiKey } from '../lib/auth.mjs'
 import { TOOL_VERBS, verbForTool, summarizeToolArgs, formatToolResultSuffix } from '../lib/ui.mjs'
 import Database from 'better-sqlite3'
 import { ensureLayaReady } from '../lib/laya_sidecar.mjs'
@@ -137,7 +138,7 @@ function renderMd(text) {
 const SPINNER_FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']
 const SLASH_COMMANDS = [
   { name: '/model',  desc: 'Change model endpoint' },
-  { name: '/key',    desc: 'Set Nehanda API key' },
+  { name: '/key',    desc: 'Set API key (/key, /key openrouter, /key zhipu, /key openai)' },
   { name: '/config', desc: 'Show current config' },
   { name: '/mcp',    desc: 'MCP server & tool management (/mcp list)' },
   { name: '/clear',  desc: 'New conversation' },
@@ -528,10 +529,14 @@ async function handleCommand(cmd, bridge) {
   if (name === '/config') {
     const data = readAgents()
     const ag   = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
+    const compatKeySet = !!resolveOpenAiCompatKey()
+    const zhipuKeySet  = !!resolveZhipuApiKey()
     bridge.addMessage({ role: 'system', text: [
-      '', `  Model:    ${chalk.hex(BRAND.accent)(ag?.model || '—')}`,
-      `  Endpoint: ${chalk.dim(ag?.endpoint || '—')}`,
-      `  API key:  ${readApiKey() ? chalk.green('set') : chalk.hex(BRAND.red)('not set')}`, '',
+      '', `  Model:             ${chalk.hex(BRAND.accent)(ag?.model || '—')}`,
+      `  Endpoint:          ${chalk.dim(ag?.endpoint || '—')}`,
+      `  Nehanda key:       ${readApiKey() ? chalk.green('set') : chalk.hex(BRAND.red)('not set')}`,
+      `  OpenAI-compat key: ${compatKeySet ? chalk.green('set') : chalk.dim('not set')}`,
+      `  Zhipu key:         ${zhipuKeySet  ? chalk.green('set') : chalk.dim('not set')}`, '',
     ].join('\n') })
     return
   }
@@ -547,10 +552,50 @@ async function handleCommand(cmd, bridge) {
   }
   if (name === '/exit' || name === '/quit') { bridge.exit(); process.exit(0) }
   if (name === '/key') {
-    const answer = await bridge.ask('New Nehanda API key:')
+    // Parse optional provider subcommand: /key [openrouter|zhipu|openai] [value]
+    const parts = cmd.trim().split(/\s+/)
+    const sub   = parts[1] || ''
+    const KNOWN_COMPAT_PROVIDERS = ['openrouter', 'openai', 'zhipu']
+
+    if (!sub || !KNOWN_COMPAT_PROVIDERS.includes(sub.toLowerCase())) {
+      // Default: Nehanda API key (existing behaviour, unchanged)
+      const answer = await bridge.ask('New Nehanda API key:')
+      if (!answer) return
+      try { writeApiKey(answer); bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Nehanda API key updated.` }) }
+      catch (err) { bridge.addMessage({ role: 'error', text: 'Failed: ' + err.message }) }
+      return
+    }
+
+    const provider = sub.toLowerCase()
+    // Value may be provided inline (/key openrouter sk-...) or prompted
+    const inlineValue = parts.slice(2).join('').trim()
+    const answer = inlineValue || await bridge.ask(`New ${provider} API key:`)
     if (!answer) return
-    try { writeApiKey(answer); bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} API key updated.` }) }
-    catch (err) { bridge.addMessage({ role: 'error', text: 'Failed: ' + err.message }) }
+
+    try {
+      if (provider === 'zhipu') {
+        saveSecureCredentials({ zhipuApiKey: answer })
+        bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Zhipu API key saved to secure storage.` })
+      } else {
+        // openrouter or openai — both use the openaiCompatApiKey slot
+        saveOpenAiCompatKey(answer)
+        if (provider === 'openrouter') {
+          // Auto-configure base_url and provider for OpenRouter
+          runtimeSettings.model_config = {
+            ...runtimeSettings.model_config,
+            base_url: 'https://openrouter.ai/api/v1',
+            provider: 'openai_compatible',
+          }
+          bridge.addMessage({ role: 'system', text: [
+            `  ${chalk.green('✓')} OpenRouter API key saved to secure storage.`,
+            `  ${chalk.green('✓')} Base URL set to ${chalk.dim('https://openrouter.ai/api/v1')}`,
+            `  ${chalk.dim('Use /model to select an OpenRouter model (e.g. openai_compatible/anthropic/claude-3.5-sonnet)')}`,
+          ].join('\n') })
+        } else {
+          bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} OpenAI-compat API key saved to secure storage.` })
+        }
+      }
+    } catch (err) { bridge.addMessage({ role: 'error', text: 'Failed: ' + err.message }) }
     return
   }
   if (name === '/model') {

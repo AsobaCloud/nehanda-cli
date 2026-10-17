@@ -9,7 +9,7 @@ import { stdin as input, stdout as output } from 'node:process'
 
 import { openStore } from '../lib/store.mjs'
 import { defaultDbPath } from '../lib/paths.mjs'
-import { resolveAnthropicCredentials, authStatusSummary, saveSecureCredentials, clearSecureCredentials, interactiveOAuthLogin } from '../lib/auth.mjs'
+import { resolveAnthropicCredentials, authStatusSummary, saveSecureCredentials, clearSecureCredentials, interactiveOAuthLogin, resolveOpenAiCompatKey, resolveZhipuApiKey } from '../lib/auth.mjs'
 import { bootstrapSettings, getEffectiveSettings, updateEffectiveSettings } from '../lib/settings.mjs'
 import { resolveWireModel, allModelIds, supportsCustomModels, supportsDiscovery } from '../lib/modelConfig.mjs'
 import { runHooks } from '../lib/hookplane.mjs'
@@ -889,7 +889,11 @@ async function mainPipe(opts) {
         settings = updateEffectiveSettings(db, patch)
         io.println(ui.colors.success(`  ✓ Set ${dotPath}`))
       } else {
-        io.println(ui.formatConfig(settings))
+        const keyStatus = {
+          compatKeySet: !!resolveOpenAiCompatKey(),
+          zhipuKeySet:  !!resolveZhipuApiKey(),
+        }
+        io.println(ui.formatConfig(settings, keyStatus))
       }
       continue
     }
