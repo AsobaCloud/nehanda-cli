@@ -498,7 +498,7 @@ node tests/unit/ui_legibility_behavioral.mjs
 
 ## Changelog
 
-### 0.7.0
+### 0.8.0
 
 - **Full `/help` + explicit MCP env unset (`lib/slashCommands.mjs`, `bin/nehanda-ui.mjs`):** `/help` lists every command and subcommand (`/key` variants, full `/mcp` surface). Omitting a VALUE no longer silently clears env vars — use `/mcp env unset <server> <NAME>` (or `clear`). Autocomplete stays top-level unless you type `/mcp` or `/key`. Behavioral coverage in `tests/unit/help_commands_behavioral.mjs`. Closes #9.
 
