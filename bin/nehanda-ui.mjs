@@ -18,6 +18,12 @@ import { fileURLToPath } from 'node:url'
 import { runUserTurn } from '../lib/orchestrate.mjs'
 import { loadInstructions } from '../lib/instructions.mjs'
 import { modelConfigFromAgent } from '../lib/modelConfig.mjs'
+import { runConfigureWizard } from '../lib/configureProvider.mjs'
+import {
+  TUI_SLASH_COMMANDS,
+  filterSlashAutocomplete,
+  parseMcpEnvParts,
+} from '../lib/slashCommands.mjs'
 import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfig, globalMcpConfigPath, updateMcpServerEnv } from '../lib/mcp-config.mjs'
 import { getMcpServer, closeAllMcpServers, listMcpServers, mcpListResources } from '../lib/mcp.mjs'
 import { invalidateMcpToolCache } from '../lib/tools.mjs'
@@ -136,51 +142,7 @@ function renderMd(text) {
 
 // ── Constants ────────────────────────────────────────────────
 const SPINNER_FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']
-const SLASH_COMMANDS = [
-  { name: '/model',  desc: 'Change model endpoint' },
-  { name: '/key',    desc: 'Set API key (/key, /key openrouter, /key zhipu, /key openai)' },
-  { name: '/config', desc: 'Show current config' },
-  { name: '/mcp',    desc: 'MCP server & tool management (/mcp list)' },
-  { name: '/clear',  desc: 'New conversation' },
-  { name: '/retry',  desc: 'Resend the last failed message' },
-  { name: '/help',   desc: 'Show commands' },
-  { name: '/exit',   desc: 'Quit' },
-]
-
-// ── Model registry ────────────────────────────────────────────
-const DEFAULT_REGISTRY = {
-  ollama_hosts: ['http://AsobaCorp-1.local:11434'],
-  models: [
-    { name: 'nehanda-rag-synthesis-27b', endpoint: 'https://nehanda-ml.asoba.co/v1',   label: 'Nehanda 27B (EC2)',          desc: 'Primary — fine-tuned Qwen3.6 27B, vLLM, af-south-1' },
-    { name: 'deepseek-coder-v2:latest',  endpoint: 'http://AsobaCorp-1.local:11434/v1', label: 'DeepSeek Coder V2 (LAN)',    desc: 'Windows LAN delegate — coding specialist' },
-    { name: 'qwen2.5:14b',              endpoint: 'http://AsobaCorp-1.local:11434/v1', label: 'Qwen 2.5 14B (LAN)',          desc: 'Windows LAN delegate — general reasoning' },
-  ],
-}
-function readRegistry() {
-  try { return JSON.parse(fs.readFileSync(path.join(AIMEE_DIR, 'model-registry.json'), 'utf8')) }
-  catch { return DEFAULT_REGISTRY }
-}
-async function discoverOllamaModels(hosts) {
-  const out = []
-  await Promise.all(hosts.map(async host => {
-    const base = host.replace(/\/$/, '')
-    try {
-      const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(2000) })
-      if (!res.ok) return
-      const data = await res.json()
-      for (const m of (data.models || []))
-        out.push({ name: m.name, endpoint: `${base}/v1`, label: `${m.name} (${new URL(base).hostname})`, desc: `Discovered — ${m.name}`, discovered: true })
-    } catch {}
-  }))
-  return out
-}
-async function buildModelList() {
-  const reg  = readRegistry()
-  const base = reg.models || []
-  const disc = await discoverOllamaModels(reg.ollama_hosts || [])
-  const keys = new Set(base.map(m => `${m.name}|${m.endpoint}`))
-  return [...base, ...disc.filter(m => !keys.has(`${m.name}|${m.endpoint}`))]
-}
+const SLASH_COMMANDS = TUI_SLASH_COMMANDS
 
 // ── Asoba lock-up (compact) ───────────────────────────────────
 function AsobaMark() {
@@ -302,15 +264,20 @@ function Spinner({ label }) {
   return e(Box, { marginLeft: 1 }, e(Text, { color: BRAND.accent }, SPINNER_FRAMES[frame % SPINNER_FRAMES.length] + ' '), e(Text, { dimColor: true }, verb + '…'))
 }
 function SlashMenu({ filter }) {
-  const matches = SLASH_COMMANDS.filter(c => c.name.startsWith(filter) || c.name.includes(filter.slice(1)))
+  const matches = filterSlashAutocomplete(filter)
   if (!matches.length) return null
+  const pad = Math.min(36, Math.max(...matches.map(c => c.name.length), 12) + 1)
   return e(Box, { flexDirection: 'column', marginLeft: 2 },
     ...matches.map((c, i) => e(Box, { key: String(i) },
-      e(Text, { color: BRAND.accent }, c.name.padEnd(12)), e(Text, { dimColor: true }, c.desc))))
+      e(Text, { color: BRAND.accent }, c.name.padEnd(pad)), e(Text, { dimColor: true }, c.desc))))
 }
 function InputArea({ onSubmit, isLoading }) {
   const [value, setValue] = React.useState('')
-  const showMenu = value.startsWith('/') && !value.includes(' ')
+  // Show slash menu for top-level (`/m`) and while typing known parents (`/mcp `, `/key o`)
+  const showMenu = value.startsWith('/') && (
+    !value.includes(' ')
+    || /^\/(mcp|key)(\s|$)/i.test(value)
+  )
   const handleSubmit = React.useCallback(v => { if (!v.trim()) return; setValue(''); onSubmit(v.trim()) }, [onSubmit])
   if (isLoading) return e(Box, { paddingX: 1 }, e(Text, { dimColor: true }, 'esc to cancel'))
   return e(Box, { flexDirection: 'column' },
@@ -390,6 +357,7 @@ function BlockConfirmMenu({ payload, onDecide }) {
 }
 
 function TokenFooter({ calls, model }) {
+  const cols = process.stdout.columns || 80
   return e(Box, { flexDirection: 'column' },
     e(Text, { dimColor: true }, '─'.repeat(cols)),
     e(Box, { flexDirection: 'row', paddingX: 1, justifyContent: 'space-between' },
@@ -517,26 +485,84 @@ function stripThink(text) {
     .trim()
 }
 
+/**
+ * UI adapter for Goose-style configure wizard (#8).
+ * Persists agents.json + runtimeSettings.model_config atomically at the end.
+ */
+async function runUiConfigureWizard(bridge, opts = {}) {
+  try {
+    const result = await runConfigureWizard({
+      ask: q => bridge.ask(q),
+      select: (title, items) => bridge.select(title, items),
+      notify: msg => bridge.addMessage({ role: 'system', text: `  ${msg}` }),
+      resolveExistingKey: async (preset) => {
+        if (preset.keySlot === 'nehanda') return readApiKey()
+        if (preset.keySlot === 'zhipu') return resolveZhipuApiKey()
+        if (preset.keySlot === 'openai_compat') return resolveOpenAiCompatKey()
+        return ''
+      },
+      saveKey: async ({ slot, key }) => {
+        if (slot === 'nehanda') writeApiKey(key)
+        else if (slot === 'zhipu') saveSecureCredentials({ zhipuApiKey: key })
+        else if (slot === 'openai_compat') saveOpenAiCompatKey(key)
+      },
+      persist: async (cfg) => {
+        const data = readAgents()
+        const ag = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
+        if (ag) {
+          ag.model = cfg.model
+          ag.endpoint = cfg.endpoint
+          if (cfg.provider === 'nehanda' && cfg.apiKey) ag.api_key = cfg.apiKey
+        }
+        fs.writeFileSync(AGENTS_JSON, JSON.stringify(data, null, 2), 'utf8')
+        runtimeSettings.model_config = cfg.model_config || modelConfigFromAgent(
+          { model: cfg.model, endpoint: cfg.endpoint },
+          { apiKey: cfg.apiKey || readApiKey() },
+        )
+      },
+    }, opts)
+
+    if (!result) {
+      bridge.addMessage({ role: 'system', text: '  Configure cancelled.' })
+      return
+    }
+    bridge.refreshModel()
+    bridge.addMessage({ role: 'system', text: [
+      `  ${chalk.green('✓')} Provider → ${chalk.bold(result.provider)}`,
+      `  ${chalk.green('✓')} Host     → ${chalk.dim(result.endpoint)}`,
+      `  ${chalk.green('✓')} Model    → ${chalk.bold(result.model)}`,
+    ].join('\n') })
+  } catch (err) {
+    bridge.addMessage({ role: 'error', text: 'Configure failed: ' + err.message })
+  }
+}
+
 // ── Command handler ───────────────────────────────────────────
 async function handleCommand(cmd, bridge) {
   const [name] = cmd.split(/\s+/)
 
   if (name === '/help') {
-    bridge.addMessage({ role: 'system', text: '\nCommands:\n' +
-      SLASH_COMMANDS.map(c => `  ${chalk.hex(BRAND.accent)(c.name.padEnd(12))} ${chalk.dim(c.desc)}`).join('\n') + '\n' })
+    const pad = Math.max(...TUI_SLASH_COMMANDS.map(c => c.name.length), 12) + 2
+    const body = TUI_SLASH_COMMANDS.map(c =>
+      `  ${chalk.hex(BRAND.accent)(c.name.padEnd(pad))}${chalk.dim(c.desc)}`
+    ).join('\n')
+    bridge.addMessage({ role: 'system', text: `\nCommands:\n\n${body}\n` })
     return
   }
   if (name === '/config') {
     const data = readAgents()
     const ag   = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
+    const mc   = runtimeSettings?.model_config
     const compatKeySet = !!resolveOpenAiCompatKey()
     const zhipuKeySet  = !!resolveZhipuApiKey()
     bridge.addMessage({ role: 'system', text: [
-      '', `  Model:             ${chalk.hex(BRAND.accent)(ag?.model || '—')}`,
-      `  Endpoint:          ${chalk.dim(ag?.endpoint || '—')}`,
+      '', `  Provider:          ${chalk.hex(BRAND.accent)(mc?.provider || '—')}`,
+      `  Model:             ${chalk.hex(BRAND.accent)(ag?.model || mc?.custom_model_name || '—')}`,
+      `  Endpoint:          ${chalk.dim(ag?.endpoint || mc?.base_url || '—')}`,
       `  Nehanda key:       ${readApiKey() ? chalk.green('set') : chalk.hex(BRAND.red)('not set')}`,
       `  OpenAI-compat key: ${compatKeySet ? chalk.green('set') : chalk.dim('not set')}`,
-      `  Zhipu key:         ${zhipuKeySet  ? chalk.green('set') : chalk.dim('not set')}`, '',
+      `  Zhipu key:         ${zhipuKeySet  ? chalk.green('set') : chalk.dim('not set')}`,
+      `  ${chalk.dim('Use /model to configure provider, key, host, and model in one flow.')}`, '',
     ].join('\n') })
     return
   }
@@ -552,74 +578,43 @@ async function handleCommand(cmd, bridge) {
   }
   if (name === '/exit' || name === '/quit') { bridge.exit(); process.exit(0) }
   if (name === '/key') {
-    // Parse optional provider subcommand: /key [openrouter|zhipu|openai] [value]
+    // /key [openrouter|zhipu|openai|nehanda] [value] — save key then continue configure wizard
     const parts = cmd.trim().split(/\s+/)
-    const sub   = parts[1] || ''
-    const KNOWN_COMPAT_PROVIDERS = ['openrouter', 'openai', 'zhipu']
+    const sub   = (parts[1] || '').toLowerCase()
+    const KEY_TO_PRESET = {
+      openrouter: 'openrouter',
+      openai: 'openai_compatible',
+      zhipu: 'zhipu',
+      nehanda: 'nehanda',
+    }
 
-    if (!sub || !KNOWN_COMPAT_PROVIDERS.includes(sub.toLowerCase())) {
-      // Default: Nehanda API key (existing behaviour, unchanged)
+    if (!sub || !KEY_TO_PRESET[sub]) {
       const answer = await bridge.ask('New Nehanda API key:')
       if (!answer) return
-      try { writeApiKey(answer); bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Nehanda API key updated.` }) }
-      catch (err) { bridge.addMessage({ role: 'error', text: 'Failed: ' + err.message }) }
+      try {
+        writeApiKey(answer)
+        bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Nehanda API key saved — continuing configure…` })
+        await runUiConfigureWizard(bridge, { presetId: 'nehanda', prefilledKey: answer })
+      } catch (err) { bridge.addMessage({ role: 'error', text: 'Failed: ' + err.message }) }
       return
     }
 
-    const provider = sub.toLowerCase()
-    // Value may be provided inline (/key openrouter sk-...) or prompted
-    const inlineValue = parts.slice(2).join('').trim()
-    const answer = inlineValue || await bridge.ask(`New ${provider} API key:`)
+    const presetId = KEY_TO_PRESET[sub]
+    const inlineValue = parts.slice(2).join(' ').trim()
+    const answer = inlineValue || await bridge.ask(`New ${sub} API key:`)
     if (!answer) return
 
     try {
-      if (provider === 'zhipu') {
-        saveSecureCredentials({ zhipuApiKey: answer })
-        bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Zhipu API key saved to secure storage.` })
-      } else {
-        // openrouter or openai — both use the openaiCompatApiKey slot
-        saveOpenAiCompatKey(answer)
-        if (provider === 'openrouter') {
-          // Auto-configure base_url and provider for OpenRouter
-          runtimeSettings.model_config = {
-            ...runtimeSettings.model_config,
-            base_url: 'https://openrouter.ai/api/v1',
-            provider: 'openai_compatible',
-          }
-          bridge.addMessage({ role: 'system', text: [
-            `  ${chalk.green('✓')} OpenRouter API key saved to secure storage.`,
-            `  ${chalk.green('✓')} Base URL set to ${chalk.dim('https://openrouter.ai/api/v1')}`,
-            `  ${chalk.dim('Use /model to select an OpenRouter model (e.g. openai_compatible/anthropic/claude-3.5-sonnet)')}`,
-          ].join('\n') })
-        } else {
-          bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} OpenAI-compat API key saved to secure storage.` })
-        }
-      }
+      if (sub === 'zhipu') saveSecureCredentials({ zhipuApiKey: answer })
+      else if (sub === 'nehanda') writeApiKey(answer)
+      else saveOpenAiCompatKey(answer)
+      bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} ${sub} API key saved — continuing configure…` })
+      await runUiConfigureWizard(bridge, { presetId, prefilledKey: answer })
     } catch (err) { bridge.addMessage({ role: 'error', text: 'Failed: ' + err.message }) }
     return
   }
   if (name === '/model') {
-    bridge.addMessage({ role: 'system', text: '  Discovering models…' })
-    const all   = await buildModelList()
-    const data0 = readAgents()
-    const curAg = data0.agents?.find(a => a.name === data0.default_agent) || data0.agents?.[0]
-    const cur   = curAg?.model || ''
-    const items = all.map(m => ({ ...m, label: m.name === cur ? `${m.label} ✓` : m.label }))
-    const sel   = await bridge.select('Select model', items)
-    if (!sel) return
-    try {
-      const data = readAgents()
-      const ag   = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
-      if (ag) { ag.model = sel.name; ag.endpoint = sel.endpoint }
-      fs.writeFileSync(AGENTS_JSON, JSON.stringify(data, null, 2), 'utf8')
-      // Keep in-session model_config in sync so the next turn uses the selected wire name
-      runtimeSettings.model_config = modelConfigFromAgent(
-        ag || { model: sel.name, endpoint: sel.endpoint },
-        { apiKey: readApiKey() },
-      )
-      bridge.refreshModel()
-      bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Model → ${chalk.bold(sel.name)}` })
-    } catch (err) { bridge.addMessage({ role: 'error', text: 'Failed: ' + err.message }) }
+    await runUiConfigureWizard(bridge)
     return
   }
   if (name === '/mcp') {
@@ -629,14 +624,19 @@ async function handleCommand(cmd, bridge) {
     const serverNames = Object.keys(servers)
 
     if (!sub || sub === 'help') {
+      const pad = 40
+      const row = (n, d) => `    ${chalk.hex(BRAND.accent)(n.padEnd(pad))}${chalk.dim(d)}`
       const lines = [
         '',
         `  ${chalk.bold('MCP Server & Tool Commands:')}`,
-        `    ${chalk.hex(BRAND.accent)('/mcp list'.padEnd(28))} ${chalk.dim('Discover and list all available MCP tools')}`,
-        `    ${chalk.hex(BRAND.accent)('/mcp status'.padEnd(28))} ${chalk.dim('Show configured servers and command paths')}`,
-        `    ${chalk.hex(BRAND.accent)('/mcp reload [server]'.padEnd(28))} ${chalk.dim('Reload mcp.json configs into session')}`,
-        `    ${chalk.hex(BRAND.accent)('/mcp add <name> <cmd> […]'.padEnd(28))} ${chalk.dim('Register a new MCP server')}`,
-        `    ${chalk.hex(BRAND.accent)('/mcp env [server] [K] [V]'.padEnd(28))} ${chalk.dim('View or set server environment variables')}`,
+        row('/mcp list', 'List tools from configured MCP servers'),
+        row('/mcp status', 'Show configured servers'),
+        row('/mcp reload [server]', 'Reload mcp.json into this session'),
+        row('/mcp add <name> <command> [args…]', 'Register a server'),
+        row('/mcp env', 'Show env vars for every server (values masked)'),
+        row('/mcp env <server>', 'Show env vars for one server'),
+        row('/mcp env <server> <NAME> <VALUE>', 'Set env var  e.g. /mcp env jupyter JUPYTER_TOKEN sk-…'),
+        row('/mcp env unset <server> <NAME>', 'Remove an env var'),
         '',
         `  ${chalk.dim(`Configured servers: ${serverNames.length ? serverNames.join(', ') : 'none'}`)}`,
         `  ${chalk.dim('Tip: Run /mcp list to inspect tools injected into the assistant.')}`,
@@ -726,24 +726,26 @@ async function handleCommand(cmd, bridge) {
     }
 
     if (sub === 'env') {
-      const targetServer = parts[2]
-      const envKey = parts[3]
-      const envVal = parts[4]
+      const parsed = parseMcpEnvParts(parts.slice(1))
 
-      if (!targetServer) {
-        // Show env for all servers
+      if (parsed.action === 'usage_error') {
+        bridge.addMessage({ role: 'system', text: '  ' + parsed.error.replace(/\n/g, '\n  ') })
+        return
+      }
+
+      if (parsed.action === 'list_all') {
         if (!serverNames.length) {
           bridge.addMessage({ role: 'system', text: '  No MCP servers configured.' })
           return
         }
         const lines = ['\n  MCP Server Environment Variables:']
-        for (const name of serverNames) {
-          const cfg = servers[name]
+        for (const srv of serverNames) {
+          const cfg = servers[srv]
           const envKeys = Object.keys(cfg.env || {})
           if (!envKeys.length) {
-            lines.push(`  ${chalk.hex(BRAND.accent)(name)}: (none)`)
+            lines.push(`  ${chalk.hex(BRAND.accent)(srv)}: (none)`)
           } else {
-            lines.push(`  ${chalk.hex(BRAND.accent)(name)}:`)
+            lines.push(`  ${chalk.hex(BRAND.accent)(srv)}:`)
             for (const k of envKeys) {
               const v = cfg.env[k]
               const masked = v.length > 10 ? v.slice(0, 6) + '...' + v.slice(-4) : '********'
@@ -755,18 +757,17 @@ async function handleCommand(cmd, bridge) {
         return
       }
 
-      if (!envKey) {
-        // Show env for a specific server
-        const cfg = servers[targetServer]
+      if (parsed.action === 'list_server') {
+        const cfg = servers[parsed.server]
         if (!cfg) {
-          bridge.addMessage({ role: 'system', text: `  Server "${targetServer}" not found.` })
+          bridge.addMessage({ role: 'system', text: `  Server "${parsed.server}" not found.` })
           return
         }
         const envKeys = Object.keys(cfg.env || {})
         if (!envKeys.length) {
-          bridge.addMessage({ role: 'system', text: `  ${chalk.hex(BRAND.accent)(targetServer)}: (no env vars set)` })
+          bridge.addMessage({ role: 'system', text: `  ${chalk.hex(BRAND.accent)(parsed.server)}: (no env vars set)\n  Set one with: /mcp env ${parsed.server} <NAME> <VALUE>` })
         } else {
-          const lines = [`  ${chalk.hex(BRAND.accent)(targetServer)}:`]
+          const lines = [`  ${chalk.hex(BRAND.accent)(parsed.server)}:`]
           for (const k of envKeys) {
             const v = cfg.env[k]
             const masked = v.length > 10 ? v.slice(0, 6) + '...' + v.slice(-4) : '********'
@@ -777,25 +778,26 @@ async function handleCommand(cmd, bridge) {
         return
       }
 
-      // Set or clear env var
-      const result = updateMcpServerEnv(targetServer, envKey, envVal || '', process.cwd())
-      if (!result.ok) {
-        bridge.addMessage({ role: 'system', text: `  ${chalk.hex(BRAND.red)('✗')} ${result.error}` })
+      if (parsed.action === 'set' || parsed.action === 'unset') {
+        const value = parsed.action === 'unset' ? '' : parsed.value
+        const result = updateMcpServerEnv(parsed.server, parsed.name, value, process.cwd())
+        if (!result.ok) {
+          bridge.addMessage({ role: 'system', text: `  ${chalk.hex(BRAND.red)('✗')} ${result.error}` })
+          return
+        }
+        runtimeSettings.mcp_servers = {}
+        applyMcpConfig(runtimeSettings, process.cwd())
+        invalidateMcpToolCache()
+        if (parsed.action === 'set') {
+          bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Set ${chalk.bold(parsed.name)} = ******** on ${chalk.bold(parsed.server)}\n  Config file: ${result.path}` })
+        } else {
+          bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Unset ${chalk.bold(parsed.name)} on ${chalk.bold(parsed.server)}\n  Config file: ${result.path}` })
+        }
         return
       }
-      // Reload runtime settings and bust cache
-      runtimeSettings.mcp_servers = {}
-      applyMcpConfig(runtimeSettings, process.cwd())
-      invalidateMcpToolCache()
-      if (result.set) {
-        bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Set ${chalk.bold(envKey)} = ${'********'} on ${chalk.bold(targetServer)}\n  Config file: ${result.path}` })
-      } else {
-        bridge.addMessage({ role: 'system', text: `  ${chalk.green('✓')} Cleared ${chalk.bold(envKey)} on ${chalk.bold(targetServer)}\n  Config file: ${result.path}` })
-      }
-      return
     }
 
-    bridge.addMessage({ role: 'system', text: '  /mcp sub-commands: status · list · reload [server] · add <name> <command> [args…] · env [server] [KEY [VALUE]]' })
+    bridge.addMessage({ role: 'system', text: '  /mcp sub-commands: status · list · reload · add · env · env unset — type /help for full list' })
     return
   }
 
@@ -862,6 +864,8 @@ bridge.onSubmit = async (text) => {
       // field belongs to aimee and was silently reintroducing conflicting tool-call
       // syntax (<tool_call><name>...) that fights orchestrate.mjs's [TOOL_CALL] format.
       onaInstructions: onaInstructionsContent || null,
+      // Esc/Ctrl+C abort — must reach fetch / Anthropic stream (issue #7).
+      signal:          controller.signal,
       settings: {
         ...runtimeSettings,
         model_config: modelConfig,
@@ -914,7 +918,7 @@ bridge.onSubmit = async (text) => {
     bridge.lastFailedText = null
 
   } catch (err) {
-    if (err.name === 'AbortError') {
+    if (err.name === 'AbortError' || err.name === 'APIUserAbortError') {
       bridge.endAssistant({ role: 'assistant', text: lastPartial, cancelled: true })
     } else {
       bridge.discardAssistant()

@@ -20,7 +20,8 @@ import { getPhase, canTransition, setPhase } from '../lib/workflow.mjs'
 import { executeBuiltinTool, invalidateMcpToolCache } from '../lib/tools.mjs'
 import { appendEntry, makeUserPayload, makeToolResultPayload } from '../lib/transcript.mjs'
 import { loadInstructions } from '../lib/instructions.mjs'
-import { discoverOllamaModels, formatModelList } from '../lib/modelDiscovery.mjs'
+import { discoverModelsForProvider, formatModelList } from '../lib/modelDiscovery.mjs'
+import { parseMcpEnvParts } from '../lib/slashCommands.mjs'
 import { compactConversation } from '../lib/compact.mjs'
 import { createTeam, getTeam, listTeams, deleteTeam } from '../lib/team.mjs'
 import { ensureLayaReady } from '../lib/laya_sidecar.mjs'
@@ -165,16 +166,19 @@ Tools:
   /team         Manage teams
 
 Session:
-  /model [name] Change model
-  /models       Discover available models
+  /model        Configure provider → key → host → model
+  /models       Discover available models for active provider
+  /key          Provider API keys (see /help in nehanda TUI for variants)
   /login        Authenticate
   /logout       Clear credentials
   /status       Auth status
   /config       Settings (try /config set <key> <value>)
-  /mcp          MCP server management & guide
-  /mcp list     List all discovered tools & descriptions
-  /mcp status   Show configured MCP servers
-  /mcp env      Set MCP env vars (API keys)
+  /mcp          MCP guide (list · status · reload · add · env)
+  /mcp list     List tools from configured MCP servers
+  /mcp status   Show configured servers
+  /mcp env      Show env vars (masked)
+  /mcp env <server> <NAME> <VALUE>   Set env var
+  /mcp env unset <server> <NAME>     Remove env var
   /clear        New conversation
   /exit         Quit`)
       return
@@ -259,25 +263,26 @@ Session:
         app.addSystemMessage('No provider configured. Use /model to set a provider first.')
         return
       }
-      
+
       if (!supportsDiscovery(provider)) {
-        app.addSystemMessage(`Model discovery is not supported for provider: ${provider}\n\nProviders with discovery support:\n  ollama\n\nFor other providers, use /model <provider>/<model-name> directly.`)
+        app.addSystemMessage(`Model discovery is not supported for provider: ${provider}\n\nUse /model to configure a discoverable provider.`)
         return
       }
-      
-      // Get base URL for the provider
+
       const baseUrl = getBaseUrlForProvider(provider, settings)
-      
+      const apiKey = settings.model_config?.api_key
+        || (provider === 'zhipu' ? resolveZhipuApiKey() : resolveOpenAiCompatKey())
+
       app.addSystemMessage(`Discovering models from ${baseUrl}...`)
-      
+
       try {
-        const result = await discoverOllamaModels(baseUrl, { timeout: 5000 })
-        
+        const result = await discoverModelsForProvider(provider, { baseUrl, apiKey, timeout: 5000 })
+
         if (!result.success) {
-          app.addSystemMessage(`\nDiscovery failed: ${result.error}\n\nTroubleshooting:\n  • Make sure Ollama is running: ollama serve\n  • Check the base URL in settings: /config\n  • Verify network connectivity to ${baseUrl}`)
+          app.addSystemMessage(`\nDiscovery failed: ${result.error}\n\nTroubleshooting:\n  • Check the API key (/key)\n  • Check the base URL in settings: /config\n  • Verify network connectivity to ${baseUrl}`)
           return
         }
-        
+
         const formatted = formatModelList(result.models)
         app.addSystemMessage(`\n${formatted}`)
       } catch (error) {
@@ -530,11 +535,14 @@ Session:
       if (!sub || sub === 'help') {
         const lines = [
           'MCP Server & Tool Commands:',
-          '  /mcp list                  Discover and list all available MCP tools',
-          '  /mcp status                Show configured servers and command paths',
-          '  /mcp reload [server]       Reload mcp.json configs into session',
-          '  /mcp add <name> <cmd> […]  Register a new MCP server',
-          '  /mcp env [server] [K] [V]  View or set server environment variables',
+          '  /mcp list                              List tools from configured MCP servers',
+          '  /mcp status                            Show configured servers',
+          '  /mcp reload [server]                   Reload mcp.json into this session',
+          '  /mcp add <name> <command> [args…]      Register a server',
+          '  /mcp env                               Show env vars for every server (values masked)',
+          '  /mcp env <server>                      Show env vars for one server',
+          '  /mcp env <server> <NAME> <VALUE>       Set env var  e.g. /mcp env jupyter JUPYTER_TOKEN sk-…',
+          '  /mcp env unset <server> <NAME>         Remove an env var',
           '',
           `Configured servers: ${serverNames.length ? serverNames.join(', ') : 'none'}`,
           'Tip: Run /mcp list to inspect tools injected into the assistant.',
@@ -618,10 +626,12 @@ Session:
       }
 
       if (sub === 'env') {
-        const srvName = parts[2]
-        const envKey = parts[3]
-        if (!srvName) {
-          // Show env for all servers
+        const parsed = parseMcpEnvParts(parts.slice(1))
+        if (parsed.action === 'usage_error') {
+          app.addSystemMessage(parsed.error)
+          return
+        }
+        if (parsed.action === 'list_all') {
           const mcpServers = settings?.mcp_servers || {}
           const names = Object.keys(mcpServers)
           if (!names.length) { app.addSystemMessage('No MCP servers configured.'); return }
@@ -644,13 +654,15 @@ Session:
           app.addSystemMessage(lines.join('\n'))
           return
         }
-        if (!envKey) {
-          // Show env for a specific server
-          const cfg = (settings?.mcp_servers || {})[srvName]
-          if (!cfg) { app.addSystemMessage(`Server "${srvName}" not found. Use /mcp status to see configured servers.`); return }
+        if (parsed.action === 'list_server') {
+          const cfg = (settings?.mcp_servers || {})[parsed.server]
+          if (!cfg) { app.addSystemMessage(`Server "${parsed.server}" not found. Use /mcp status to see configured servers.`); return }
           const envKeys = Object.keys(cfg.env || {})
-          if (!envKeys.length) { app.addSystemMessage(`${srvName}: no env vars set\nUse /mcp env ${srvName} <KEY> <value> to set one.`); return }
-          const lines = [`${srvName} environment variables:`]
+          if (!envKeys.length) {
+            app.addSystemMessage(`${parsed.server}: no env vars set\nUse /mcp env ${parsed.server} <NAME> <VALUE> to set one.`)
+            return
+          }
+          const lines = [`${parsed.server} environment variables:`]
           for (const k of envKeys) {
             const v = cfg.env[k]
             const masked = v ? v.slice(0, 6) + '…' + v.slice(-4) : '(empty)'
@@ -659,25 +671,25 @@ Session:
           app.addSystemMessage(lines.join('\n'))
           return
         }
-        // Set or clear an env var
-        const value = parts.slice(4).join(' ')
-        const result = updateMcpServerEnv(srvName, envKey, value, cwd)
-        if (!result.ok) {
-          app.addSystemMessage(`✗ ${result.error}`)
+        if (parsed.action === 'set' || parsed.action === 'unset') {
+          const value = parsed.action === 'unset' ? '' : parsed.value
+          const result = updateMcpServerEnv(parsed.server, parsed.name, value, cwd)
+          if (!result.ok) {
+            app.addSystemMessage(`✗ ${result.error}`)
+            return
+          }
+          settings.mcp_servers = {}
+          applyMcpConfig(settings, cwd)
+          invalidateMcpToolCache()
+          const action = parsed.action === 'set' ? 'Set' : 'Unset'
+          const display = parsed.action === 'set' ? ' = ********' : ''
+          const relPath = path.relative(os.homedir(), result.path).startsWith('..') ? result.path : '~/' + path.relative(os.homedir(), result.path)
+          app.addSystemMessage(`✓ ${action} ${parsed.name}${display} on ${parsed.server}\n  Config file: ${relPath}`)
           return
         }
-        // Reload to pick up the change
-        settings.mcp_servers = {}
-        applyMcpConfig(settings, cwd)
-        invalidateMcpToolCache()
-        const action = result.set ? 'Set' : 'Cleared'
-        const display = result.set ? ' = ********' : ''
-        const relPath = path.relative(os.homedir(), result.path).startsWith('..') ? result.path : '~/' + path.relative(os.homedir(), result.path)
-        app.addSystemMessage(`✓ ${action} ${envKey}${display} on ${srvName}\n  Config file: ${relPath}`)
-        return
       }
 
-      app.addSystemMessage('/mcp sub-commands: status · list · reload [server] · add <name> <command> [args…] · env [server] [KEY] [value]')
+      app.addSystemMessage('/mcp sub-commands: status · list · reload · add · env · env unset — type /help for full list')
       return
     }
 
@@ -842,32 +854,31 @@ async function mainPipe(opts) {
         io.println(ui.colors.error('  No provider configured. Use /model to set a provider first.'))
         continue
       }
-      
+
       if (!supportsDiscovery(provider)) {
         io.println(ui.colors.error(`  Model discovery is not supported for provider: ${provider}`))
-        io.println(`\n  ${ui.colors.header('Providers with discovery support:')}`)
-        io.println('    ollama')
-        io.println(`\n  ${ui.colors.dim('For other providers, use /model <provider>/<model-name> directly.')}`)
+        io.println(`\n  ${ui.colors.dim('Use /model to configure a discoverable provider.')}`)
         continue
       }
-      
-      // Get base URL for the provider
+
       const baseUrl = getBaseUrlForProvider(provider, settings)
-      
+      const apiKey = settings.model_config?.api_key
+        || (provider === 'zhipu' ? resolveZhipuApiKey() : resolveOpenAiCompatKey())
+
       io.println(`\n  Discovering models from ${baseUrl}...\n`)
-      
+
       try {
-        const result = await discoverOllamaModels(baseUrl, { timeout: 5000 })
-        
+        const result = await discoverModelsForProvider(provider, { baseUrl, apiKey, timeout: 5000 })
+
         if (!result.success) {
           io.println(ui.colors.error(`  Discovery failed: ${result.error}`))
           io.println(`\n  ${ui.colors.header('Troubleshooting:')}`)
-          io.println('    • Make sure Ollama is running: ollama serve')
+          io.println('    • Check the API key (/key)')
           io.println('    • Check the base URL in settings: /config')
           io.println(`    • Verify network connectivity to ${baseUrl}\n`)
           continue
         }
-        
+
         const formatted = formatModelList(result.models)
         io.println(formatted)
       } catch (error) {

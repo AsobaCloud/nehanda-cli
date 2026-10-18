@@ -46,6 +46,7 @@ PY
 
 # Smoke: Router constructible (model weights download on first predict/load)
 "$PY" - <<'PY'
+import sys
 from laya import Router
 Router()
 print("[laya-env] Router() constructible", file=sys.stderr)

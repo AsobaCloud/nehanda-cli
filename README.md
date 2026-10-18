@@ -51,31 +51,32 @@ ona-code
 
 ### 3. Provider Setup
 
-#### Option A: Nehanda Cloud (Default)
-
-The CLI defaults to the primary Nehanda endpoint (`https://nehanda-ml.asoba.co/v1`). If an API key is required:
-
-```
-❯ /key
-New Nehanda API key: <your-key>
-```
-
-#### Option B: Local LM Studio
-
-Start LM Studio locally on port `1234` or `8000`, then start the CLI. Select or switch models via:
+Use a single Goose-style wizard — provider, API key, host, and model in one flow. The CLI discovers available models from the provider (`GET /v1/models` with your key, or Ollama `/api/tags`).
 
 ```
 ❯ /model
+
+◆  Which provider?
+│  ● OpenRouter
+└
+◆  API key
+│  sk-or-v1-…
+└
+◆  API host
+│  https://openrouter.ai/api/v1
+└
+  Fetching models from provider…
+◆  Model
+│  ● openai/gpt-4o
+└
+  ✓ Provider / host / model saved — session active
 ```
 
-#### Option C: Remote Ollama over LAN
+Shortcuts:
+- `/key openrouter sk-…` — saves the key, then continues into the same host → discover → model steps
+- `/config` — read-only status (provider, model, endpoint, which keys are set)
 
-To connect to an Ollama instance running on your network:
-
-```
-❯ /config base_url http://AsobaCorp-1.local:11434/v1
-❯ /model ollama/deepseek-coder-v2:latest
-```
+Local Ollama / LM Studio: pick that provider in `/model`, accept or edit the host, then choose from the discovered catalog (or enter a custom name if discovery fails).
 
 ---
 
@@ -326,9 +327,9 @@ Place the script at `lib/scripts/my-new-tool.py`. It will receive arguments inte
 | Command | Description |
 |---|---|
 | `/help` | Display available commands |
-| `/model [name]` | Discover and switch active provider or model endpoint |
-| `/key` | Save Nehanda API key |
-| `/config` | View or set settings (e.g., `/config base_url <url>`) |
+| `/model` | Configure provider → API key → host → discover models → select (single wizard) |
+| `/key [provider] [value]` | Save API key then continue the configure wizard (`openrouter`, `zhipu`, `openai`, or Nehanda default) |
+| `/config` | Show provider, model, endpoint, and key status (read-only) |
 | `/mcp` | Manage MCP server connections (see below) |
 | `/clear` | Clear conversation history and reset transcript state |
 | `/retry` | Resend the last failed request |
@@ -342,10 +343,10 @@ Place the script at `lib/scripts/my-new-tool.py`. It will receive arguments inte
 | `/mcp list` | Connect to each server and enumerate available tools |
 | `/mcp reload [server]` | Re-read `mcp.json` and bust the tool cache (optionally for one server) |
 | `/mcp add <name> <command> [args…]` | Register a new server and save it to `~/.config/nehanda/mcp.json` |
-| `/mcp env` | Show environment variables for all configured servers |
+| `/mcp env` | Show environment variables for all configured servers (values masked) |
 | `/mcp env <server>` | Show environment variables for a specific server |
-| `/mcp env <server> <KEY> <value>` | Set an environment variable (e.g. an API key) |
-| `/mcp env <server> <KEY>` | Clear an environment variable |
+| `/mcp env <server> <NAME> <VALUE>` | Set an environment variable (e.g. an API key) |
+| `/mcp env unset <server> <NAME>` | Remove an environment variable (`clear` is also accepted) |
 
 ---
 
@@ -387,18 +388,18 @@ Many MCP servers require an API key or other secrets. Rather than editing `mcp.j
 ```
 ❯ /mcp env                    # show env vars for all servers
 ❯ /mcp env asoba              # show env vars for 'asoba' server
-❯ /mcp env asoba ASOBA_API_KEY sk-abc123...   # set the key
+❯ /mcp env asoba ASOBA_API_KEY sk-abc123...   # set the key (NAME + VALUE)
 ✓ Set ASOBA_API_KEY = ******** on asoba
   Config file: ~/.config/nehanda/mcp.json
 ```
 
 This writes the value to the `mcp.json` file where the server is defined (project-local `./mcp.json` takes priority over global `~/.config/nehanda/mcp.json`), then automatically reloads the server so the change takes effect immediately.
 
-To clear a key:
+To remove a key (explicit unset — omitting VALUE no longer clears):
 
 ```
-❯ /mcp env asoba ASOBA_API_KEY
-✓ Cleared ASOBA_API_KEY on asoba
+❯ /mcp env unset asoba ASOBA_API_KEY
+✓ Unset ASOBA_API_KEY on asoba
 ```
 
 **Tip:** Keys are masked in `/mcp env` output. Only the first 6 and last 4 characters are shown.
@@ -496,6 +497,16 @@ node tests/unit/ui_legibility_behavioral.mjs
 ---
 
 ## Changelog
+
+### 0.7.0
+
+- **Full `/help` + explicit MCP env unset (`lib/slashCommands.mjs`, `bin/nehanda-ui.mjs`):** `/help` lists every command and subcommand (`/key` variants, full `/mcp` surface). Omitting a VALUE no longer silently clears env vars — use `/mcp env unset <server> <NAME>` (or `clear`). Autocomplete stays top-level unless you type `/mcp` or `/key`. Behavioral coverage in `tests/unit/help_commands_behavioral.mjs`. Closes #9.
+
+- **Unified `/model` configure wizard with keyed discovery (`lib/configureProvider.mjs`, `lib/modelDiscovery.mjs`, `bin/nehanda-ui.mjs`):** Provider setup is a single Goose-style flow — provider → API key → host → live model catalog → select → persist. OpenRouter / OpenAI-compat / Zhipu / Nehanda / LM Studio discover via authenticated `GET {base}/models`; Ollama keeps `/api/tags`. Discovery failure falls back to custom model name. `/key <provider>` chains into the same wizard tail. `/config` is read-only status. Behavioral coverage in `tests/unit/configure_provider_behavioral.mjs`. Closes #8.
+
+### 0.6.1
+
+- **Fix: Laya provisioning smoke test (`lib/scripts/ensure-laya-env.sh`):** The `Router()` constructibility check was missing `import sys`, causing `npm install` to fail with `NameError: name 'sys' is not defined` even when all packages installed successfully. The marker file was never written, leaving the CLI in a permanently broken state despite a complete venv. Fixed.
 
 ### 0.6.0
 
