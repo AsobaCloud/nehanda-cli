@@ -28,7 +28,14 @@ import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfi
 import { getMcpServer, closeAllMcpServers, listMcpServers, mcpListResources } from '../lib/mcp.mjs'
 import { invalidateMcpToolCache } from '../lib/tools.mjs'
 import { saveOpenAiCompatKey, resolveOpenAiCompatKey, saveSecureCredentials, resolveZhipuApiKey } from '../lib/auth.mjs'
-import { TOOL_VERBS, verbForTool, summarizeToolArgs, formatToolResultSuffix } from '../lib/ui.mjs'
+import { TOOL_VERBS, verbForTool, summarizeToolArgs, formatToolResultSuffix, maskSecretAnswer } from '../lib/ui.mjs'
+import {
+  PICKER_THRESHOLD,
+  createAskIdSequencer,
+  groupModelsByVendor,
+  filterModelItems,
+  visibleWindow,
+} from '../lib/modelPicker.mjs'
 import Database from 'better-sqlite3'
 import { ensureLayaReady } from '../lib/laya_sidecar.mjs'
 
@@ -45,6 +52,10 @@ const { marked }                  = await import(`${REPO_ROOT}/node_modules/mark
 const { default: TerminalRenderer }= await import(`${REPO_ROOT}/node_modules/marked-terminal/index.js`)
 
 const e = React.createElement
+
+// Per-question id source for AskPrompt React keys (HP-1a, #10). Module scope:
+// ids only need to be unique for the process lifetime.
+const askIdSeq = createAskIdSequencer()
 
 // ── Asoba 3 Visual Identity ───────────────────────────────────
 const BRAND = {
@@ -287,6 +298,9 @@ function InputArea({ onSubmit, isLoading }) {
 }
 function AskPrompt({ question, onAnswer, onCancel }) {
   const [value, setValue] = React.useState('')
+  // Defense-in-depth for HP-1a (#10): if this instance ever re-renders with a
+  // new question (fiber reuse), the typed value must not carry over.
+  React.useEffect(() => { setValue('') }, [question])
   useInput((_input, key) => { if (key.escape) onCancel() })
   return e(Box, { flexDirection: 'column' },
     e(Box, { marginLeft: 1 }, e(Text, { dimColor: true }, question)),
@@ -294,7 +308,124 @@ function AskPrompt({ question, onAnswer, onCancel }) {
       e(TextInput, { value, onChange: setValue, onSubmit: React.useCallback(v => onAnswer(v.trim()), [onAnswer]) })),
     e(Box, { marginLeft: 1 }, e(Text, { dimColor: true }, 'Esc cancel')))
 }
+// ── Model Picker (large lists, #10 / HP-2) ───────────────────
+// Three views: vendor GROUPS → windowed BROWSE within a vendor →
+// type-to-filter SEARCH across every discovered model.
+// Digits jump rows, '/' opens search, Esc steps back.
+function ModelPicker({ title, items, onSelect, onCancel }) {
+  const groups = React.useMemo(() => groupModelsByVendor(items), [items])
+  const [view, setView] = React.useState('groups')   // 'groups' | 'browse' | 'search'
+  const [groupIdx, setGroupIdx] = React.useState(0)
+  const [browseIdx, setBrowseIdx] = React.useState(0)
+  const [filter, setFilter] = React.useState('')
+  const [searchIdx, setSearchIdx] = React.useState(0)
+
+  const browseModels = view === 'browse' && groups[groupIdx] ? groups[groupIdx].models : []
+  const searchResults = React.useMemo(() => filterModelItems(items, filter), [items, filter])
+  const prevView = React.useRef('groups')
+
+  const jump = (setter, list, n) => {
+    if (!isNaN(n) && n >= 1 && n <= list.length) setter(n - 1)
+  }
+
+  useInput((input, key) => {
+    if (view === 'search') {
+      // TextInput owns printable chars + Enter (its onSubmit); arrows pass through.
+      if (key.escape) {
+        if (filter) { setFilter(''); setSearchIdx(0) }
+        else { setView(prevView.current); setSearchIdx(0) }
+      } else if (key.upArrow)   { setSearchIdx(i => (i - 1 + searchResults.length) % searchResults.length) }
+      else if (key.downArrow) { setSearchIdx(i => (i + 1) % searchResults.length) }
+      return
+    }
+    if (key.escape) {
+      if (view === 'browse') setView('groups')
+      else onCancel()
+      return
+    }
+    if (input === '/') { prevView.current = view; setView('search'); setFilter(''); setSearchIdx(0); return }
+    if (view === 'groups') {
+      if (key.upArrow)   { setGroupIdx(i => (i - 1 + groups.length) % groups.length); return }
+      if (key.downArrow) { setGroupIdx(i => (i + 1) % groups.length); return }
+      if (key.return) {
+        const g = groups[groupIdx]
+        if (!g) return
+        if (g.isCustom) { onSelect(g.models[0]); return }
+        setBrowseIdx(0); setView('browse')
+        return
+      }
+      jump(setGroupIdx, groups, parseInt(input, 10))
+    } else if (view === 'browse') {
+      if (key.upArrow)   { setBrowseIdx(i => (i - 1 + browseModels.length) % browseModels.length); return }
+      if (key.downArrow) { setBrowseIdx(i => (i + 1) % browseModels.length); return }
+      if (key.return)    { const m = browseModels[browseIdx]; if (m) onSelect(m); return }
+      const win = visibleWindow(browseModels, browseIdx)
+      const shown = win.visible
+      const n = parseInt(input, 10)
+      if (!isNaN(n) && n >= 1 && n <= shown.length) {
+        const item = shown[n - 1]
+        const abs = browseModels.indexOf(item)
+        if (abs !== -1) setBrowseIdx(abs)
+      }
+    }
+  })
+
+  const row = (item, i, cursor) => e(Box, { key: String(item.id ?? i), flexDirection: 'column' },
+    e(Box, {}, e(Text, { color: cursor ? BRAND.accent : undefined }, cursor ? '❯ ' : '  '),
+      e(Text, { color: BRAND.lavender }, `${i + 1}. `),
+      e(Text, { bold: true, color: cursor ? BRAND.accent : undefined }, item.label)),
+    e(Box, { marginLeft: 5 }, e(Text, { dimColor: true }, item.desc)))
+  const hiddenHints = win => e(Box, { key: 'hints', flexDirection: 'column' },
+    win.hiddenAbove ? e(Text, { dimColor: true }, `  ↑ ${win.hiddenAbove} more above`) : null,
+    win.hiddenBelow ? e(Text, { dimColor: true }, `  ↓ ${win.hiddenBelow} more below`) : null)
+
+  let body
+  if (view === 'groups') {
+    body = e(Box, { marginTop: 1, flexDirection: 'column' },
+      ...groups.map((g, i) => row(g, i, i === groupIdx)),
+      e(Box, { marginTop: 1 }, e(Text, { dimColor: true },
+        `↑↓/1–${Math.min(9, groups.length)} vendor · Enter open · / search all · Esc cancel`)))
+  } else if (view === 'browse') {
+    const win = visibleWindow(browseModels, browseIdx)
+    body = e(Box, { marginTop: 1, flexDirection: 'column' },
+      e(Text, { dimColor: true }, `${groups[groupIdx].label} — ${browseModels.length} models`),
+      ...win.visible.map((m, i) => row(m, win.start + i, win.start + i === browseIdx)),
+      hiddenHints(win),
+      e(Box, { marginTop: 1 }, e(Text, { dimColor: true },
+        '↑↓ navigate · Enter select · / search all · Esc back')))
+  } else {
+    const win = visibleWindow(searchResults, searchIdx)
+    const handleSearchSubmit = v => {
+      const item = searchResults[searchIdx]
+      if (item) onSelect(item)
+    }
+    body = e(Box, { marginTop: 1, flexDirection: 'column' },
+      e(Box, { paddingX: 1 }, e(Text, { color: BRAND.accent }, '/'),
+        e(TextInput, { value: filter, onChange: v => { setFilter(v); setSearchIdx(0) }, onSubmit: handleSearchSubmit })),
+      searchResults.length
+        ? e(Box, { marginTop: 1, flexDirection: 'column' },
+            ...win.visible.map((m, i) => row(m, win.start + i, win.start + i === searchIdx)),
+            hiddenHints(win))
+        : e(Text, { dimColor: true }, '  (no matches)'),
+      e(Box, { marginTop: 1 }, e(Text, { dimColor: true },
+        'type to filter · ↑↓ select · Enter confirm · Esc clear/back')))
+  }
+
+  return e(Box, { flexDirection: 'column', marginLeft: 1 },
+    e(Text, { bold: true, color: BRAND.accent }, title),
+    body)
+}
+
+// Wrapper (no hooks): large catalogs (e.g. OpenRouter's hundreds of models)
+// switch to the grouped/filterable picker instead of a flat scroll list (HP-2, #10).
 function SelectMenu({ title, items, onSelect, onCancel }) {
+  if (items.length > PICKER_THRESHOLD) {
+    return e(ModelPicker, { title, items, onSelect, onCancel })
+  }
+  return e(SelectMenuFlat, { title, items, onSelect, onCancel })
+}
+
+function SelectMenuFlat({ title, items, onSelect, onCancel }) {
   const [idx, setIdx] = React.useState(0)
   useInput((input, key) => {
     if (key.escape)    { onCancel(); return }
@@ -397,7 +528,11 @@ function App({ bridge }) {
     bridge.clearMessages  = ()   => { setFinalized([]); setStreaming(null); setClearGen(g => g + 1) }
     bridge.setLoading     = v    => setIsLoading(v)
     bridge.updateSpinner  = text => setSpinLabel(text)
-    bridge.ask    = q     => new Promise(resolve => setAskState({ question: q, resolve }))
+    // HP-1a (#10): unique id per question — AskPrompt is keyed by it, so every
+    // new wizard question remounts with an EMPTY input (no key carry-over).
+    // opts.secret → the persisted transcript line is masked (HP-1b).
+    bridge.ask    = (q, opts) => new Promise(resolve =>
+      setAskState({ id: askIdSeq.next(), question: q, secret: !!(opts && opts.secret), resolve }))
     bridge.select = (t,i) => new Promise(resolve => setSelectState({ title: t, items: i, resolve }))
     bridge.confirmBlock = payload => new Promise(resolve => setBlockState({ payload, resolve }))
     bridge.exit   = ()    => { exit() }
@@ -409,7 +544,10 @@ function App({ bridge }) {
   }, [bridge, exit])
 
   const handleAnswer = React.useCallback(answer => {
-    if (askState?.resolve) { setFinalized(p => [...p, { role: 'system', text: askState.question + ' ' + answer }]); askState.resolve(answer) }
+    // HP-1b (#10): secret answers persist masked to transcript history; the
+    // wizard still receives the raw answer via resolve().
+    const shown = askState?.secret ? maskSecretAnswer(answer) : answer
+    if (askState?.resolve) { setFinalized(p => [...p, { role: 'system', text: `${askState.question} ${shown}`.trim() }]); askState.resolve(answer) }
     setAskState(null)
   }, [askState])
   const handleAskCancel = React.useCallback(() => { askState?.resolve(null); setAskState(null) }, [askState])
@@ -449,7 +587,7 @@ function App({ bridge }) {
     streaming ? e(MessageView, { msg: { role: 'assistant', ...streaming } }) : null,
     (isLoading && (!streaming || !streaming.text)) || spinLabel ? e(Spinner, { label: spinLabel || undefined }) : null,
     askState
-      ? e(AskPrompt, { question: askState.question, onAnswer: handleAnswer, onCancel: handleAskCancel })
+      ? e(AskPrompt, { key: askState.id, question: askState.question, onAnswer: handleAnswer, onCancel: handleAskCancel })
       : blockState
         ? e(BlockConfirmMenu, { payload: blockState.payload, onDecide: handleBlock })
         : selectState
@@ -492,7 +630,7 @@ function stripThink(text) {
 async function runUiConfigureWizard(bridge, opts = {}) {
   try {
     const result = await runConfigureWizard({
-      ask: q => bridge.ask(q),
+      ask: (q, opts) => bridge.ask(q, opts),
       select: (title, items) => bridge.select(title, items),
       notify: msg => bridge.addMessage({ role: 'system', text: `  ${msg}` }),
       resolveExistingKey: async (preset) => {
@@ -589,7 +727,7 @@ async function handleCommand(cmd, bridge) {
     }
 
     if (!sub || !KEY_TO_PRESET[sub]) {
-      const answer = await bridge.ask('New Nehanda API key:')
+      const answer = await bridge.ask('New Nehanda API key:', { secret: true })
       if (!answer) return
       try {
         writeApiKey(answer)
@@ -601,7 +739,7 @@ async function handleCommand(cmd, bridge) {
 
     const presetId = KEY_TO_PRESET[sub]
     const inlineValue = parts.slice(2).join(' ').trim()
-    const answer = inlineValue || await bridge.ask(`New ${sub} API key:`)
+    const answer = inlineValue || await bridge.ask(`New ${sub} API key:`, { secret: true })
     if (!answer) return
 
     try {
