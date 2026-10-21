@@ -1081,7 +1081,10 @@ function resolveModelArg(arg) {
   
   // First, try exact match in hardcoded WIRE map (backward compatibility)
   if (arg.includes('/')) {
-    const [p, m] = arg.split('/', 2)
+    // Split on the FIRST "/" only — the model name may itself contain slashes (#12)
+    const slashIdx = arg.indexOf('/')
+    const p = arg.slice(0, slashIdx)
+    const m = arg.slice(slashIdx + 1)
     
     // Validate provider and model_id are non-empty
     if (!p || !p.trim()) {
