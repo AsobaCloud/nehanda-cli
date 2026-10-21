@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 370" width="100%" height="100%">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap');
+      .font-sans { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+      .font-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+      .title { font-size: 13px; font-weight: 700; letter-spacing: 1.5px; fill: #455bf1; }
+      .heading { font-size: 16px; font-weight: 700; fill: #ffffff; }
+      .subtext { font-size: 12.5px; fill: #94a3b8; }
+      .item { font-size: 12px; fill: #cbd5e1; }
+      .badge { font-size: 11px; font-weight: 600; fill: #455bf1; }
+      .oem-pill { font-size: 10px; font-weight: 600; fill: #93c5fd; }
+    </style>
+
+    <linearGradient id="center-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#455bf1" stop-opacity="0.18" />
+      <stop offset="100%" stop-color="#455bf1" stop-opacity="0.05" />
+    </linearGradient>
+
+    <marker id="arrow-primary" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#455bf1" />
+    </marker>
+  </defs>
+
+  <!-- Background Frame -->
+  <rect width="940" height="370" rx="14" fill="#0b0d14" stroke="#22283e" stroke-width="1.5" />
+
+  <!-- Header Section -->
+  <rect x="24" y="20" width="10" height="10" rx="3" fill="#455bf1" />
+  <text x="44" y="29" class="font-sans title">BUILT FOR THE ENERGY TRANSITION</text>
+  <text x="24" y="60" class="font-sans heading">The Energy Data Software Engineer: Powering Renewable Asset Operations</text>
+  <line x1="24" y1="78" x2="916" y2="78" stroke="#1c2237" stroke-width="1" />
+
+  <!-- Column 1: Multi-OEM Heterogeneous Telemetry -->
+  <rect x="30" y="100" width="265" height="235" rx="10" fill="#121626" stroke="#252f52" stroke-width="1.5" />
+  <rect x="46" y="115" width="28" height="28" rx="6" fill="#f59e0b" fill-opacity="0.15" />
+  <text x="60" y="134" text-anchor="middle" class="font-sans" font-size="14" fill="#f59e0b">⚡</text>
+  <text x="86" y="134" class="font-sans heading" font-size="14.5">Heterogeneous Grid Data</text>
+  <text x="46" y="162" class="font-sans subtext">Disparate OEM APIs &amp; SCADA:</text>
+
+  <!-- OEM Badges -->
+  <rect x="46" y="174" width="68" height="20" rx="4" fill="#1e293b" />
+  <text x="80" y="188" text-anchor="middle" class="font-sans oem-pill">Huawei</text>
+  <rect x="120" y="174" width="76" height="20" rx="4" fill="#1e293b" />
+  <text x="158" y="188" text-anchor="middle" class="font-sans oem-pill">SolarEdge</text>
+  <rect x="202" y="174" width="76" height="20" rx="4" fill="#1e293b" />
+  <text x="240" y="188" text-anchor="middle" class="font-sans oem-pill">Sungrow</text>
+
+  <rect x="46" y="200" width="68" height="20" rx="4" fill="#1e293b" />
+  <text x="80" y="214" text-anchor="middle" class="font-sans oem-pill">Enphase</text>
+  <rect x="120" y="200" width="76" height="20" rx="4" fill="#1e293b" />
+  <text x="158" y="214" text-anchor="middle" class="font-sans oem-pill">BYD BESS</text>
+  <rect x="202" y="200" width="76" height="20" rx="4" fill="#1e293b" />
+  <text x="240" y="214" text-anchor="middle" class="font-sans oem-pill">Eskom AMR</text>
+
+  <circle cx="54" cy="245" r="3" fill="#f59e0b" />
+  <text x="66" y="249" class="font-sans item">Inverter trip &amp; thermal states</text>
+  <circle cx="54" cy="270" r="3" fill="#f59e0b" />
+  <text x="66" y="274" class="font-sans item">15-min interval utility billing</text>
+  <circle cx="54" cy="295" r="3" fill="#f59e0b" />
+  <text x="66" y="299" class="font-sans item">BESS state-of-charge curves</text>
+
+  <!-- Flow 1 -> 2 -->
+  <path d="M 295 215 L 335 215" stroke="#455bf1" stroke-width="2" marker-end="url(#arrow-primary)" />
+
+  <!-- Column 2: The Energy Data Engineer (Powered by nehanda-cli) -->
+  <rect x="340" y="92" width="280" height="250" rx="12" fill="url(#center-grad)" stroke="#455bf1" stroke-width="2" />
+  <rect x="356" y="108" width="28" height="28" rx="6" fill="#455bf1" fill-opacity="0.3" />
+  <text x="370" y="127" text-anchor="middle" class="font-sans" font-size="14" fill="#455bf1">⚙️</text>
+  <text x="396" y="127" class="font-sans heading" font-size="15" fill="#818cf8">Energy Data Engineer</text>
+  <text x="356" y="156" class="font-sans badge">GOVERNED RUNTIME: nehanda-cli</text>
+  
+  <rect x="356" y="168" width="248" height="155" rx="8" fill="#0b0d14" stroke="#2a3666" stroke-width="1" />
+  <text x="370" y="192" class="font-sans item" font-weight="700" fill="#ffffff">Built-in Energy Plumbing:</text>
+  <text x="370" y="214" class="font-sans subtext" font-size="11.5">• <tspan fill="#818cf8" font-weight="600">ODSE Normalization</tspan> Middleware</text>
+  <text x="370" y="234" class="font-sans subtext" font-size="11.5">• Auto OEM Fingerprinting (20+ sources)</text>
+  <text x="370" y="254" class="font-sans subtext" font-size="11.5">• <tspan fill="#818cf8" font-weight="600">Harvard PowerMCP</tspan> &amp; Asoba SDK</text>
+  <text x="370" y="274" class="font-sans subtext" font-size="11.5">• 6-Phase SDLC Behavioral Gating</text>
+  <text x="370" y="294" class="font-sans subtext" font-size="11.5">• Python / AST Safety Enforcement</text>
+  <text x="370" y="312" class="font-sans font-mono" font-size="10.5" fill="#10b981">✓ Zero Manual Data Plumbing</text>
+
+  <!-- Flow 2 -> 3 -->
+  <path d="M 620 215 L 660 215" stroke="#455bf1" stroke-width="2" marker-end="url(#arrow-primary)" />
+
+  <!-- Column 3: High-Stakes Financial & Grid Yield -->
+  <rect x="665" y="100" width="245" height="235" rx="10" fill="#121626" stroke="#252f52" stroke-width="1.5" />
+  <rect x="681" y="115" width="28" height="28" rx="6" fill="#10b981" fill-opacity="0.15" />
+  <text x="695" y="134" text-anchor="middle" class="font-sans" font-size="14" fill="#10b981">📈</text>
+  <text x="721" y="134" class="font-sans heading" font-size="14.5">High-Stakes Yield</text>
+  <text x="681" y="162" class="font-sans subtext">Real commercial outcomes:</text>
+  
+  <circle cx="689" cy="192" r="3" fill="#10b981" />
+  <text x="701" y="196" class="font-sans item">PPA performance compliance</text>
+  
+  <circle cx="689" cy="222" r="3" fill="#10b981" />
+  <text x="701" y="226" class="font-sans item">Wholesale vs. retail arbitrage</text>
+  
+  <circle cx="689" cy="252" r="3" fill="#10b981" />
+  <text x="701" y="256" class="font-sans item">Thermal clipping mitigation</text>
+  
+  <circle cx="689" cy="282" r="3" fill="#10b981" />
+  <text x="701" y="286" class="font-sans item" font-weight="700" fill="#34d399">R1,000,000+ unbilled yield</text>
+  <text x="701" y="302" class="font-sans subtext" font-size="11">recovered on pilot portfolio</text>
+
+</svg>

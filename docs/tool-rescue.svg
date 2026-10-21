@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 400" width="100%" height="100%">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap');
+      .font-sans { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+      .font-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+      .title { font-size: 13px; font-weight: 700; letter-spacing: 1.5px; fill: #455bf1; }
+      .heading { font-size: 16px; font-weight: 700; fill: #ffffff; }
+      .subtext { font-size: 12.5px; fill: #94a3b8; }
+      .mono-code { font-size: 11px; fill: #818cf8; font-family: 'JetBrains Mono', monospace; }
+    </style>
+
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444" />
+    </marker>
+    <marker id="arrow-primary" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#455bf1" />
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" />
+    </marker>
+  </defs>
+
+  <!-- Background Frame -->
+  <rect width="920" height="400" rx="14" fill="#0b0d14" stroke="#22283e" stroke-width="1.5" />
+
+  <!-- Header -->
+  <rect x="24" y="20" width="10" height="10" rx="3" fill="#455bf1" />
+  <text x="44" y="29" class="font-sans title">RUNTIME COMPILER &amp; RESCUE MECHANICS</text>
+  <text x="24" y="58" class="font-sans heading">Dynamic Tool Rescue: Bypassing vLLM Stop-Token Interception</text>
+  <line x1="24" y1="74" x2="896" y2="74" stroke="#1c2237" stroke-width="1" />
+
+  <!-- Path A: Standard Path (Broken) -->
+  <rect x="30" y="95" width="860" height="110" rx="10" fill="#181318" stroke="#3b1d22" stroke-width="1.5" />
+  <rect x="45" y="108" width="170" height="20" rx="4" fill="#ef4444" fill-opacity="0.15" />
+  <text x="130" y="122" text-anchor="middle" class="font-sans" font-size="10.5" font-weight="700" fill="#f87171">STANDARD VLLM PATH</text>
+  <text x="225" y="123" class="font-sans heading" font-size="13.5" fill="#fca5a5">Stop-Token Interception Failure</text>
+
+  <!-- Step A1 -->
+  <rect x="45" y="140" width="170" height="48" rx="6" fill="#0b0d14" stroke="#ef4444" stroke-width="1" />
+  <text x="55" y="160" class="font-sans font-mono" font-size="10.5" fill="#fca5a5">Model emits tag:</text>
+  <text x="55" y="177" class="font-sans font-mono" font-size="11" font-weight="700" fill="#f87171">&lt;tool_call&gt;...</text>
+  <path d="M 215 164 L 260 164" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrow-red)" />
+
+  <!-- Step A2 -->
+  <rect x="265" y="140" width="220" height="48" rx="6" fill="#0b0d14" stroke="#ef4444" stroke-width="1" />
+  <text x="275" y="160" class="font-sans" font-size="11" fill="#fca5a5">vLLM <tspan font-mono="true">qwen3_xml</tspan> parser:</text>
+  <text x="275" y="177" class="font-sans font-mono" font-size="10.5" fill="#f87171">Interprets as STOP TOKEN</text>
+  <path d="M 485 164 L 530 164" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrow-red)" />
+
+  <!-- Step A3 -->
+  <rect x="535" y="140" width="160" height="48" rx="6" fill="#0b0d14" stroke="#ef4444" stroke-width="1" />
+  <text x="545" y="160" class="font-sans" font-size="11" fill="#fca5a5">Generation Aborted</text>
+  <text x="545" y="177" class="font-sans font-mono" font-size="10.5" fill="#f87171">message.tools = []</text>
+  <path d="M 695 164 L 740 164" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrow-red)" />
+
+  <!-- Step A4 Result -->
+  <rect x="745" y="140" width="130" height="48" rx="6" fill="#2d1316" stroke="#ef4444" stroke-width="1.5" />
+  <text x="810" y="162" text-anchor="middle" class="font-sans" font-size="11" font-weight="700" fill="#fecaca">TRUNCATED</text>
+  <text x="810" y="178" text-anchor="middle" class="font-sans" font-size="10" fill="#fca5a5">Thinking traces only</text>
+
+  <!-- Path B: Nehanda Tool Rescue -->
+  <rect x="30" y="225" width="860" height="150" rx="10" fill="#101924" stroke="#1b334d" stroke-width="1.5" />
+  <rect x="45" y="238" width="170" height="20" rx="4" fill="#455bf1" fill-opacity="0.2" />
+  <text x="130" y="252" text-anchor="middle" class="font-sans" font-size="10.5" font-weight="700" fill="#818cf8">NEHANDA RESCUE PATH</text>
+  <text x="225" y="253" class="font-sans heading" font-size="13.5" fill="#93c5fd">Dynamic Delimiter Injection &amp; In-Process AST Parsing</text>
+
+  <!-- Step B1 -->
+  <rect x="45" y="275" width="185" height="85" rx="6" fill="#0b0d14" stroke="#455bf1" stroke-width="1" />
+  <text x="55" y="295" class="font-sans" font-size="11" font-weight="600" fill="#ffffff">1. Delimiter Switch</text>
+  <text x="55" y="315" class="font-sans mono-code">[TOOL_CALL]...[/TOOL_CALL]</text>
+  <text x="55" y="335" class="font-sans subtext" font-size="11">Bypasses vLLM stop tokens.</text>
+  <text x="55" y="350" class="font-sans subtext" font-size="11">Late directive on last token.</text>
+  <path d="M 230 317 L 270 317" stroke="#455bf1" stroke-width="1.5" marker-end="url(#arrow-primary)" />
+
+  <!-- Step B2 -->
+  <rect x="275" y="275" width="185" height="85" rx="6" fill="#0b0d14" stroke="#455bf1" stroke-width="1" />
+  <text x="285" y="295" class="font-sans" font-size="11" font-weight="600" fill="#ffffff">2. Full Generation</text>
+  <text x="285" y="315" class="font-sans subtext" font-size="11">Model completes full turn,</text>
+  <text x="285" y="332" class="font-sans subtext" font-size="11">emitting valid tool payload</text>
+  <text x="285" y="349" class="font-sans subtext" font-size="11">without premature cutoff.</text>
+  <path d="M 460 317 L 500 317" stroke="#455bf1" stroke-width="1.5" marker-end="url(#arrow-primary)" />
+
+  <!-- Step B3 -->
+  <rect x="505" y="275" width="185" height="85" rx="6" fill="#0b0d14" stroke="#455bf1" stroke-width="1" />
+  <text x="515" y="295" class="font-sans" font-size="11" font-weight="600" fill="#ffffff">3. Local Regex AST</text>
+  <text x="515" y="314" class="font-sans mono-code">parseXmlToolCalls()</text>
+  <text x="515" y="333" class="font-sans subtext" font-size="11">Extracts payload locally</text>
+  <text x="515" y="350" class="font-sans subtext" font-size="11">via in-process engine.</text>
+  <path d="M 690 317 L 730 317" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrow-green)" />
+
+  <!-- Step B4 Result -->
+  <rect x="735" y="275" width="140" height="85" rx="6" fill="#0e2a21" stroke="#10b981" stroke-width="1.5" />
+  <text x="805" y="303" text-anchor="middle" class="font-sans" font-size="11" font-weight="700" fill="#a7f3d0">EXECUTED</text>
+  <text x="805" y="325" text-anchor="middle" class="font-sans subtext" font-size="11" fill="#d1fae5">100% Reliable</text>
+  <text x="805" y="343" text-anchor="middle" class="font-sans subtext" font-size="11" fill="#6ee7b7">Tool Loop Restored</text>
+
+</svg>

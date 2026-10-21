@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 560" width="100%" height="100%">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap');
+      .font-sans { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+      .font-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+      .title { font-size: 13px; font-weight: 700; letter-spacing: 1.5px; fill: #455bf1; }
+      .heading { font-size: 16px; font-weight: 700; fill: #ffffff; }
+      .subtext { font-size: 12.5px; fill: #94a3b8; }
+      .mono-code { font-size: 11.5px; fill: #818cf8; font-family: 'JetBrains Mono', monospace; }
+      .term-tool { font-size: 11px; font-weight: 600; fill: #ffffff; }
+    </style>
+
+    <marker id="arrow-primary" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#455bf1" />
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" />
+    </marker>
+    <marker id="arrow-gold" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#f59e0b" />
+    </marker>
+  </defs>
+
+  <!-- Background Frame -->
+  <rect width="940" height="560" rx="14" fill="#0b0d14" stroke="#22283e" stroke-width="1.5" />
+
+  <!-- Header -->
+  <rect x="24" y="20" width="10" height="10" rx="3" fill="#455bf1" />
+  <text x="44" y="29" class="font-sans title">DETERMINISTIC AGENTIC ORCHESTRATION</text>
+  <text x="24" y="60" class="font-sans heading">The 6-Phase SDLC State Machine &amp; Terminal Enforcement Gates</text>
+  <line x1="24" y1="78" x2="916" y2="78" stroke="#1c2237" stroke-width="1" />
+
+  <!-- ================= ROW 1: IDLE -> PLAN -> HITL ================= -->
+
+  <!-- Node 1: IDLE -->
+  <rect x="30" y="100" width="260" height="150" rx="10" fill="#121626" stroke="#455bf1" stroke-width="1.5" />
+  <rect x="44" y="114" width="60" height="22" rx="4" fill="#455bf1" fill-opacity="0.2" />
+  <text x="74" y="129" text-anchor="middle" class="font-sans" font-size="11" font-weight="700" fill="#818cf8">PHASE 1</text>
+  <text x="114" y="131" class="font-sans heading" font-size="15">IDLE (Triage)</text>
+  <text x="44" y="160" class="font-sans subtext">Context tools only (Read, LS, Glob).</text>
+  <rect x="44" y="174" width="232" height="32" rx="6" fill="#1c141d" stroke="#ef4444" stroke-width="1" />
+  <text x="52" y="194" class="font-sans" font-size="11.5" fill="#fca5a5">⚠️ Mutating tools physically masked</text>
+  <text x="44" y="232" class="font-sans subtext">Reads <tspan class="mono-code">docs/MAP.md</tspan> first.</text>
+
+  <!-- Flow 1 -> 2 -->
+  <path d="M 290 175 L 340 175" stroke="#455bf1" stroke-width="2" marker-end="url(#arrow-primary)" />
+  <rect x="295" y="152" width="40" height="18" rx="3" fill="#455bf1" />
+  <text x="315" y="164" text-anchor="middle" class="font-sans" font-size="9" font-weight="700" fill="#ffffff">TOOL</text>
+  <text x="315" y="200" text-anchor="middle" class="font-sans mono-code" font-size="10">EnterPlanMode</text>
+
+  <!-- Node 2: PLAN -->
+  <rect x="345" y="100" width="260" height="150" rx="10" fill="#121626" stroke="#455bf1" stroke-width="1.5" />
+  <rect x="359" y="114" width="60" height="22" rx="4" fill="#455bf1" fill-opacity="0.2" />
+  <text x="389" y="129" text-anchor="middle" class="font-sans" font-size="11" font-weight="700" fill="#818cf8">PHASE 2</text>
+  <text x="429" y="131" class="font-sans heading" font-size="15">PLAN (Strategy)</text>
+  <text x="359" y="160" class="font-sans subtext">Formulates Given-When-Then matrix.</text>
+  <text x="359" y="180" class="font-sans subtext">Dual citation requirement:</text>
+  <text x="359" y="200" class="font-sans mono-code">• docs line + code symbol</text>
+  <text x="359" y="224" class="font-sans subtext">Code editing strictly blocked.</text>
+
+  <!-- Flow 2 -> HITL -->
+  <path d="M 605 175 L 655 175" stroke="#f59e0b" stroke-width="2" marker-end="url(#arrow-gold)" />
+  <rect x="610" y="152" width="40" height="18" rx="3" fill="#f59e0b" />
+  <text x="630" y="164" text-anchor="middle" class="font-sans" font-size="9" font-weight="700" fill="#0b0d14">TOOL</text>
+  <text x="630" y="200" text-anchor="middle" class="font-sans mono-code" font-size="10" fill="#fbbf24">ExitPlanMode</text>
+
+  <!-- Node HITL: Human Approval Gate -->
+  <rect x="660" y="90" width="250" height="170" rx="12" fill="#1f1811" stroke="#f59e0b" stroke-width="2" />
+  <rect x="674" y="105" width="80" height="22" rx="4" fill="#f59e0b" fill-opacity="0.2" />
+  <text x="714" y="120" text-anchor="middle" class="font-sans" font-size="11" font-weight="700" fill="#fbbf24">HITL GATE</text>
+  <text x="674" y="150" class="font-sans heading" font-size="15" fill="#fef3c7">Human Approval</text>
+  <text x="674" y="174" class="font-sans subtext">Ink TUI renders atomic modal:</text>
+  <rect x="674" y="185" width="220" height="30" rx="5" fill="#0b0d14" stroke="#f59e0b" stroke-width="1" />
+  <text x="684" y="204" class="font-sans font-mono" font-size="11" fill="#fde68a">[Y] Approve  /  [N] Reject</text>
+  <text x="674" y="238" class="font-sans subtext">Reject: returns to PLAN with notes.</text>
+
+  <!-- ================= TRANSITION: HITL -> IMPLEMENT ================= -->
+  <path d="M 785 260 L 785 320" stroke="#10b981" stroke-width="2" marker-end="url(#arrow-green)" />
+  <text x="800" y="295" class="font-sans" font-size="11" font-weight="700" fill="#34d399">Approved (Y)</text>
+
+  <!-- ================= ROW 2: IMPLEMENT <- TEST <- VERIFY / DONE ================= -->
+
+  <!-- Node 3: IMPLEMENT -->
+  <rect x="650" y="325" width="260" height="165" rx="10" fill="#121626" stroke="#455bf1" stroke-width="1.5" />
+  <rect x="664" y="339" width="60" height="22" rx="4" fill="#455bf1" fill-opacity="0.2" />
+  <text x="694" y="354" text-anchor="middle" class="font-sans" font-size="11" font-weight="700" fill="#818cf8">PHASE 3</text>
+  <text x="734" y="356" class="font-sans heading" font-size="15">IMPLEMENT</text>
+  <text x="664" y="385" class="font-sans subtext">Modification tools unmasked:</text>
+  <text x="664" y="405" class="font-sans mono-code">• Write, Edit, Bash, Patch</text>
+  <text x="664" y="427" class="font-sans subtext">Applies minimal surgical diffs.</text>
+  <text x="664" y="447" class="font-sans subtext">Automated terminal handoff.</text>
+
+  <!-- Flow 3 -> 4 -->
+  <path d="M 650 405 L 600 405" stroke="#455bf1" stroke-width="2" marker-end="url(#arrow-primary)" />
+  <rect x="605" y="382" width="40" height="18" rx="3" fill="#455bf1" />
+  <text x="625" y="394" text-anchor="middle" class="font-sans" font-size="9" font-weight="700" fill="#ffffff">TOOL</text>
+  <text x="625" y="430" text-anchor="middle" class="font-sans mono-code" font-size="9.5">SubmitImpl</text>
+
+  <!-- Node 4: TEST & SAFETY -->
+  <rect x="340" y="325" width="255" height="165" rx="10" fill="#121626" stroke="#455bf1" stroke-width="1.5" />
+  <rect x="354" y="339" width="60" height="22" rx="4" fill="#455bf1" fill-opacity="0.2" />
+  <text x="384" y="354" text-anchor="middle" class="font-sans" font-size="11" font-weight="700" fill="#818cf8">PHASE 4</text>
+  <text x="424" y="356" class="font-sans heading" font-size="15">TEST &amp; SAFETY</text>
+  <text x="354" y="385" class="font-sans subtext">Behavioral test execution (stdout).</text>
+  <text x="354" y="405" class="font-sans subtext" font-weight="600" fill="#cbd5e1">Mandatory Safety Checkers:</text>
+  <text x="354" y="425" class="font-sans mono-code">• Python, Shell, JS, Integrity</text>
+  <text x="354" y="445" class="font-sans subtext">Mock-theater explicitly rejected.</text>
+
+  <!-- Flow 4 -> 5 & 6 -->
+  <path d="M 340 405 L 290 405" stroke="#10b981" stroke-width="2" marker-end="url(#arrow-green)" />
+  <rect x="295" y="382" width="40" height="18" rx="3" fill="#10b981" />
+  <text x="315" y="394" text-anchor="middle" class="font-sans" font-size="9" font-weight="700" fill="#0b0d14">PASS</text>
+  <text x="315" y="430" text-anchor="middle" class="font-sans mono-code" font-size="9.5" fill="#34d399">SubmitTest</text>
+
+  <!-- Node 5 & 6: VERIFY & DONE -->
+  <rect x="30" y="325" width="255" height="165" rx="10" fill="#0e1b19" stroke="#10b981" stroke-width="1.5" />
+  <rect x="44" y="339" width="90" height="22" rx="4" fill="#10b981" fill-opacity="0.2" />
+  <text x="89" y="354" text-anchor="middle" class="font-sans" font-size="11" font-weight="700" fill="#34d399">PHASE 5 &amp; 6</text>
+  <text x="144" y="356" class="font-sans heading" font-size="15" fill="#d1fae5">VERIFY &amp; DONE</text>
+  <text x="44" y="385" class="font-sans subtext">Audit provenance in SQLite:</text>
+  <text x="44" y="405" class="font-sans mono-code">• ~/.config/nehanda/ona-session.db</text>
+  <text x="44" y="427" class="font-sans subtext">Atomic Git commit created.</text>
+  <text x="44" y="447" class="font-sans subtext" fill="#6ee7b7">Production-grade verified output.</text>
+
+  <!-- Bottom status line -->
+  <text x="470" y="525" text-anchor="middle" class="font-sans subtext" font-size="12">
+    Enforced by <tspan font-weight="700" fill="#455bf1">nehanda-cli</tspan> — Late Injection Directives &amp; Instruction Interceptor
+  </text>
+
+</svg>
