@@ -95,7 +95,7 @@ Reference document for key architectural decisions, module contracts, and follow
 
 **Persistence (atomic at wizard end):**
 1. Secrets → secure file / Nehanda `agents.json` `api_key`
-2. `model` + `endpoint` → `~/.config/aimee/agents.json`
+2. `model` + `endpoint` → `~/.config/nehanda/agents.json`
 3. In-session `runtimeSettings.model_config` from wizard result
 
 **`/config`:** Read-only status display in the TUI (not a write path).

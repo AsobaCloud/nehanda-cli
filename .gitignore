@@ -1,5 +1,4 @@
 
-.aimee/
 node_modules/
 *.db
 *.log

@@ -58,7 +58,7 @@ their own channels:
   billing, DynamoDB)
 
 Misconfigurations in your own environment (exposed API keys, world-readable
-`~/.config/aimee/`, running services on non-localhost interfaces without a firewall)
+`~/.config/nehanda/`, running services on non-localhost interfaces without a firewall)
 are generally out of scope unless nehanda-cli defaults are unsafe.
 
 ## Safe harbor
@@ -69,7 +69,7 @@ you do not own, degrade service for other users, or exfiltrate production creden
 ## Security practices for operators
 
 - Keep `nehanda-cli` updated from `main` or the latest release
-- Restrict filesystem permissions on `~/.config/aimee/` (session tokens, agent config)
+- Restrict filesystem permissions on `~/.config/nehanda/` (session tokens, agent config)
 - Run local services (`nehanda-server`, `nehanda-kb`, embedder) on localhost only unless
   you understand the exposure
 - Do not commit API keys, JWTs, or `.env` files with secrets

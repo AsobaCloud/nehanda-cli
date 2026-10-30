@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // nehanda-ui — Ink terminal UI for ona-code
 // Connects directly to nehanda-ml.asoba.co via the in-process ona-code engine.
-// No aimee-server, no HTTP daemon, no cross-repo resolution.
+// Standalone terminal UI, no external HTTP daemon, no cross-repo resolution.
 
 if (process.stdout.isTTY) {
   process.stdout.write('\x1b[2J\x1b[3J\x1b[H')
@@ -69,8 +69,7 @@ const BRAND = {
 // ── Config paths ─────────────────────────────────────────────
 const NEHANDA_DIR   = path.join(os.homedir(), '.config', 'nehanda')
 const NEHANDA_DB    = path.join(NEHANDA_DIR, 'ona-session.db')
-const AIMEE_DIR     = path.join(os.homedir(), '.config', 'aimee')
-const AGENTS_JSON   = path.join(AIMEE_DIR,   'agents.json')
+const AGENTS_JSON   = path.join(NEHANDA_DIR, 'agents.json')
 const SPLASH_SEEN   = path.join(NEHANDA_DIR, '.splash-seen')
 
 function hasSeenSplash() { try { return fs.existsSync(SPLASH_SEEN) } catch { return false } }
@@ -94,8 +93,15 @@ function readApiKey() {
 
 function writeApiKey(key) {
   const data  = readAgents()
-  const agent = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
-  if (agent) { agent.api_key = key; fs.writeFileSync(AGENTS_JSON, JSON.stringify(data, null, 2), 'utf8') }
+  let agent = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
+  if (!agent) {
+    agent = { name: data.default_agent || 'default' }
+    if (!Array.isArray(data.agents)) data.agents = []
+    data.agents.push(agent)
+    data.default_agent = agent.name
+  }
+  agent.api_key = key
+  fs.writeFileSync(AGENTS_JSON, JSON.stringify(data, null, 2), 'utf8')
 }
 
 // ── Session DB bootstrap ─────────────────────────────────────
@@ -646,12 +652,16 @@ async function runUiConfigureWizard(bridge, opts = {}) {
       },
       persist: async (cfg) => {
         const data = readAgents()
-        const ag = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
-        if (ag) {
-          ag.model = cfg.model
-          ag.endpoint = cfg.endpoint
-          if (cfg.provider === 'nehanda' && cfg.apiKey) ag.api_key = cfg.apiKey
+        let ag = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
+        if (!ag) {
+          ag = { name: data.default_agent || 'default' }
+          if (!Array.isArray(data.agents)) data.agents = []
+          data.agents.push(ag)
+          data.default_agent = ag.name
         }
+        ag.model = cfg.model
+        ag.endpoint = cfg.endpoint
+        if (cfg.provider === 'nehanda' && cfg.apiKey) ag.api_key = cfg.apiKey
         fs.writeFileSync(AGENTS_JSON, JSON.stringify(data, null, 2), 'utf8')
         runtimeSettings.model_config = cfg.model_config || modelConfigFromAgent(
           { model: cfg.model, endpoint: cfg.endpoint },
@@ -999,7 +1009,7 @@ bridge.onSubmit = async (text) => {
       bareMode:        false,
       // Project instructions sourced from nehanda's own loadInstructions() (Ona.md),
       // matching bin/agent.mjs. Does NOT read agents.json exec_system_prompt — that
-      // field belongs to aimee and was silently reintroducing conflicting tool-call
+      // legacy field was silently reintroducing conflicting tool-call
       // syntax (<tool_call><name>...) that fights orchestrate.mjs's [TOOL_CALL] format.
       onaInstructions: onaInstructionsContent || null,
       // Esc/Ctrl+C abort — must reach fetch / Anthropic stream (issue #7).
