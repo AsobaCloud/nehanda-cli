@@ -102,7 +102,7 @@ Local Ollama / LM Studio: pick that provider in `/model`, accept or edit the hos
 
 * **Runtime Visibility:** `RuntimeHealthMonitor` probes active inference endpoints (1s HEAD request) and checks Laya sidecar liveness before each session. The TUI status header shows active model, endpoint health and latency, sidecar PID, and context usage percentage — so researchers have immediate visual confirmation of whether the target backend is an internal local host or an external cloud endpoint before uploading grid telemetry.
 
-* **Process Legibility:** Every tool call is visible while it runs. Tool-start lines show argument summaries (`⚙ Read(ui.mjs)`, `⚙ Bash(git status)`), a live spinner with plain-English verbs tracks activity between outputs (`⠋ Analyzing…`, `⠙ Reading ui.mjs…`), and tool results carry honest context suffixes (`✓ Read: … (N lines)`, `✓ Bash: … (240ms)`, `✓ Write: … (N chars)`) — never fabricated data. A dim `esc to cancel` hint stays available while a turn runs, and result previews are capped at 120 characters so raw output never floods the screen. Backed by `summarizeToolArgs`, `verbForTool`, `formatToolResultSuffix`, and `TOOL_VERBS` in `lib/ui.mjs`, with a live spinner channel (`bridge.updateSpinner`) in the Ink TUI.
+* **Process Legibility:** Every tool call is visible while it runs. Tool-start lines show argument summaries (`⚙ Read(ui.mjs)`, `⚙ Bash(git status)`), a live spinner with plain-English verbs tracks activity between outputs (`⠋ Analyzing…`, `⠙ Reading ui.mjs…`), and tool results carry honest context suffixes (`✓ Read: … (N lines)`, `✓ Bash: … (240ms)`, `✓ Write: … (N chars)`) — never fabricated data. When a reasoning model (Qwen3, Gemma) is thinking, the spinner shows live token progress (`⠋ Thinking (42 tokens)…`) rather than a frozen screen. Pressing Esc immediately updates the spinner to `Cancelling…` before the in-flight request is torn down. A dim `esc to cancel` hint stays available while a turn runs, and result previews are capped at 120 characters so raw output never floods the screen. Backed by `summarizeToolArgs`, `verbForTool`, `formatToolResultSuffix`, and `TOOL_VERBS` in `lib/ui.mjs`, with a live spinner channel (`bridge.updateSpinner`) in the Ink TUI.
 
 * **Interactive TUI & Pipe Support:** Rich Ink-based TUI (`bin/nehanda-ui.mjs`) for interactive development sessions, with headless pipe-mode support (`bin/agent.mjs`) for acceptance testing and automation.
 
@@ -494,9 +494,36 @@ node tests/unit/gap4_pinned_compaction_behavioral.mjs
 node tests/unit/ui_legibility_behavioral.mjs
 ```
 
+Run the Ollama, spinner, and Laya behavioral suites:
+
+```bash
+node tests/unit/test-ollama-llm-call-behavioral.mjs
+node tests/unit/test-ollama-permission-prompt-behavioral.mjs
+node tests/unit/laya_warm_load_behavioral.mjs
+node tests/unit/issue22_query_context_behavioral.mjs
+```
+
 ---
 
 ## Changelog
+
+### 0.9.0
+
+- **AGENTS.md SDLC workflow + local issue tracking (`lib/workflow.mjs`, `lib/issues.mjs`, `lib/explore.mjs`):** The orchestrator now enforces the full E-P-C-V-D workflow defined in AGENTS.md — Explore, Plan, Confirm, Code, Validate. A local `.issues/` directory tracks open and closed issues with structured metadata (observed behavior, diagnosis, acceptance criteria). `lib/explore.mjs` drives the EXPLORE phase, aggregating file summaries before entering PLANNING. Closes #15.
+
+- **Generic agent config restored to `~/.config/nehanda` (`lib/settings.mjs`, `scripts/postinstall.mjs`):** Removed the `.aimee` dependency and all references to the legacy agent registry. Agent configuration now lives exclusively at `~/.config/nehanda/agents.json`, consistent with the documented config file locations. Closes #16.
+
+- **Working directory in welcome banner and footer (`bin/nehanda-ui.mjs`):** The TUI banner displayed on startup and the status footer both now show the current working directory, giving researchers immediate confirmation of which project root is active before issuing any commands. Closes #17.
+
+- **Spinner stabilization: AskPrompt, spitfire suppression, null-safe `askHuman` (`bin/nehanda-ui.mjs`):** Fixed three related spinner regressions: (1) the spinner was visible and cycling behind interactive `io.ask` permission prompts, obscuring the question; (2) rapid `bridge.updateSpinner` calls between tool results caused visible label flicker (spitfire); (3) `askHuman` threw on a null `io` reference in headless contexts. Closes #18.
+
+- **Ollama LLM call path: behavioral coverage + documentation (`lib/orchestrate.mjs`, `tests/unit/test-ollama-llm-call-behavioral.mjs`, `docs/MAP.md`):** Full behavioral RED/GREEN test suite for the Ollama call path — `detectOllamaToolSupport` probe logic (capabilities, template, modelfile fields, HTTP error fail-open), native vs. manual tool injection dispatch, `Authorization: Bearer ollama` header, `OLLAMA_BASE_URL` env var resolution, and `buildSystemPrompt` injection format. `docs/MAP.md` documents the full call path contract. Closes #19.
+
+- **Turn-start and probe spinner stabilization (`bin/nehanda-ui.mjs`, `lib/orchestrate.mjs`):** Prior to this fix, the spinner had no label during the gap between turn submission and the first model event — cycling generic `TOOL_VERBS` while Laya intent classification and the Ollama `detectOllamaToolSupport` probe (up to 3 s) ran silently. Fixed by pre-seeding `bridge.updateSpinner('Analyzing')` immediately on submit and `io.spinner.start('Analyzing')` at `runSdlcOpenAICompat` entry. Behavioral coverage in `tests/unit/test-ollama-permission-prompt-behavioral.mjs`. Closes #20.
+
+- **Laya sidecar startup warming (`lib/laya_sidecar.mjs`):** `ensureLayaReady()` now calls `loadLaya()` (`method: 'load'`) instead of `pingLaya()` (`method: 'ping'`). The `ping` path responded immediately without loading model weights, leaving the first user-turn `classifyUserIntent` call to cold-load the 322M-parameter checkpoint mid-turn (200–400 ms stall). `load` invokes `_ensure_loaded()` in `laya_worker.py`, priming both `noul` and `choice` criteria into MPS/CPU RAM before the first turn. Behavioral coverage in `tests/unit/laya_warm_load_behavioral.mjs`. Closes #21.
+
+- **Grounded query context, Ollama `think:false`, reasoning token streaming, instant Esc cancel (`lib/orchestrate.mjs`, `lib/openaiCompat.mjs`, `bin/nehanda-ui.mjs`):** Four improvements to reduce reasoning model overhead and improve cancellation UX: (1) `buildSystemPrompt` appends an explicit `[GROUNDED FACTS]` block (date, cwd, platform, shell) to every phase prompt so models never spend tokens debating their own awareness; (2) `streamOpenAIChatCompletion` now parses `delta.reasoning` and `delta.reasoning_content` SSE fields and updates the spinner live — `⠋ Thinking (42 tokens)…` — rather than sitting frozen during the thinking phase; (3) a `think: false` option is forwarded to the Ollama API request body when `model_config.thinking === false`, disabling chain-of-thought for supported models; (4) `detectOllamaToolSupport` now accepts `rt.signal` composed via `AbortSignal.any([signal, AbortSignal.timeout(3000)])` so Esc cancels the capability probe immediately rather than waiting the full 3 s timeout, and `bridge.abortCurrent` updates the spinner to `Cancelling…` before invoking `controller.abort()`. Behavioral coverage in `tests/unit/issue22_query_context_behavioral.mjs`. Closes #22.
 
 ### 0.8.0
 

@@ -178,3 +178,95 @@ baseUrl = savedBaseUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434
 - Ensures all subsequent user-turn `classifyUserIntent` calls hit the warm in-memory model, resolving in ≤60ms without exceeding the timeout budget or falling back to degraded heuristics.
 
 **Behavioral proof:** `tests/unit/laya_warm_load_behavioral.mjs` (WL-1, WL-2).
+
+---
+
+## Grounded Query Context, think:false, Reasoning Token Streaming, Instant Esc Cancel (#22)
+
+### Grounded facts block (`lib/orchestrate.mjs` — `buildSystemPrompt`)
+
+**Problem:** Reasoning models (Qwen3, Gemma4) spent hundreds of tokens second-guessing whether they had access to the current date, working directory, or real-time context before answering.
+
+**Fix:** `buildSystemPrompt` appends a `[GROUNDED FACTS]` block to every phase prompt immediately after the phase template is rendered:
+
+```
+[GROUNDED FACTS]
+Date: 2026-10-31
+Working directory: /Users/shingi/Workbench/nehanda-cli
+Platform: macOS | Shell: zsh
+```
+
+This is injected unconditionally across all phases. The model has no excuse to guess.
+
+**Location:** `lib/orchestrate.mjs`, inside `buildSystemPrompt`, after the `builder(cwd, ...)` call.
+
+---
+
+### Reasoning token spinner updates (`lib/openaiCompat.mjs` — `streamOpenAIChatCompletion`)
+
+**Problem:** Ollama streams reasoning tokens via `delta.reasoning` / `delta.reasoning_content`. The SSE loop only read `delta.content`, leaving the spinner frozen and silent for 60+ seconds during the thinking phase.
+
+**Fix:** Inside the SSE streaming loop, after the `delta.content` handler:
+
+```js
+const reasoningChunk = delta?.reasoning ?? delta?.reasoning_content
+if (reasoningChunk) {
+  reasoningTokenCount += reasoningChunk.split(/\s+/).filter(Boolean).length
+  if (io?.spinner?.update) io.spinner.update(`Thinking (${reasoningTokenCount} tokens)…`)
+}
+```
+
+Reasoning text is accumulated for the spinner count only — it never enters `fullText` or `assistantBlocks`.
+
+---
+
+### `think: false` passthrough (`lib/openaiCompat.mjs` — `streamOpenAIChatCompletion`)
+
+**Problem:** Ollama supports `think: false` in its chat completions API to disable chain-of-thought, but the request body builder never forwarded it.
+
+**Fix:** `streamOpenAIChatCompletion` accepts a new `think` option. When `think === false`, `body.think = false` is set before the request is sent. When `think` is absent or `undefined`, the property is not sent at all.
+
+**Call site:** `runSdlcOpenAICompat` in `lib/orchestrate.mjs` can pass `think: rt.settings?.model_config?.thinking === false ? false : undefined` when building the call.
+
+---
+
+### `detectOllamaToolSupport` — `rt.signal` threading (`lib/orchestrate.mjs`)
+
+**Problem:** `detectOllamaToolSupport` used a hardcoded `AbortSignal.timeout(3000)`. Pressing Esc during the capability probe waited the full 3 s before cancelling.
+
+**Fix:** The function now accepts an optional `signal` parameter and composes it with the timeout:
+
+```js
+async function detectOllamaToolSupport(baseUrl, modelName, signal) {
+  const timeoutSignal = AbortSignal.timeout(3000)
+  const fetchSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+  ...
+  } catch (e) {
+    if (e?.name === 'AbortError') throw e   // re-throw — don't swallow as "assume native"
+    result = true
+  }
+}
+```
+
+The call site in `runSdlcOpenAICompat` passes `rt.signal`:
+```js
+if (provider === 'ollama') nativeSupport = await detectOllamaToolSupport(baseUrl, model, rt.signal)
+```
+
+---
+
+### Instant Esc cancellation UI feedback (`bin/nehanda-ui.mjs`)
+
+**Problem:** `bridge.abortCurrent` only called `controller.abort()`. The spinner continued cycling its current label until the `AbortError` propagated back up through the async call stack — a visible lag.
+
+**Fix:**
+```js
+bridge.abortCurrent = () => {
+  bridge.updateSpinner('Cancelling…')   // immediate UI feedback before abort propagates
+  controller.abort()
+}
+```
+
+`bridge.updateSpinner` is synchronous (it calls React's `setSpinLabel`), so the label change appears on the next render tick — before the abort has had time to unwind the HTTP stack.
+
+**Behavioral proof:** `tests/unit/issue22_query_context_behavioral.mjs` (QC-1 through QC-9).
