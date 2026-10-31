@@ -997,7 +997,10 @@ bridge.onSubmit = async (text) => {
   bridge.setLoading(true)
   bridge.updateSpinner('Analyzing')
   const controller = new AbortController()
-  bridge.abortCurrent = () => controller.abort()
+  bridge.abortCurrent = () => {
+    bridge.updateSpinner('Cancelling…')   // #22: immediate UI feedback before abort propagates
+    controller.abort()
+  }
   let lastPartial = ''
 
   try {
