@@ -94,7 +94,7 @@ Local Ollama / LM Studio: pick that provider in `/model`, accept or edit the hos
 
 * **Dynamic Tool Rescue (`[TOOL_CALL]`):** Native support for endpoints that strip OpenAI tool schemas (such as `nehandaMlProxy`). The engine dynamically injects active tool schemas directly into system prompts as `[TOOL_CALL]` blocks, parsing and executing tools locally without server-side function-calling support. Uses `[TOOL_CALL]` delimiters instead of `<tool_call>` XML to prevent vLLM's `--tool-call-parser qwen3_xml` stop-token interception.
 
-* **Deterministic SDLC Workflow:** Enforces a 7-phase state machine (`idle` → `explore` → `planning` → `implement` → `test` → `verify` → `done`) to prevent unapproved code changes, hallucinated test passes, or unverified implementations. Transitions are gated: `planning → implement` requires both an approved plan and at least one confirmed RED behavioral test; `test → verify` requires all tests passing and safety checkers clean.
+* **Deterministic SDLC Workflow:** Enforces a 7-phase state machine (`idle` → `explore` → `planning` → `test` → `implement` → `test` → `verify` → `done`) following the AGENTS.md TDD mandate. Transitions are gated: `planning → implement` is blocked until an approved plan exists and at least one RED behavioral test is recorded; `test → verify` requires all tests passing and safety checkers clean.
 
 * **Interactive Safety Interventions:** When execution checkers flag a command — opening local sockets, inspecting HIL testbed hardware paths, or writing outside the working directory — the engine raises a structured `{ status, reason, risk_score, proposed_remediation }` payload rather than crashing. In the TUI, blocked operations surface a `BlockConfirmMenu` (`[A] Approve for Session | [S] Run in Laya Sandbox | [C] Cancel`) wired directly into the Ink event loop. Session approvals are cached so the same operation is not re-prompted within a session. Headless pipe mode auto-denies without prompting.
 
@@ -430,7 +430,7 @@ Numeric values are auto-converted. Changes persist in the local settings databas
 
 ## SDLC Workflow
 
-The engine enforces state transitions across seven distinct phases, aligned with the AGENTS.md E-P-C-V-D mandate:
+The engine enforces state transitions across seven distinct phases, aligned with the AGENTS.md TDD mandate:
 
 1. **`idle`**: Discovery and triage. Mutating file tools are available. Safety and analysis tools are available on-demand.
 
@@ -438,13 +438,15 @@ The engine enforces state transitions across seven distinct phases, aligned with
 
 3. **`planning`**: Model formulates a plan using exploration summaries (`EnterPlanMode`). Mutating tools are blocked until a plan is approved. No code changes permitted.
 
-4. **`implement`**: Code changes applied using file editing and shell execution (`ExitPlanMode`). **Gated:** requires both an approved plan and at least one confirmed RED behavioral test result recorded before this phase may begin (AGENTS.md Phase 4).
+4. **`test`**: Behavioral test creation and RED confirmation. The model writes tests and runs them to confirm they fail for the diagnosed reason. **Gated:** `planning → implement` is blocked until at least one RED test result is recorded here.
 
-5. **`test`**: Automated test execution (`SubmitImplementation`). **After tests pass, all tools marked `mandatory_in: ["test"]` must be run.** The system prompt enforces this — the model cannot declare success until all mandatory safety checkers pass.
+5. **`implement`**: Code changes applied using file editing and shell execution (`ExitPlanMode`). Only reachable after a confirmed RED test exists and a plan is approved.
 
-6. **`verify`**: Inspection of test outputs and coverage verification (`SubmitTest`). **Gated:** requires all test results passing and at least one safety checker event recorded.
+6. **`test`**: Automated test execution to verify GREEN (`SubmitImplementation`). **All tools marked `mandatory_in: ["test"]` must run and pass** before this phase can advance — the system prompt enforces this.
 
-7. **`done`**: Final sign-off and git commit creation.
+7. **`verify`**: Inspection of test outputs and coverage verification (`SubmitTest`). **Gated:** requires all test results passing and at least one safety checker event recorded.
+
+8. **`done`**: Final sign-off and git commit creation.
 
 ---
 
