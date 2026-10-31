@@ -94,7 +94,7 @@ Local Ollama / LM Studio: pick that provider in `/model`, accept or edit the hos
 
 * **Dynamic Tool Rescue (`[TOOL_CALL]`):** Native support for endpoints that strip OpenAI tool schemas (such as `nehandaMlProxy`). The engine dynamically injects active tool schemas directly into system prompts as `[TOOL_CALL]` blocks, parsing and executing tools locally without server-side function-calling support. Uses `[TOOL_CALL]` delimiters instead of `<tool_call>` XML to prevent vLLM's `--tool-call-parser qwen3_xml` stop-token interception.
 
-* **Deterministic SDLC Workflow:** Enforces a 6-phase state machine (`idle` → `plan` → `implement` → `test` → `verify` → `done`) to prevent unapproved code changes, hallucinated test passes, or unverified implementations.
+* **Deterministic SDLC Workflow:** Enforces a 7-phase state machine (`idle` → `explore` → `planning` → `implement` → `test` → `verify` → `done`) to prevent unapproved code changes, hallucinated test passes, or unverified implementations. Transitions are gated: `planning → implement` requires both an approved plan and at least one confirmed RED behavioral test; `test → verify` requires all tests passing and safety checkers clean.
 
 * **Interactive Safety Interventions:** When execution checkers flag a command — opening local sockets, inspecting HIL testbed hardware paths, or writing outside the working directory — the engine raises a structured `{ status, reason, risk_score, proposed_remediation }` payload rather than crashing. In the TUI, blocked operations surface a `BlockConfirmMenu` (`[A] Approve for Session | [S] Run in Laya Sandbox | [C] Cancel`) wired directly into the Ink event loop. Session approvals are cached so the same operation is not re-prompted within a session. Headless pipe mode auto-denies without prompting.
 
@@ -430,19 +430,21 @@ Numeric values are auto-converted. Changes persist in the local settings databas
 
 ## SDLC Workflow
 
-The engine enforces state transitions across six distinct phases:
+The engine enforces state transitions across seven distinct phases, aligned with the AGENTS.md E-P-C-V-D mandate:
 
-1. **`idle`**: Discovery and triage. Mutating file tools are physically masked out. Safety and analysis tools are available on-demand.
+1. **`idle`**: Discovery and triage. Mutating file tools are available. Safety and analysis tools are available on-demand.
 
-2. **`plan`**: Model formulates success criteria and implementation steps (`EnterPlanMode`). No tools available.
+2. **`explore`**: Codebase exploration only. `lib/explore.mjs` drives this phase — the model uses Glob, Grep, and Read to aggregate file summaries before entering planning. Ends when the model outputs `Exploration complete.`
 
-3. **`implement`**: Code changes applied using file editing and shell execution (`ExitPlanMode`).
+3. **`planning`**: Model formulates a plan using exploration summaries (`EnterPlanMode`). Mutating tools are blocked until a plan is approved. No code changes permitted.
 
-4. **`test`**: Automated test generation and execution (`SubmitImplementation`). **After tests pass, all tools marked `mandatory_in: ["test"]` must be run.** The system prompt enforces this — the model cannot declare success until all mandatory safety checkers pass.
+4. **`implement`**: Code changes applied using file editing and shell execution (`ExitPlanMode`). **Gated:** requires both an approved plan and at least one confirmed RED behavioral test result recorded before this phase may begin (AGENTS.md Phase 4).
 
-5. **`verify`**: Inspection of test outputs and coverage verification (`SubmitTest`).
+5. **`test`**: Automated test execution (`SubmitImplementation`). **After tests pass, all tools marked `mandatory_in: ["test"]` must be run.** The system prompt enforces this — the model cannot declare success until all mandatory safety checkers pass.
 
-6. **`done`**: Final sign-off and git commit creation.
+6. **`verify`**: Inspection of test outputs and coverage verification (`SubmitTest`). **Gated:** requires all test results passing and at least one safety checker event recorded.
+
+7. **`done`**: Final sign-off and git commit creation.
 
 ---
 
@@ -568,7 +570,7 @@ node tests/unit/issue22_query_context_behavioral.mjs
 ### 0.2.0
 - Jev-Mem memory architecture (System-1 Laya control plane)
 - Dynamic Tool Rescue (`[TOOL_CALL]` delimiter path)
-- Deterministic 6-phase SDLC workflow
+- Deterministic SDLC workflow (expanded to 7 phases in 0.9.0)
 - Multi-provider switching
 
 ---
