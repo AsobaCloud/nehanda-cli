@@ -44,4 +44,4 @@ jobs:
 
       - name: Publish to npm
         if: steps.version_check.outputs.skip == 'false'
-        run: npm stage publish
+        run: npm publish --access public
