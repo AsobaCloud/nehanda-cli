@@ -71,6 +71,7 @@ const NEHANDA_DIR   = path.join(os.homedir(), '.config', 'nehanda')
 const NEHANDA_DB    = path.join(NEHANDA_DIR, 'ona-session.db')
 const AGENTS_JSON   = path.join(NEHANDA_DIR, 'agents.json')
 const SPLASH_SEEN   = path.join(NEHANDA_DIR, '.splash-seen')
+const LAUNCH_CWD    = process.cwd()
 
 function hasSeenSplash() { try { return fs.existsSync(SPLASH_SEEN) } catch { return false } }
 function markSplashSeen() {
@@ -230,7 +231,7 @@ function SplashScreen({ onDone }) {
     e(Box, { marginTop: 1 }, e(Text, { dimColor: true }, 'press any key to continue…')),
   )
 }
-function WelcomeBanner({ model, endpoint }) {
+function WelcomeBanner({ model, endpoint, cwd = LAUNCH_CWD }) {
   let cols = 80; try { cols = process.stdout.columns || 80 } catch {}
   const bw = Math.min(cols - 2, 80)
   const lw = Math.floor(bw * 0.42), rw = bw - lw - 3
@@ -242,8 +243,9 @@ function WelcomeBanner({ model, endpoint }) {
       e(Box, { flexDirection: 'column', width: rw, paddingLeft: 1, paddingY: 1 },
         e(Text, { bold: true, color: BRAND.accent }, 'Configuration'),
         e(Box, { marginTop: 1, flexDirection: 'column' },
-          e(Text, {}, e(Text, { dimColor: true }, 'Model:    '), e(Text, { color: BRAND.lavender, bold: true }, model || '—')),
-          e(Text, {}, e(Text, { dimColor: true }, 'Endpoint: '), e(Text, { dimColor: true }, endpoint || '—')),
+          e(Text, {}, e(Text, { dimColor: true }, 'Model:     '), e(Text, { color: BRAND.lavender, bold: true }, model || '—')),
+          e(Text, {}, e(Text, { dimColor: true }, 'Endpoint:  '), e(Text, { dimColor: true }, endpoint || '—')),
+          e(Text, {}, e(Text, { dimColor: true }, 'Directory: '), e(Text, { dimColor: true }, cwd || LAUNCH_CWD)),
         ),
         e(Box, { marginTop: 1 }, e(Text, { dimColor: true }, 'Type /help for commands')),
       ),
@@ -493,13 +495,17 @@ function BlockConfirmMenu({ payload, onDecide }) {
       e(Text, {}, ' Cancel')))
 }
 
-function TokenFooter({ calls, model }) {
+function TokenFooter({ calls, model, cwd = LAUNCH_CWD }) {
   const cols = process.stdout.columns || 80
   return e(Box, { flexDirection: 'column' },
     e(Text, { dimColor: true }, '─'.repeat(cols)),
     e(Box, { flexDirection: 'row', paddingX: 1, justifyContent: 'space-between' },
       e(Text, { dimColor: true }, `calls ${calls}`),
-      e(Text, {}, e(Text, { dimColor: true }, 'model: '), e(Text, { color: BRAND.lavender }, model || '—')),
+      e(Box, { flexDirection: 'row' },
+        e(Text, {}, e(Text, { dimColor: true }, 'model: '), e(Text, { color: BRAND.lavender }, model || '—')),
+        e(Text, { dimColor: true }, '  '),
+        e(Text, {}, e(Text, { dimColor: true }, 'dir: '), e(Text, { dimColor: true }, cwd || LAUNCH_CWD)),
+      ),
       e(Text, { dimColor: true }, '? /help  ^C exit')))
 }
 
@@ -588,7 +594,7 @@ function App({ bridge }) {
   return e(Box, { flexDirection: 'column' },
     e(Static, { items: historyItems, key: clearGen },
       (item, i) => item.kind === 'banner'
-        ? e(WelcomeBanner, { key: 'banner', model: modelInfo.model, endpoint: modelInfo.endpoint })
+        ? e(WelcomeBanner, { key: 'banner', model: modelInfo.model, endpoint: modelInfo.endpoint, cwd: LAUNCH_CWD })
         : e(MessageView,   { key: String(i), msg: item })),
     streaming ? e(MessageView, { msg: { role: 'assistant', ...streaming } }) : null,
     (isLoading && (!streaming || !streaming.text)) || spinLabel ? e(Spinner, { label: spinLabel || undefined }) : null,
@@ -599,7 +605,7 @@ function App({ bridge }) {
         : selectState
           ? e(SelectMenu, { title: selectState.title, items: selectState.items, onSelect: handleSelect, onCancel: handleSelectCancel })
           : e(InputArea, { onSubmit: bridge.onSubmit, isLoading }),
-    e(TokenFooter, { calls: callCount, model: modelInfo.model }))
+    e(TokenFooter, { calls: callCount, model: modelInfo.model, cwd: LAUNCH_CWD }))
 }
 
 // ── Diff executor ─────────────────────────────────────────────
