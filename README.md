@@ -1,6 +1,6 @@
 # Nehanda Command-Line Interface (`nehanda-cli`)
 
-An agentic terminal REPL and single-process engine built for energy systems research and software development. `nehanda-cli` connects directly to our flagship [Nehanda v3](https://huggingface.co/asoba/nehanda-v3-27b), normalizes multi-OEM energy telemetry through the ODSE protocol, and enforces a governed development workflow across the full research-to-production lifecycle. It also connects to local or cloud-based Ollama models, LM Studio instances, or any OpenAI-compatible API.
+An agentic terminal REPL and single-process engine built for energy systems research and software development. `nehanda-cli` works with Ollama, LM Studio, OpenRouter, Anthropic Claude, ZhipuAI, or any OpenAI-compatible API — local or cloud. It normalizes multi-OEM energy telemetry through the ODSE protocol and enforces a governed development workflow across the full research-to-production lifecycle.
 
 Every conversation turn, tool call, phase transition, and permission check is stored in a local, queryable SQLite database you own, ensuring complete transcripts exist for auditing and debugging.
 
