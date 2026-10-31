@@ -154,3 +154,15 @@ baseUrl = savedBaseUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434
 `savedBaseUrl` comes from `rt.settings?.model_config?.base_url?.replace(/\/+$/, '')`.
 
 **Behavioral proof:** `tests/unit/test-ollama-llm-call-behavioral.mjs` (OL-1 through OL-7b — mock `/api/show` + mock `/v1/chat/completions` server, real sqlite DB).
+
+---
+
+## Turn Start & Probe Spinner Stabilization (#18, #20)
+
+**Root cause solved:** Prior to #20, `lastSpinLabelRef` in `bin/nehanda-ui.mjs` prevented spitfire *between* tool calls, but on turn start `lastSpinLabelRef.current` remained `null` until the first model completion event or tool start. This created an initial gap window during which `isLoading=true` rendered generic rotating `TOOL_VERBS`.
+
+**Pre-seeding:**
+1. `bridge.onSubmit` calls `bridge.updateSpinner('Analyzing')` immediately upon `bridge.setLoading(true)`, anchoring the spinner label across Laya intent classification and interactive user prompts (`io.ask`).
+2. `runSdlcOpenAICompat` calls `io.spinner.start('Analyzing')` immediately on entry so that `detectOllamaToolSupport` probes (up to 3s) and cold-start model weights loading do not leave the spinner unlabelled or cycling verbs.
+
+**Behavioral proof:** `tests/unit/test-ollama-permission-prompt-behavioral.mjs` (SP-1, SP-2).
