@@ -32,6 +32,9 @@ node tests/unit/ui_legibility_behavioral.mjs
 echo "Running: laya_sidecar_exit_behavioral.mjs"
 node tests/unit/laya_sidecar_exit_behavioral.mjs
 
+echo "Running: laya_warm_load_behavioral.mjs"
+node tests/unit/laya_warm_load_behavioral.mjs
+
 echo "Running: abort_signal_behavioral.mjs"
 node tests/unit/abort_signal_behavioral.mjs
 

@@ -34,14 +34,19 @@ def _ensure_loaded():
         from laya import Router
         _router = Router()
         # Force English checkpoint into memory so warm predict hits ≤50ms path.
-        # Router downloads on first predict; prime with a tiny call.
+        # Router downloads on first predict; prime with noul and choice calls.
         _router.predict(
             "nehanda system-1 warm start",
             {
                 "ready": {
                     "type": "noul",
                     "instructions": "Is the control plane ready?",
-                }
+                },
+                "domain": {
+                    "type": "choice",
+                    "instructions": "Task domain?",
+                    "criteria": {"code_edit": "editing", "other": "other"},
+                },
             },
             model="english",
         )

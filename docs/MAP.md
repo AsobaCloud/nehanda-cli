@@ -166,3 +166,15 @@ baseUrl = savedBaseUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434
 2. `runSdlcOpenAICompat` calls `io.spinner.start('Analyzing')` immediately on entry so that `detectOllamaToolSupport` probes (up to 3s) and cold-start model weights loading do not leave the spinner unlabelled or cycling verbs.
 
 **Behavioral proof:** `tests/unit/test-ollama-permission-prompt-behavioral.mjs` (SP-1, SP-2).
+
+---
+
+## Laya Startup Checkpoint Warming (#21)
+
+**Startup warming contract:** `ensureLayaReady()` in `lib/laya_sidecar.mjs` must call `loadLaya(60_000)` (`method: 'load'`), NOT `pingLaya(60_000)` (`method: 'ping'`).
+- In `laya_worker.py`, `ping` responds immediately with `{"pong": true, "loaded": false}` without loading model weights into memory.
+- `method: 'load'` invokes `_ensure_loaded()`, priming both `noul` and `choice` criteria on `Router` to bring the ~322M parameter checkpoint into MPS/CPU RAM on application startup.
+- `DEFAULT_TIMEOUT_MS` defaults to `250` (configurable via `LAYA_TIMEOUT_MS`), providing safe margin over the warm ~48ms local inference latency.
+- Ensures all subsequent user-turn `classifyUserIntent` calls hit the warm in-memory model, resolving in ≤60ms without exceeding the timeout budget or falling back to degraded heuristics.
+
+**Behavioral proof:** `tests/unit/laya_warm_load_behavioral.mjs` (WL-1, WL-2).

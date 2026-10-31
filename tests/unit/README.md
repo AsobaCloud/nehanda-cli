@@ -104,3 +104,18 @@ Behavioral coverage for the Ollama LLM call dispatch path. Issue #19.
 | OL-6 | No `base_url` in settings, `OLLAMA_BASE_URL` set | Env var URL used, not hardcoded default |
 | OL-7 | `buildSystemPrompt` with non-null `injectedTools` | System prompt contains `MANDATORY` header and ` ```json ` format |
 | OL-7b | `buildSystemPrompt` with `injectedTools=null` | System prompt does NOT contain manual tool format |
+
+---
+
+### laya_warm_load_behavioral.mjs
+
+Behavioral coverage for Laya startup warming and load dispatch. Issue #21.
+
+**Functions under test:** `ensureLayaReady`, `loadLaya`, `layaRequest`
+
+**Test coverage:**
+
+| ID | Scenario | What's verified |
+|----|----------|----------------|
+| WL-1 | `ensureLayaReady` startup sequence | Sends `load` method (not `ping`) and confirms `result.loaded === true` |
+| WL-2 | `loadLaya` weights warming | Loads PyTorch model into memory upfront, allowing warm `predict` to complete within timeout budget |
