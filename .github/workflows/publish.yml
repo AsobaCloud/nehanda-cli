@@ -1,0 +1,40 @@
+name: publish
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'package.json'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # required for OIDC trusted publishing
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Check if version changed
+        id: version_check
+        run: |
+          PUBLISHED=$(npm view @asobacloud/nehanda version 2>/dev/null || echo "0.0.0")
+          LOCAL=$(node -p "require('./package.json').version")
+          echo "published=$PUBLISHED" >> $GITHUB_OUTPUT
+          echo "local=$LOCAL" >> $GITHUB_OUTPUT
+          if [ "$PUBLISHED" = "$LOCAL" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish to npm
+        if: steps.version_check.outputs.skip == 'false'
+        run: npm publish --provenance --access public
