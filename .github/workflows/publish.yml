@@ -22,6 +22,7 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+          scope: '@asobacloud'
 
       - name: Check if version changed
         id: version_check
