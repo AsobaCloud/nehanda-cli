@@ -47,6 +47,9 @@ node tests/unit/provider_key_resolution_behavioral.mjs
 echo "Running: model_wizard_input_behavioral.mjs"
 node tests/unit/model_wizard_input_behavioral.mjs
 
+echo "Running: test-ollama-llm-call-behavioral.mjs"
+node tests/unit/test-ollama-llm-call-behavioral.mjs
+
 echo ""
 echo "===================="
 echo "✓ All unit tests passed!"
