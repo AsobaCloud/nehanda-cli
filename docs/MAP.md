@@ -111,3 +111,46 @@ Reference document for key architectural decisions, module contracts, and follow
 **MCP env parse:** `parseMcpEnvParts` — `list_all` / `list_server` / `set` / `unset` / `usage_error`. Clear requires `unset` or `clear`; bare `<server> <NAME>` is an error with a hint.
 
 **Behavioral proof:** `tests/unit/help_commands_behavioral.mjs`.
+
+---
+
+## Ollama LLM Call Path (#19)
+
+**Entry point:** `runSdlcOpenAICompat` (`lib/orchestrate.mjs:1260`). When `provider === 'ollama'`, the function:
+1. Resolves `baseUrl` from `settings.model_config.base_url` → `OLLAMA_BASE_URL` env var → `http://localhost:11434/v1` (hardcoded default).
+2. Forces `apiKey = 'ollama'` (sent as `Authorization: Bearer ollama`).
+3. Calls `detectOllamaToolSupport(baseUrl, model)` to probe native tool capability.
+4. Passes the result into `toolsForProvider` and `runOpenAICompatPhase`.
+
+### `detectOllamaToolSupport` (`lib/orchestrate.mjs:390`)
+
+**Protocol:** `POST {baseUrl without /v1}/api/show` with `{ name: modelName }`, 3 s timeout.
+
+**Detection logic — native tool support if ANY of:**
+- `data.template` contains `.Tools`
+- `data.modelfile` contains `.Tools`
+- `data.capabilities` array includes `'tools'`
+
+**Failure modes:**
+- Non-ok HTTP response (`!resp.ok`) → defaults to `true` (fail-open, assume native)
+- Network error / timeout → catch block sets `result = true` (fail-open)
+- Result is cached in `ollamaCapabilityCache` (`Map<"baseUrl::model", boolean>`) — only one probe per session per model.
+
+### Tool dispatch modes
+
+| `nativeSupport` | `injectedTools` passed to `runOpenAICompatPhase` | Effect |
+|---|---|---|
+| `true` | `null` | `tools` array sent in request body; system prompt has no manual format |
+| `false` | `allTools` (full list) | `tools` array omitted; system prompt gains `MANDATORY: Tool Calling Format` JSON block |
+
+**`coreOnly` filter (`lib/orchestrate.mjs:364`):** When `provider === 'ollama' && !nativeToolSupport`, `toolsForProvider` filters to `LOCAL_CORE_TOOLS` only (read-only safe set). MCP tools are excluded in this mode.
+
+**`buildSystemPrompt` injection (`lib/orchestrate.mjs:287`):** When `injectedTools` is non-null and non-empty, appends a fenced ` ```json ` block with `{"tool": "ToolName", "input": {...}}` format and a tool name/schema list.
+
+**`OLLAMA_BASE_URL` env var:** Resolution at `lib/orchestrate.mjs:1264`:
+```js
+baseUrl = savedBaseUrl || process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1'
+```
+`savedBaseUrl` comes from `rt.settings?.model_config?.base_url?.replace(/\/+$/, '')`.
+
+**Behavioral proof:** `tests/unit/test-ollama-llm-call-behavioral.mjs` (OL-1 through OL-7b — mock `/api/show` + mock `/v1/chat/completions` server, real sqlite DB).

@@ -78,3 +78,29 @@ To add new unit tests:
 
 - `better-sqlite3`: For in-memory database testing
 - `node:fs`, `node:path`, `node:os`: For file system operations
+
+---
+
+### test-ollama-llm-call-behavioral.mjs
+
+Behavioral coverage for the Ollama LLM call dispatch path. Issue #19.
+
+**Functions under test:** `runOpenAICompatPhase`, `buildSystemPrompt`, `detectOllamaToolSupport` (via HTTP probe mock)
+
+**Fixtures used:**
+- `startOllamaMockServer()` — inline mock handling both `POST /api/show` (capability probe) and `POST /v1/chat/completions` (LLM call)
+- `startMockLlmServer()` from `tests/fixtures/mockLlmServer.mjs` — for pure LLM-call tests
+- `openStore` + `seedConversation` — real sqlite DB with seeded `conversations`/`sessions` rows
+
+**Test coverage:**
+
+| ID | Scenario | What's verified |
+|----|----------|----------------|
+| OL-1 | `/api/show` returns `capabilities:['tools']` | Native `tools` array in request; no `MANDATORY` block in system prompt |
+| OL-2 | `nativeSupport=false` (injectedTools set) | System prompt contains `MANDATORY: Tool Calling Format` and ` ```json ` block |
+| OL-3 | `/api/show` returns HTTP 503 | Fail-open: LLM call proceeds in native mode, no injection |
+| OL-4 | `/api/show` `template` contains `.Tools` | Native tools array sent, no manual injection |
+| OL-5 | `provider='ollama'`, `apiKey='ollama'` | `Authorization: Bearer ollama` header on LLM request |
+| OL-6 | No `base_url` in settings, `OLLAMA_BASE_URL` set | Env var URL used, not hardcoded default |
+| OL-7 | `buildSystemPrompt` with non-null `injectedTools` | System prompt contains `MANDATORY` header and ` ```json ` format |
+| OL-7b | `buildSystemPrompt` with `injectedTools=null` | System prompt does NOT contain manual tool format |
