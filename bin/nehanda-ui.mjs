@@ -527,7 +527,8 @@ function App({ bridge }) {
     const ag = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
     return { model: ag?.model || 'nehanda-rag-synthesis-27b', endpoint: ag?.endpoint || 'https://nehanda-ml.asoba.co/v1' }
   })
-  const lastCtrlCRef = React.useRef(0)
+  const lastCtrlCRef     = React.useRef(0)
+  const lastSpinLabelRef = React.useRef(null)  // #18: retain last explicit label to prevent spitfire between tool calls
   const bannerRef    = React.useRef({ kind: 'banner' })
   const historyItems = React.useMemo(() => [bannerRef.current, ...finalized], [finalized])
 
@@ -539,7 +540,7 @@ function App({ bridge }) {
     bridge.endAssistant   = msg  => { setFinalized(p => [...p, msg]); setStreaming(null); setCallCount(c => c + 1) }
     bridge.clearMessages  = ()   => { setFinalized([]); setStreaming(null); setClearGen(g => g + 1) }
     bridge.setLoading     = v    => setIsLoading(v)
-    bridge.updateSpinner  = text => setSpinLabel(text)
+    bridge.updateSpinner  = text => { if (text !== null) lastSpinLabelRef.current = text; setSpinLabel(text) }
     // HP-1a (#10): unique id per question — AskPrompt is keyed by it, so every
     // new wizard question remounts with an EMPTY input (no key carry-over).
     // opts.secret → the persisted transcript line is masked (HP-1b).
@@ -597,7 +598,14 @@ function App({ bridge }) {
         ? e(WelcomeBanner, { key: 'banner', model: modelInfo.model, endpoint: modelInfo.endpoint, cwd: LAUNCH_CWD })
         : e(MessageView,   { key: String(i), msg: item })),
     streaming ? e(MessageView, { msg: { role: 'assistant', ...streaming } }) : null,
-    (isLoading && (!streaming || !streaming.text)) || spinLabel ? e(Spinner, { label: spinLabel || undefined }) : null,
+    // #18 fix 1: !askState hides Spinner while AskPrompt is shown (permission prompt visible).
+    // #18 fix 2: effectiveSpinLabel uses lastSpinLabelRef fallback when spinLabel=null during
+    //   active loading, preventing snap-back to a random rotating verb between tool calls.
+    (() => {
+      const effectiveSpinLabel = spinLabel ?? (isLoading ? lastSpinLabelRef.current : null)
+      return (!askState && ((isLoading && (!streaming || !streaming.text)) || effectiveSpinLabel))
+        ? e(Spinner, { label: effectiveSpinLabel || undefined }) : null
+    })(),
     askState
       ? e(AskPrompt, { key: askState.id, question: askState.question, onAnswer: handleAnswer, onCancel: handleAskCancel })
       : blockState
