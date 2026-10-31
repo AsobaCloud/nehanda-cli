@@ -272,6 +272,29 @@ await test('SPIN-2: Spinner bridge stop() does not emit null when a last label e
   )
 })
 
+await test('SP-1: onSubmit pre-seeds spinner label to "Analyzing" on turn start', () => {
+  const uiSrc = fs.readFileSync(path.join(ROOT, 'bin/nehanda-ui.mjs'), 'utf-8')
+  const onSubmitIdx = uiSrc.indexOf('bridge.onSubmit = async (text) => {')
+  assert.ok(onSubmitIdx !== -1, 'Could not find bridge.onSubmit in nehanda-ui.mjs')
+  const snippet = uiSrc.slice(onSubmitIdx, onSubmitIdx + 300)
+  assert.ok(
+    snippet.includes("bridge.updateSpinner('Analyzing')") || snippet.includes('bridge.updateSpinner("Analyzing")'),
+    'SP-1 FAIL: bridge.onSubmit must call bridge.updateSpinner("Analyzing") immediately to prevent turn-start spitfire'
+  )
+})
+
+await test('SP-2: runSdlcOpenAICompat sets spinner label to "Analyzing" before Ollama probe', () => {
+  const orchSrc = fs.readFileSync(path.join(ROOT, 'lib/orchestrate.mjs'), 'utf-8')
+  const fnIdx = orchSrc.indexOf('async function runSdlcOpenAICompat(')
+  assert.ok(fnIdx !== -1, 'Could not find runSdlcOpenAICompat in orchestrate.mjs')
+  const snippet = orchSrc.slice(fnIdx, fnIdx + 200)
+  assert.ok(
+    snippet.includes("if (io.spinner) io.spinner.start('Analyzing')") ||
+    snippet.includes('if (io.spinner) io.spinner.start("Analyzing")'),
+    'SP-2 FAIL: runSdlcOpenAICompat must start spinner with "Analyzing" before probe/cold start'
+  )
+})
+
 // ── Summary ──────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed`)

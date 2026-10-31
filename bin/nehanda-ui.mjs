@@ -995,6 +995,7 @@ bridge.onSubmit = async (text) => {
   if (text.startsWith('/')) { await handleCommand(text, bridge); return }
 
   bridge.setLoading(true)
+  bridge.updateSpinner('Analyzing')
   const controller = new AbortController()
   bridge.abortCurrent = () => controller.abort()
   let lastPartial = ''
