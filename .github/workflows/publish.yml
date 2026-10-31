@@ -22,9 +22,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '22.14'
           registry-url: 'https://registry.npmjs.org'
           scope: '@asobacloud'
+
+      - name: Upgrade npm
+        run: npm install -g npm@12
 
       - name: Check if version changed
         id: version_check
@@ -41,4 +44,4 @@ jobs:
 
       - name: Publish to npm
         if: steps.version_check.outputs.skip == 'false'
-        run: npm publish --provenance --access public
+        run: npm stage publish

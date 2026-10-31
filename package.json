@@ -2,6 +2,10 @@
   "name": "@asobacloud/nehanda",
   "version": "0.9.1",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AsobaCloud/nehanda-cli.git"
+  },
   "description": "Agentic terminal REPL and single-process engine for governed AI deep research and software development. Connects to Nehanda v3, OpenRouter, Ollama, LM Studio, ZhipuAI, or any OpenAI-compatible API. Includes Laya System-1 control plane for memory management, pre-execution safety gating, and intent-driven instruction shaping.",
   "keywords": [
     "ai",
