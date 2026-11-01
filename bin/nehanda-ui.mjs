@@ -540,7 +540,10 @@ function App({ bridge }) {
     bridge.endAssistant   = msg  => { setFinalized(p => [...p, msg]); setStreaming(null); setCallCount(c => c + 1) }
     bridge.clearMessages  = ()   => { setFinalized([]); setStreaming(null); setClearGen(g => g + 1) }
     bridge.setLoading     = v    => setIsLoading(v)
-    bridge.updateSpinner  = text => { if (text !== null) lastSpinLabelRef.current = text; setSpinLabel(text) }
+    // #23: Don't save 'Thinking' to lastSpinLabelRef — it's the generic sentinel
+    // that triggers TOOL_VERBS rotation in the Spinner component. Saving it
+    // defeats the fallback when the orchestrator sends 'Thinking' between iterations.
+    bridge.updateSpinner  = text => { if (text !== null && text !== 'Thinking') lastSpinLabelRef.current = text; setSpinLabel(text) }
     // HP-1a (#10): unique id per question — AskPrompt is keyed by it, so every
     // new wizard question remounts with an EMPTY input (no key carry-over).
     // opts.secret → the persisted transcript line is masked (HP-1b).
