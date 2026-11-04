@@ -218,8 +218,8 @@ function WelcomeBanner({ model, endpoint, cwd = LAUNCH_CWD }) {
         e(Text, { bold: true, color: BRAND.accent }, 'Configuration'),
         e(Box, { marginTop: 1, flexDirection: 'column' },
           e(Text, {}, e(Text, { dimColor: true }, 'Model:     '), e(Text, { color: BRAND.lavender, bold: true }, model || '—')),
-          e(Text, {}, e(Text, { dimColor: true }, 'Endpoint:  '), e(Text, { dimColor: true }, endpoint || '—')),
-          e(Text, {}, e(Text, { dimColor: true }, 'Directory: '), e(Text, { dimColor: true }, cwd || LAUNCH_CWD)),
+          e(Text, {}, e(Text, {}, 'Endpoint:  '), e(Text, {}, endpoint || '—')),
+          e(Text, {}, e(Text, {}, 'Directory: '), e(Text, {}, cwd || LAUNCH_CWD)),
         ),
         e(Box, { marginTop: 1 }, e(Text, { dimColor: true }, 'Type /help for commands')),
       ),
@@ -739,7 +739,7 @@ async function handleCommand(cmd, bridge) {
   if (name === '/help') {
     const pad = Math.max(...TUI_SLASH_COMMANDS.map(c => c.name.length), 12) + 2
     const body = TUI_SLASH_COMMANDS.map(c =>
-      `  ${chalk.hex(BRAND.accent)(c.name.padEnd(pad))}${chalk.dim(c.desc)}`
+      `  ${chalk.hex(BRAND.accent)(c.name.padEnd(pad))}${c.desc}`
     ).join('\n')
     bridge.addMessage({ role: 'system', text: `\nCommands:\n\n${body}\n` })
     return
@@ -753,10 +753,10 @@ async function handleCommand(cmd, bridge) {
     bridge.addMessage({ role: 'system', text: [
       '', `  Provider:          ${chalk.hex(BRAND.accent)(mc?.provider || '—')}`,
       `  Model:             ${chalk.hex(BRAND.accent)(ag?.model || mc?.custom_model_name || '—')}`,
-      `  Endpoint:          ${chalk.dim(ag?.endpoint || mc?.base_url || '—')}`,
+      `  Endpoint:          ${ag?.endpoint || mc?.base_url || '—'}`,
       `  Nehanda key:       ${readApiKey() ? chalk.green('set') : chalk.hex(BRAND.red)('not set')}`,
-      `  OpenAI-compat key: ${compatKeySet ? chalk.green('set') : chalk.dim('not set')}`,
-      `  Zhipu key:         ${zhipuKeySet  ? chalk.green('set') : chalk.dim('not set')}`,
+      `  OpenAI-compat key: ${compatKeySet ? chalk.green('set') : chalk.red('not set')}`,
+      `  Zhipu key:         ${zhipuKeySet  ? chalk.green('set') : chalk.red('not set')}`,
       `  ${chalk.dim('Use /model to configure provider, key, host, and model in one flow.')}`, '',
     ].join('\n') })
     return

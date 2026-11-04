@@ -73,6 +73,9 @@ node tests/unit/odse_normalization_behavioral.mjs
 echo "Running: jev_anchor_retrieval_behavioral.mjs"
 node tests/unit/jev_anchor_retrieval_behavioral.mjs
 
+echo "Running: color_contrast_behavioral.mjs"
+node tests/unit/color_contrast_behavioral.mjs
+
 python3 tests/unit/tui_usability_behavioral.py --without-sandbox
 
 echo "✓ All unit tests passed!"
