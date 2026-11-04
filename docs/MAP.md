@@ -270,3 +270,53 @@ bridge.abortCurrent = () => {
 `bridge.updateSpinner` is synchronous (it calls React's `setSpinLabel`), so the label change appears on the next render tick — before the abort has had time to unwind the HTTP stack.
 
 **Behavioral proof:** `tests/unit/issue22_query_context_behavioral.mjs` (QC-1 through QC-9).
+
+---
+
+## TUI session bootstrap (#25)
+
+The Ink entrypoint opens `~/.config/nehanda/ona-session.db` through `openStore` in `lib/store.mjs`, reusing `schema.sql`, foreign-key enforcement, and incremental migrations. It does not maintain a separate partial schema.
+
+Before each model turn, `bridge.onSubmit` registers the conversation and session together through `withTransaction`. The session identifier is the conversation identifier (`bridge.convId`); inserts are idempotent. `/clear` changes that identifier, and the next model turn registers the new pair before transcript or memory writes. Existing transcript rows are retained.
+
+Behavioral proof: `tests/unit/tui_usability_behavioral.py`, scenarios `test_startup_1_fresh_database_completes_a_turn`, `test_startup_2_existing_database_completes_a_turn`, and `test_startup_3_clear_registers_a_new_session`.
+
+---
+
+## TUI provider credential routing and secret input (#25)
+
+The configure wizard persists the selected `provider` alongside `model` and `endpoint` in `agents.json`. `modelConfigFromAgent` honors that provider; older entries without it retain endpoint/model inference. Its optional `resolveApiKey(provider)` callback selects credentials after provider resolution; callers using the existing explicit `apiKey` option retain that behavior when no callback is supplied.
+
+The TUI passes its existing `readApiKey` helper as that callback at boot and on each turn. Nehanda reads the active agent's Nehanda key or `NEHANDA_API_KEY`; OpenAI-compatible providers use `resolveOpenAiCompatKey`; Zhipu uses `resolveZhipuApiKey`; Ollama uses its nonsecret placeholder; LM Studio uses no key. An absent provider key never falls back to a Nehanda key.
+
+Secret wizard input is masked while typing and after submission. `redactSensitiveCommand` reuses `maskSecretAnswer` for inline `/key` values and `/mcp env` assignments. The input masks credential-bearing commands and their finalized echo is redacted; handlers receive the original value for saving. The redactor leaves nonsecret commands, including MCP env unset/clear, unchanged.
+
+Behavioral proof: `tests/unit/model-config-from-agent_behavioral.mjs` (`AUTH-2` through `AUTH-4`) and `tests/unit/tui_usability_behavioral.py` (`test_auth_1_next_turn_uses_compatible_key`, `test_auth_5_wizard_provider_survives_restart`, `test_secret_1_typing_is_masked`, `test_secret_2_inline_key_echo_is_redacted`, `test_secret_3_inline_key_typing_is_masked`, `test_secret_4_mcp_assignment_echo_is_redacted`).
+
+---
+
+## TUI progress, tool-result tables, and keyboard input (#25)
+
+The turn I/O adapter supplies `spinner.update` to the existing reasoning-stream callback. `bridge.setLoading(false)` clears both the rendered spinner label and retained-label reference, so completion, cancellation, and failure return to idle. Reasoning text remains outside assistant output.
+
+The TUI `onToolResult` passes the complete result to the existing `formatToolResult` table renderer. Its optional fourth argument supplies the already bounded 120-character plain preview; existing callers keep the default 80-character preview. Successful object-array JSON uses the existing 10-row cap, total count, and overflow note; errors and invalid/nonarray payloads use the preview. Duration/line-count suffixes remain appended.
+
+`InputArea` owns completion selection and draft-preserving recall. Up/Down navigates visible slash suggestions; Tab completes the selected suggestion (or first match), while Enter completes an explicit selection before a second Enter submits. Esc dismisses suggestions. Completion strips required/optional argument placeholders and leaves a space for arguments. When suggestions are closed, Up/Down navigates `bridge.inputHistory`, a process-local 100-entry ring populated by `bridge.onSubmit`. Consecutive duplicates and commands identified by `redactSensitiveCommand` are excluded. Draft text is restored when navigating down past the newest history entry; editing a recalled item starts a new draft.
+
+Behavioral proof: `tests/unit/tui_usability_behavioral.py` (`test_spin_1`, `test_spin_2`, `test_table_1`, and `test_input_1` through `test_input_11` method prefixes); `tests/unit/gap2_output_formatting_behavioral.mjs` (`OF-1` through `OF-8`).
+
+---
+
+## Local Docker sandbox execution (#25)
+
+`toolBash` routes only the explicit `sandbox` decision to `runSandboxedCommand` in `lib/sandbox.mjs`. Host-approved/allowed commands keep their existing path. `executeToolUses` passes `rt.signal` into the tool context and rechecks cancellation after tool completion, so both provider paths unwind a cancelled sandbox turn instead of treating it as successful model output.
+
+The backend resolves the selected Docker endpoint, requires a local `unix://` socket, and pins subsequent CLI operations to that socket. It never forwards host environment values into the container. The default local image is `nehanda-sandbox:node22`, built from `lib/sandbox/Dockerfile`; `NEHANDA_SANDBOX_IMAGE` may select another prebuilt local image. `--pull=never` prevents implicit runtime downloads. A custom image remains subject to the same nonroot/network/filesystem/resource restrictions.
+
+The trusted host helper `lib/scripts/sandbox-snapshot.py` runs under isolated Python (`-I`). It anchors traversal to directory descriptors, refuses symlink traversal, skips special files and conventional credential/dependency/cache paths, preserves executable status, and enforces 256 MiB / 10,000 entries / depth 64 limits. Source directories are never mounted. Only the filtered temporary copy is mounted read-only at `/snapshot`; it is copied into a writable tmpfs at `/workspace`. No changes are copied back.
+
+Containers run with networking disabled, uid/gid 65534, read-only root, all capabilities dropped, no new privileges, 128-process/1-GiB/1-CPU limits, a 512-MiB workspace tmpfs and a 64-MiB noexec `/tmp`. The entrypoint copies and makes only the private workspace writable, then invokes Bash with the requested command as an argv value, never via a host shell. Host paths, Docker sockets, devices, and host process namespaces are not mounted/shared.
+
+The command timeout covers context resolution, snapshot construction, creation, and execution (default 120 s; maximum 600 s). The runner captures up to 1 MiB per output stream, inspects `.State.ExitCode`, and returns `{content,is_error,sandbox,sandboxId,exitCode,newCwd:null}`. The transcript's ordinary tool-result content includes the actual exit status; no schema migration is needed. Abort/timeout/failure is an error; missing runtime/image never triggers host execution. Named/labelled owned containers and snapshots are cleaned in finally; cleanup errors are prepended to the result and force `is_error:true`.
+
+Behavioral proof: `tests/unit/sandbox_execution_behavioral.mjs` (`SB-1` through `SB-14`) and the two `test_sandbox_` methods in `tests/unit/tui_usability_behavioral.py`. `npm run test:sandbox` is the required real-container gate. Ordinary `test:unit` invokes the core terminal cases with `--without-sandbox`, without claiming sandbox validation.

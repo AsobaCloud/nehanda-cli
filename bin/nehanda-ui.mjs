@@ -28,7 +28,7 @@ import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfi
 import { getMcpServer, closeAllMcpServers, listMcpServers, mcpListResources } from '../lib/mcp.mjs'
 import { invalidateMcpToolCache } from '../lib/tools.mjs'
 import { saveOpenAiCompatKey, resolveOpenAiCompatKey, saveSecureCredentials, resolveZhipuApiKey } from '../lib/auth.mjs'
-import { TOOL_VERBS, verbForTool, summarizeToolArgs, formatToolResultSuffix, maskSecretAnswer } from '../lib/ui.mjs'
+import { TOOL_VERBS, verbForTool, summarizeToolArgs, formatToolResultSuffix, formatToolResult, maskSecretAnswer, redactSensitiveCommand } from '../lib/ui.mjs'
 import {
   PICKER_THRESHOLD,
   createAskIdSequencer,
@@ -36,7 +36,7 @@ import {
   filterModelItems,
   visibleWindow,
 } from '../lib/modelPicker.mjs'
-import Database from 'better-sqlite3'
+import { openStore, withTransaction } from '../lib/store.mjs'
 import { ensureLayaReady } from '../lib/laya_sidecar.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -86,7 +86,11 @@ function readAgents() {
 }
 
 /** Nehanda API key: stored in agents.json api_key or NEHANDA_API_KEY env var. */
-function readApiKey() {
+function readApiKey(provider = 'nehanda') {
+  if (provider === 'openai_compatible') return resolveOpenAiCompatKey()
+  if (provider === 'zhipu') return resolveZhipuApiKey()
+  if (provider === 'ollama') return 'ollama'
+  if (provider !== 'nehanda') return ''
   const data  = readAgents()
   const agent = data.agents?.find(a => a.name === data.default_agent) || data.agents?.[0]
   return agent?.api_key || process.env.NEHANDA_API_KEY || ''
@@ -106,38 +110,8 @@ function writeApiKey(key) {
 }
 
 // ── Session DB bootstrap ─────────────────────────────────────
-fs.mkdirSync(NEHANDA_DIR, { recursive: true })
-const sessionDb = new Database(NEHANDA_DB)
+const sessionDb = openStore(NEHANDA_DB)
 const { content: onaInstructionsContent } = loadInstructions(process.cwd())
-sessionDb.exec(`
-  CREATE TABLE IF NOT EXISTS conversations(
-    id TEXT PRIMARY KEY, project_dir TEXT,
-    phase TEXT DEFAULT 'idle',
-    last_active TEXT DEFAULT (datetime('now'))
-  );
-  CREATE TABLE IF NOT EXISTS transcript_entries(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL, sequence INTEGER NOT NULL,
-    entry_type TEXT NOT NULL, payload_json TEXT NOT NULL,
-    tool_use_id TEXT, created_at TEXT DEFAULT (datetime('now'))
-  );
-  CREATE TABLE IF NOT EXISTS plans(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id TEXT NOT NULL, content TEXT,
-    hash TEXT, status TEXT DEFAULT 'draft', approved_at TEXT
-  );
-  CREATE TABLE IF NOT EXISTS events(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id TEXT NOT NULL,
-    event_type TEXT NOT NULL, detail TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-  CREATE TABLE IF NOT EXISTS summaries(
-    conversation_id TEXT PRIMARY KEY,
-    content TEXT, word_count INTEGER,
-    updated_at TEXT DEFAULT (datetime('now'))
-  );
-`)
 
 // ── Markdown ─────────────────────────────────────────────────
 marked.setOptions({
@@ -282,29 +256,80 @@ function Spinner({ label }) {
     : label
   return e(Box, { marginLeft: 1 }, e(Text, { color: BRAND.accent }, SPINNER_FRAMES[frame % SPINNER_FRAMES.length] + ' '), e(Text, { dimColor: true }, verb + '…'))
 }
-function SlashMenu({ filter }) {
+function SlashMenu({ filter, selected = -1 }) {
   const matches = filterSlashAutocomplete(filter)
   if (!matches.length) return null
   const pad = Math.min(36, Math.max(...matches.map(c => c.name.length), 12) + 1)
   return e(Box, { flexDirection: 'column', marginLeft: 2 },
     ...matches.map((c, i) => e(Box, { key: String(i) },
-      e(Text, { color: BRAND.accent }, c.name.padEnd(pad)), e(Text, { dimColor: true }, c.desc))))
+      e(Text, { color: BRAND.accent }, (i === selected ? '❯ ' : '  ') + c.name.padEnd(pad)),
+      e(Text, { dimColor: true }, c.desc))),
+    e(Text, { dimColor: true }, '↑↓ select · Tab/Enter complete · Esc close'))
 }
-function InputArea({ onSubmit, isLoading }) {
+function InputArea({ onSubmit, isLoading, history = [] }) {
   const [value, setValue] = React.useState('')
-  // Show slash menu for top-level (`/m`) and while typing known parents (`/mcp `, `/key o`)
-  const showMenu = value.startsWith('/') && (
+  const [selected, setSelected] = React.useState(-1)
+  const [menuClosed, setMenuClosed] = React.useState(false)
+  const [inputRevision, setInputRevision] = React.useState(0)
+  const historyIndex = React.useRef(history.length)
+  const draft = React.useRef('')
+  React.useEffect(() => { historyIndex.current = history.length }, [history])
+  const matches = filterSlashAutocomplete(value)
+  const sensitive = redactSensitiveCommand(value) !== value
+  const showMenu = !menuClosed && !sensitive && matches.length > 0 && value.startsWith('/') && (
     !value.includes(' ')
     || /^\/(mcp|key)(\s|$)/i.test(value)
   )
-  const handleSubmit = React.useCallback(v => { if (!v.trim()) return; setValue(''); onSubmit(v.trim()) }, [onSubmit])
+  const complete = item => {
+    if (!item) return
+    const command = item.name.split(' <')[0].split(' [')[0]
+    setValue(command + (command === item.name ? '' : ' '))
+    setInputRevision(r => r + 1)
+    setSelected(-1)
+    setMenuClosed(true)
+    historyIndex.current = history.length
+  }
+  const handleChange = next => {
+    setValue(next)
+    setSelected(-1)
+    setMenuClosed(false)
+    historyIndex.current = history.length
+    draft.current = next
+  }
+  const handleSubmit = v => {
+    if (showMenu && selected >= 0) { complete(matches[selected]); return }
+    if (!v.trim()) return
+    setValue('')
+    setSelected(-1)
+    setMenuClosed(false)
+    draft.current = ''
+    onSubmit(v.trim())
+  }
+  useInput((_input, key) => {
+    if (isLoading) return
+    if (key.escape) { setMenuClosed(true); setSelected(-1); return }
+    if (key.tab && showMenu) { complete(matches[Math.max(0, selected)]); return }
+    if (!key.upArrow && !key.downArrow) return
+    if (showMenu) {
+      const step = key.downArrow ? 1 : -1
+      setSelected(i => i < 0 ? (step > 0 ? 0 : matches.length - 1) : (i + step + matches.length) % matches.length)
+      return
+    }
+    if (!history.length) return
+    if (historyIndex.current === history.length) draft.current = value
+    historyIndex.current = Math.max(0, Math.min(history.length, historyIndex.current + (key.upArrow ? -1 : 1)))
+    setValue(historyIndex.current === history.length ? draft.current : history[historyIndex.current])
+    setInputRevision(r => r + 1)
+    setMenuClosed(true)
+    setSelected(-1)
+  })
   if (isLoading) return e(Box, { paddingX: 1 }, e(Text, { dimColor: true }, 'esc to cancel'))
   return e(Box, { flexDirection: 'column' },
-    showMenu ? e(SlashMenu, { filter: value }) : null,
+    showMenu ? e(SlashMenu, { filter: value, selected }) : null,
     e(Box, { paddingX: 1 }, e(Text, { bold: true, color: BRAND.accent }, '❯ '),
-      e(TextInput, { value, onChange: setValue, onSubmit: handleSubmit })))
+      e(TextInput, { key: inputRevision, value, mask: sensitive ? '•' : undefined, onChange: handleChange, onSubmit: handleSubmit })))
 }
-function AskPrompt({ question, onAnswer, onCancel }) {
+function AskPrompt({ question, secret = false, onAnswer, onCancel }) {
   const [value, setValue] = React.useState('')
   // Defense-in-depth for HP-1a (#10): if this instance ever re-renders with a
   // new question (fiber reuse), the typed value must not carry over.
@@ -313,7 +338,7 @@ function AskPrompt({ question, onAnswer, onCancel }) {
   return e(Box, { flexDirection: 'column' },
     e(Box, { marginLeft: 1 }, e(Text, { dimColor: true }, question)),
     e(Box, { paddingX: 1 }, e(Text, { color: BRAND.accent }, '❯ '),
-      e(TextInput, { value, onChange: setValue, onSubmit: React.useCallback(v => onAnswer(v.trim()), [onAnswer]) })),
+      e(TextInput, { value, mask: secret ? '•' : undefined, onChange: setValue, onSubmit: React.useCallback(v => onAnswer(v.trim()), [onAnswer]) })),
     e(Box, { marginLeft: 1 }, e(Text, { dimColor: true }, 'Esc cancel')))
 }
 // ── Model Picker (large lists, #10 / HP-2) ───────────────────
@@ -486,11 +511,12 @@ function BlockConfirmMenu({ payload, onDecide }) {
           e(Text, { dimColor: true }, 'Remediation: '),
           e(Text, { dimColor: true }, remediation))
       : null,
+    e(Box, { paddingX: 1 }, e(Text, { dimColor: true }, 'Disposable copy; no network; file changes are discarded.')),
     e(Box, { paddingX: 1, marginTop: 1 },
       e(Text, { bold: true, color: BRAND.accent }, '[A]'),
       e(Text, {}, ' Approve for Session  '),
       e(Text, { bold: true, color: BRAND.lavender }, '[S]'),
-      e(Text, {}, ' Run in Laya Sandbox  '),
+      e(Text, {}, ' Run in Docker Sandbox  '),
       e(Text, { bold: true, color: BRAND.dim }, '[C]'),
       e(Text, {}, ' Cancel')))
 }
@@ -539,7 +565,10 @@ function App({ bridge }) {
     bridge.discardAssistant=()   => setStreaming(null)
     bridge.endAssistant   = msg  => { setFinalized(p => [...p, msg]); setStreaming(null); setCallCount(c => c + 1) }
     bridge.clearMessages  = ()   => { setFinalized([]); setStreaming(null); setClearGen(g => g + 1) }
-    bridge.setLoading     = v    => setIsLoading(v)
+    bridge.setLoading     = v    => {
+      setIsLoading(v)
+      if (!v) { setSpinLabel(null); lastSpinLabelRef.current = null }
+    }
     // #23: Don't save 'Thinking' to lastSpinLabelRef — it's the generic sentinel
     // that triggers TOOL_VERBS rotation in the Spinner component. Saving it
     // defeats the fallback when the orchestrator sends 'Thinking' between iterations.
@@ -574,7 +603,7 @@ function App({ bridge }) {
   const handleSelectCancel = React.useCallback(() => { selectState?.resolve(null); setSelectState(null) }, [selectState])
   const handleBlock = React.useCallback(decision => {
     if (blockState?.resolve) {
-      const label = decision === 'approve' ? '✓ Approved for session' : decision === 'sandbox' ? '⚙ Running in sandbox' : '✗ Cancelled'
+      const label = decision === 'approve' ? '✓ Approved for session' : decision === 'sandbox' ? '⚙ Preparing Docker sandbox' : '✗ Cancelled'
       setFinalized(p => [...p, { role: 'system', text: `  ${label}` }])
       blockState.resolve(decision)
     }
@@ -610,12 +639,12 @@ function App({ bridge }) {
         ? e(Spinner, { label: effectiveSpinLabel || undefined }) : null
     })(),
     askState
-      ? e(AskPrompt, { key: askState.id, question: askState.question, onAnswer: handleAnswer, onCancel: handleAskCancel })
+      ? e(AskPrompt, { key: askState.id, question: askState.question, secret: askState.secret, onAnswer: handleAnswer, onCancel: handleAskCancel })
       : blockState
         ? e(BlockConfirmMenu, { payload: blockState.payload, onDecide: handleBlock })
         : selectState
           ? e(SelectMenu, { title: selectState.title, items: selectState.items, onSelect: handleSelect, onCancel: handleSelectCancel })
-          : e(InputArea, { onSubmit: bridge.onSubmit, isLoading }),
+          : e(InputArea, { onSubmit: bridge.onSubmit, isLoading, history: bridge.inputHistory }),
     e(TokenFooter, { calls: callCount, model: modelInfo.model, cwd: LAUNCH_CWD }))
 }
 
@@ -676,13 +705,14 @@ async function runUiConfigureWizard(bridge, opts = {}) {
           data.agents.push(ag)
           data.default_agent = ag.name
         }
+        ag.provider = cfg.provider
         ag.model = cfg.model
         ag.endpoint = cfg.endpoint
         if (cfg.provider === 'nehanda' && cfg.apiKey) ag.api_key = cfg.apiKey
         fs.writeFileSync(AGENTS_JSON, JSON.stringify(data, null, 2), 'utf8')
         runtimeSettings.model_config = cfg.model_config || modelConfigFromAgent(
-          { model: cfg.model, endpoint: cfg.endpoint },
-          { apiKey: cfg.apiKey || readApiKey() },
+          { provider: cfg.provider, model: cfg.model, endpoint: cfg.endpoint },
+          { apiKey: cfg.apiKey || '' },
         )
       },
     }, opts)
@@ -973,6 +1003,7 @@ async function handleCommand(cmd, bridge) {
 const bridge = {
   convId:          `nehanda-${Date.now()}`,
   lastFailedText:  null,
+  inputHistory:    [],
 }
 
 // ── Runtime settings — shared across turns ───────────────────
@@ -985,7 +1016,7 @@ const _bootAgent = (() => {
 })()
 const runtimeSettings = {
   model_config: modelConfigFromAgent(_bootAgent, {
-    apiKey: readApiKey(),
+    resolveApiKey: readApiKey,
     defaultEndpoint: process.env.NEHANDA_BASE_URL || 'https://nehanda-ml.asoba.co/v1',
   }),
   permissions: { defaultMode: 'default' },
@@ -994,7 +1025,11 @@ const runtimeSettings = {
 applyMcpConfig(runtimeSettings, process.cwd())
 
 bridge.onSubmit = async (text) => {
-  bridge.addMessage({ role: 'user', text })
+  const shown = redactSensitiveCommand(text)
+  if (shown === text && bridge.inputHistory.at(-1) !== text) {
+    bridge.inputHistory = [...bridge.inputHistory.slice(-99), text]
+  }
+  bridge.addMessage({ role: 'user', text: shown })
   if (text.startsWith('/')) { await handleCommand(text, bridge); return }
 
   bridge.setLoading(true)
@@ -1012,15 +1047,20 @@ bridge.onSubmit = async (text) => {
     const agentsData = readAgents()
     const agent      = agentsData.agents?.find(a => a.name === agentsData.default_agent) || agentsData.agents?.[0]
     const modelConfig = modelConfigFromAgent(agent, {
-      apiKey: readApiKey(),
+      resolveApiKey: readApiKey,
       defaultEndpoint: process.env.NEHANDA_BASE_URL || 'https://nehanda-ml.asoba.co/v1',
     })
     runtimeSettings.model_config = modelConfig
 
-    // Ensure conversation row exists for this convId
-    sessionDb.prepare(
-      `INSERT OR IGNORE INTO conversations(id, project_dir, phase) VALUES (?, ?, 'idle')`
-    ).run(bridge.convId, process.cwd())
+    // Register both records before transcript and memory writes (#25).
+    withTransaction(sessionDb, () => {
+      sessionDb.prepare(
+        `INSERT OR IGNORE INTO conversations(id, project_dir, phase) VALUES (?, ?, 'idle')`
+      ).run(bridge.convId, process.cwd())
+      sessionDb.prepare(
+        `INSERT OR IGNORE INTO sessions(session_id, conversation_id) VALUES (?, ?)`
+      ).run(bridge.convId, bridge.convId)
+    })
 
     const rt = {
       sessionId:       bridge.convId,
@@ -1056,6 +1096,7 @@ bridge.onSubmit = async (text) => {
       println(msg)            { if (!aborted) bridge.addMessage({ role: 'system', text: '  ' + msg }) },
       spinner: {
         start: label => bridge.updateSpinner(label),
+        update: label => { if (!aborted) bridge.updateSpinner(label) },
         stop:  ()    => bridge.updateSpinner(null),
       },
       ask:                    bridge.ask,
@@ -1072,7 +1113,7 @@ bridge.onSubmit = async (text) => {
         if (aborted) return
         const preview = String(c || '').slice(0, 120).replace(/\n/g, ' ')
         const suffix = formatToolResultSuffix(name, c, { startedAt: toolStarts.get(name), args: lastToolArgs.get(name) })
-        bridge.addMessage({ role: 'system', text: `  ${err ? '✗' : '✓'} ${name}: ${preview}${suffix}` })
+        bridge.addMessage({ role: 'system', text: formatToolResult(name, String(c || ''), err, { preview }) + suffix })
         bridge.updateSpinner(null)
       },
     }

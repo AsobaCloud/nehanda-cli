@@ -76,7 +76,35 @@ Shortcuts:
 - `/key openrouter sk-…` — saves the key, then continues into the same host → discover → model steps
 - `/config` — read-only status (provider, model, endpoint, which keys are set)
 
+Provider selection is retained across turns and restarts, including custom hosts. The TUI selects credentials for that provider; a missing key does not borrow the Nehanda key. Wizard secrets are masked during entry. Inline `/key` values and `/mcp env` assignments are masked during entry and redacted in the conversation display; their actual values are saved by the command handler.
+
 Local Ollama / LM Studio: pick that provider in `/model`, accept or edit the host, then choose from the discovered catalog (or enter a custom name if discovery fails).
+
+---
+
+## Docker sandbox setup
+
+The safety menu's **S** option executes the command in a local Docker container against a disposable project copy. Networking is disabled, host credentials are not forwarded, and file changes are discarded. Execution uses a nonroot user, a read-only container root, dropped capabilities, and CPU/memory/process limits. **A** continues to mean approval for execution on the host; **C** cancels.
+
+Build the development image once from this repository root (Docker must be running):
+
+```bash
+docker build -t nehanda-sandbox:node22 -f lib/sandbox/Dockerfile lib/sandbox
+```
+
+The image provides Node 22, Python 3, Git, and Bash. Image construction downloads its base/packages; sandbox commands themselves have no network. Runtime execution never pulls an image automatically. `NEHANDA_SANDBOX_IMAGE` can select an already-built local development image. The backend accepts only a local Docker Unix socket, not a remote Docker endpoint. Host Python 3 is required for the project snapshot.
+
+The snapshot skips symlinks and special files, Git metadata, common credential/configuration paths (`.env`/`.env.*`, `.ssh`, `.aws`, `.azure`, `.config`, `.ona`, `.nehanda`, `.gnupg`, `.kube`, `.docker`, `.npmrc`, `.pypirc`, `.netrc`, `.pem` and `.key` files), and dependency/cache directories (`node_modules`, `.venv`, `venv`, `.cache`, `.pytest_cache`, `__pycache__`). It is limited to 256 MiB, 10,000 entries, and depth 64. Project-specific dependencies must be available in a prepared image or the copied source; the sandbox does not install them or include Git history.
+
+The sandbox inspects the actual exit code and returns stdout/stderr with bounded output. Esc, timeout, missing Docker/image, copy failure, or runtime failure returns an error and never falls back to host execution. Owned containers and project copies are removed; cleanup failures are reported as errors. The TUI does not change the host working directory for a sandbox command.
+
+Run the required real-container acceptance gate after building the image:
+
+```bash
+npm run test:sandbox
+```
+
+`npm run test:unit` runs the core TUI suite without Docker cases. `npm run test:sandbox` runs 14 real-tool scenarios and both actual-terminal sandbox menu/cancellation scenarios; Docker absence is a failure in that gate, not a skipped or passing isolation result.
 
 ---
 
@@ -96,13 +124,13 @@ Local Ollama / LM Studio: pick that provider in `/model`, accept or edit the hos
 
 * **Deterministic SDLC Workflow:** Enforces a 7-phase state machine (`idle` → `explore` → `planning` → `test` → `implement` → `test` → `verify` → `done`) following the AGENTS.md TDD mandate. Transitions are gated: `planning → implement` is blocked until an approved plan exists and at least one RED behavioral test is recorded; `test → verify` requires all tests passing and safety checkers clean.
 
-* **Interactive Safety Interventions:** When execution checkers flag a command — opening local sockets, inspecting HIL testbed hardware paths, or writing outside the working directory — the engine raises a structured `{ status, reason, risk_score, proposed_remediation }` payload rather than crashing. In the TUI, blocked operations surface a `BlockConfirmMenu` (`[A] Approve for Session | [S] Run in Laya Sandbox | [C] Cancel`) wired directly into the Ink event loop. Session approvals are cached so the same operation is not re-prompted within a session. Headless pipe mode auto-denies without prompting.
+* **Interactive Safety Interventions:** When execution checkers flag a command — opening local sockets, inspecting HIL testbed hardware paths, or writing outside the working directory — the engine raises a structured `{ status, reason, risk_score, proposed_remediation }` payload rather than crashing. In the TUI, blocked operations surface a `BlockConfirmMenu` (`[A] Approve for Session | [S] Run in Docker Sandbox | [C] Cancel`) wired directly into the Ink event loop. Session approvals are cached so the same operation is not re-prompted within a session. Headless pipe mode auto-denies without prompting.
 
   **Laya second-stage gate (Gap A, #4):** For `medium-risk` blocked commands, a Laya `noul` question (`is_safe_to_auto_approve`) runs before raising `BlockConfirmMenu`. If Laya returns `≥ 0.85` confidence the command is benign, it is auto-approved and cached without operator prompt. `high-risk` commands always bypass Laya and go directly to `BlockConfirmMenu`. Degraded Laya falls through to existing behavior — no regression. Implementation uses a flag variable (`layaAutoApproved`) rather than extracting the bash execution path into a named helper; see `docs/MAP.md §Gap A` for rationale.
 
 * **Runtime Visibility:** `RuntimeHealthMonitor` probes active inference endpoints (1s HEAD request) and checks Laya sidecar liveness before each session. The TUI status header shows active model, endpoint health and latency, sidecar PID, and context usage percentage — so researchers have immediate visual confirmation of whether the target backend is an internal local host or an external cloud endpoint before uploading grid telemetry.
 
-* **Process Legibility:** Every tool call is visible while it runs. Tool-start lines show argument summaries (`⚙ Read(ui.mjs)`, `⚙ Bash(git status)`), a live spinner with plain-English verbs tracks activity between outputs (`⠋ Analyzing…`, `⠙ Reading ui.mjs…`), and tool results carry honest context suffixes (`✓ Read: … (N lines)`, `✓ Bash: … (240ms)`, `✓ Write: … (N chars)`) — never fabricated data. When a reasoning model (Qwen3, Gemma) is thinking, the spinner shows live token progress (`⠋ Thinking (42 tokens)…`) rather than a frozen screen. Pressing Esc immediately updates the spinner to `Cancelling…` before the in-flight request is torn down. A dim `esc to cancel` hint stays available while a turn runs, and result previews are capped at 120 characters so raw output never floods the screen. Backed by `summarizeToolArgs`, `verbForTool`, `formatToolResultSuffix`, and `TOOL_VERBS` in `lib/ui.mjs`, with a live spinner channel (`bridge.updateSpinner`) in the Ink TUI.
+* **Process Legibility:** Every tool call is visible while it runs. Tool-start lines show argument summaries (`⚙ Read(ui.mjs)`, `⚙ Bash(git status)`), a live spinner with plain-English verbs tracks activity between outputs (`⠋ Analyzing…`, `⠙ Reading ui.mjs…`), and tool results carry honest context suffixes (`✓ Read: … (N lines)`, `✓ Bash: … (240ms)`, `✓ Write: … (N chars)`) — never fabricated data. When a reasoning model (Qwen3, Gemma) is thinking, the spinner shows live token progress (`⠋ Thinking (42 tokens)…`) rather than a frozen screen. Pressing Esc immediately updates the spinner to `Cancelling…` before the in-flight request is torn down. A dim `esc to cancel` hint stays available while a turn runs, and plain-text result previews are capped at 120 characters so raw output never floods the screen. Structured table results show at most 10 rows with the total row count and an overflow note. Backed by `summarizeToolArgs`, `verbForTool`, `formatToolResultSuffix`, and `TOOL_VERBS` in `lib/ui.mjs`, with a live spinner channel (`bridge.updateSpinner`) in the Ink TUI.
 
 * **Interactive TUI & Pipe Support:** Rich Ink-based TUI (`bin/nehanda-ui.mjs`) for interactive development sessions, with headless pipe-mode support (`bin/agent.mjs`) for acceptance testing and automation.
 
@@ -324,6 +352,10 @@ Place the script at `lib/scripts/my-new-tool.py`. It will receive arguments inte
 
 ## REPL Commands
 
+Slash suggestions support Up/Down selection and Tab completion. Enter completes an explicitly selected suggestion; press Enter again to submit it. Without a selected suggestion, Enter submits the text as typed. Esc closes suggestions without changing the text. Required argument placeholders are not inserted.
+
+Outside slash suggestions, Up/Down recalls up to 100 session-local prompts or commands and restores an unsent draft when navigating back down. Consecutive duplicates are omitted. Credential-setting commands are excluded from this recall history; history is not written to disk.
+
 | Command | Description |
 |---|---|
 | `/help` | Display available commands |
@@ -452,9 +484,10 @@ The engine enforces state transitions across seven distinct phases, aligned with
 
 ## Database Schema
 
-Session state is persisted locally at `~/.config/nehanda/ona-session.db`. Key tables include:
+Session state is persisted locally at `~/.config/nehanda/ona-session.db`. The TUI uses the canonical store initializer and migrations, then registers a conversation and session before each model turn. `/clear` starts a new conversation/session on the next turn while retaining prior database transcripts for auditing. Key tables include:
 
 * `conversations`: Active workflow phases and project roots.
+* `sessions`: Registered session identifiers linked to their conversations.
 * `transcript_entries`: Sequence of user messages, assistant turns, tool calls, and results.
 * `plans`: Content, hashes, and approval status for technical plans.
 * `events`: SDLC milestones and test execution output.
