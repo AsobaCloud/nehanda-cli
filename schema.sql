@@ -112,7 +112,8 @@ CREATE TABLE IF NOT EXISTS memory_edges (
 
 CREATE INDEX IF NOT EXISTS idx_memory_edges_src ON memory_edges(src_id, relation);
 CREATE INDEX IF NOT EXISTS idx_memory_edges_dst ON memory_edges(dst_id, relation);
-CREATE INDEX IF NOT EXISTS idx_memories_conversation ON memories(conversation_id, observation_ts);
+-- Note: idx_memories_conversation is created by migrateStore (v1→v2) after ALTER TABLE
+-- adds conversation_id, not here — schema.sql runs before migrateStore on existing DBs.
 
 -- System-1 session control block (canonical state header for System-2)
 CREATE TABLE IF NOT EXISTS laya_jev_state (
