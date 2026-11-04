@@ -540,9 +540,37 @@ node tests/unit/laya_warm_load_behavioral.mjs
 node tests/unit/issue22_query_context_behavioral.mjs
 ```
 
+Run the contract coverage suites added in #26:
+
+```bash
+node tests/unit/tool_call_rescue_behavioral.mjs
+node tests/unit/anthropic_streaming_behavioral.mjs
+node tests/unit/store_migration_behavioral.mjs
+node tests/unit/odse_normalization_behavioral.mjs
+node tests/unit/jev_anchor_retrieval_behavioral.mjs
+```
+
+Run the color contrast suite:
+
+```bash
+node tests/unit/color_contrast_behavioral.mjs
+```
+
 ---
 
 ## Changelog
+
+### 0.10.0
+
+- **TUI usability, credentials, sandbox execution (`bin/nehanda-ui.mjs`, `lib/sandbox.mjs`, `lib/scripts/sandbox-snapshot.py`):** Six integration gaps closed: provider credentials no longer bleed across provider switches; secret wizard input and inline `/key`/`/mcp env` assignments are masked during typing and redacted in history; the Docker sandbox branch now executes commands in a disposable project copy with networking disabled and no forwarded host credentials; reasoning progress renders live in the TUI; array tool results render as bounded tables; slash suggestions support keyboard completion and ordinary prompts support draft-preserving history navigation. Session bootstrap repaired: TUI now uses the canonical `openStore` initializer and registers conversations and sessions before each turn. Closes #25.
+
+- **Behavioral contract coverage (`tests/unit/`):** Five new behavioral test files covering previously untested contracts: `[TOOL_CALL]` rescue path (TC-1–5), Anthropic streaming text and tool-use paths (AN-1–3), SQLite schema migration v1→v3 (SM-1–4), ODSE energy normalization OEM name resolution and fingerprinting (OD-1–9), and Jev-Mem anchor retrieval determinism (AR-1–4). SM-2 identified a real implementation bug (see #27). Closes #26.
+
+- **Schema migration fix: `idx_memories_conversation` index moved into `migrateStore` (`lib/store.mjs`, `schema.sql`):** `openStore` ran the full `schema.sql` DDL — including `CREATE INDEX ON memories(conversation_id)` — before `migrateStore` added `conversation_id` via `ALTER TABLE`. A true v1 database (pre-Jev-Mem) would fail with `SqliteError: no such column: conversation_id`. Index creation moved inside the `version < 2` migration block where it runs after the `ALTER TABLE`. SM-2 now GREEN. Closes #27.
+
+- **TUI color contrast: remove `dimColor` from primary content (`bin/nehanda-ui.mjs`):** `MessageView` applied `dimColor: true` to every `role: 'system'` message, making all `/help`, `/config`, and slash command output dim regardless of the chalk calls inside the strings. `WelcomeBanner` applied `dimColor` to `Endpoint:` and `Directory:` labels and values. `/help` descriptions and `/config` endpoint URL used `chalk.dim`. All primary informational content now renders at terminal default foreground. Advisory hints (`Type /help for commands`, `Use /model to configure…`) remain dimmed. Closes #28.
+
+
 
 ### 0.9.0
 
