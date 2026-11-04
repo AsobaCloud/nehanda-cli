@@ -242,7 +242,7 @@ function MessageView({ msg }) {
         msg.cancelled ? e(Text, { dimColor: true, italic: true }, '⏹ cancelled') : null))
   }
   if (msg.role === 'system')
-    return e(Box, { marginLeft: 1 }, e(Text, { dimColor: true }, msg.text))
+    return e(Box, { marginLeft: 1 }, e(Text, {}, msg.text))
   if (msg.role === 'error')
     return e(Box, { marginLeft: 1 }, e(Text, { color: BRAND.red }, '✗ ' + msg.text))
   return null

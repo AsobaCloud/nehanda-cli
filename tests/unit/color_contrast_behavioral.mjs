@@ -141,6 +141,36 @@ await test('CR-8 (regression): advisory "Type /help for commands" line still exi
   assert.ok(line, 'expected "Type /help for commands" advisory line to still exist in source')
 })
 
+// ── CR-9 ──────────────────────────────────────────────────────────────────────
+
+await test('CR-9: MessageView system role must not apply dimColor to entire message text', () => {
+  // This is the root cause: MessageView wraps every role:system message in
+  // dimColor:true, making ALL slash command output (/help, /config, MCP status)
+  // dim regardless of what chalk calls are inside the string.
+  // The system message role line: e(Box, { marginLeft: 1 }, e(Text, { dimColor: true }, msg.text))
+  const systemRoleLine = LINES.find(l =>
+    l.includes("msg.role === 'system'") ||
+    (l.includes("'system'") && l.includes('marginLeft') && l.includes('dimColor'))
+  ) || LINES.find((l, i) => {
+    // Find the system role handler block
+    if (!l.includes("msg.role === 'system'") && !(l.includes("'system'") && l.includes('return'))) return false
+    return true
+  })
+
+  // Find the actual render line for system messages
+  const systemIdx = LINES.findIndex(l => l.includes("msg.role === 'system'"))
+  assert.ok(systemIdx !== -1, 'expected msg.role system handler in MessageView')
+
+  // The render line is the next non-empty line after the condition
+  const renderLine = LINES.slice(systemIdx, systemIdx + 3).find(l =>
+    l.includes('dimColor') && l.includes('msg.text')
+  )
+  assert.ok(
+    !renderLine,
+    `MessageView system role must not apply dimColor to msg.text — found: ${renderLine?.trim()}`
+  )
+})
+
 console.log(`\n────────────────────────────────────────────────────────────`)
 console.log(`  ${passed} passed  |  ${failed} failed`)
 console.log(`────────────────────────────────────────────────────────────\n`)
