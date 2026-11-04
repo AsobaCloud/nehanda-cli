@@ -57,6 +57,22 @@ echo ""
 echo "===================="
 node tests/unit/model-config-from-agent_behavioral.mjs
 node tests/unit/gap2_output_formatting_behavioral.mjs
+
+echo "Running: tool_call_rescue_behavioral.mjs"
+node tests/unit/tool_call_rescue_behavioral.mjs
+
+echo "Running: anthropic_streaming_behavioral.mjs"
+node tests/unit/anthropic_streaming_behavioral.mjs
+
+echo "Running: store_migration_behavioral.mjs"
+node tests/unit/store_migration_behavioral.mjs
+
+echo "Running: odse_normalization_behavioral.mjs"
+node tests/unit/odse_normalization_behavioral.mjs
+
+echo "Running: jev_anchor_retrieval_behavioral.mjs"
+node tests/unit/jev_anchor_retrieval_behavioral.mjs
+
 python3 tests/unit/tui_usability_behavioral.py --without-sandbox
 
 echo "✓ All unit tests passed!"
