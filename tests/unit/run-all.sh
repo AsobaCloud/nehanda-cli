@@ -55,4 +55,8 @@ node tests/unit/test-ollama-llm-call-behavioral.mjs
 
 echo ""
 echo "===================="
+node tests/unit/model-config-from-agent_behavioral.mjs
+node tests/unit/gap2_output_formatting_behavioral.mjs
+python3 tests/unit/tui_usability_behavioral.py --without-sandbox
+
 echo "✓ All unit tests passed!"

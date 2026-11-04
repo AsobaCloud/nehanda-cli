@@ -84,5 +84,29 @@ test('Defaults when agent missing: Nehanda primary', () => {
   assert.strictEqual(resolveWireModel(cfg), 'nehanda-rag-synthesis-27b')
 })
 
+for (const provider of ['nehanda', 'ollama', 'zhipu', 'lm_studio_local', 'openai_compatible']) {
+  test(`AUTH-2 (#25): explicit ${provider} survives a custom endpoint`, () => {
+    const agent = { provider, model: 'energy-model', endpoint: 'http://localhost:9456/v1' }
+    const cfg = modelConfigFromAgent(JSON.parse(JSON.stringify(agent)))
+    assert.strictEqual(cfg.provider, provider)
+    assert.strictEqual(resolveWireModel(cfg), 'energy-model')
+  })
+}
+
+test('AUTH-3 (#25): key resolver receives the selected provider', () => {
+  const keys = { nehanda: 'dummy-nehanda', openai_compatible: 'dummy-compatible' }
+  const cfg = modelConfigFromAgent({
+    provider: 'openai_compatible', model: 'energy-model', endpoint: 'http://localhost:9456/v1',
+  }, { apiKey: keys.nehanda, resolveApiKey: provider => keys[provider] || '' })
+  assert.strictEqual(cfg.api_key, keys.openai_compatible)
+})
+
+test('AUTH-4 (#25): absent provider key never borrows a Nehanda key', () => {
+  const cfg = modelConfigFromAgent({
+    provider: 'openai_compatible', model: 'energy-model', endpoint: 'http://localhost:9456/v1',
+  }, { apiKey: 'dummy-nehanda', resolveApiKey: () => '' })
+  assert.strictEqual(cfg.api_key, '')
+})
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed > 0 ? 1 : 0)

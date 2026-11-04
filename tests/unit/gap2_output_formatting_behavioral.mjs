@@ -176,5 +176,18 @@ await test('OF-6: formatToolResult caps table at 10 rows with truncation note', 
 
 // ── Summary ───────────────────────────────────────────────────
 
+await test('OF-7 (#25): formatter uses the caller-bounded plain-text preview', () => {
+  const output = formatToolResult('Bash', 'unbounded-source-output', false, { preview: 'bounded telemetry preview' })
+  assert.ok(output.includes('bounded telemetry preview'))
+  assert.ok(!output.includes('unbounded-source-output'))
+})
+
+await test('OF-8 (#25): error results keep the bounded preview instead of a success table', () => {
+  const output = formatToolResult('Bash', '[{"asset_id":"inverter-1","power_kw":42}]', true, { preview: 'telemetry read failed' })
+  assert.ok(output.includes('telemetry read failed'))
+  assert.ok(output.includes('✗'))
+  assert.ok(!output.includes('1 row'))
+})
+
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) process.exit(1)
