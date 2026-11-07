@@ -218,8 +218,6 @@ function LayaLoadingScreen() {
   let cols = 80; try { cols = process.stdout.columns || 80 } catch {}
   return e(Box, { flexDirection: 'column', alignItems: 'center', marginY: 1 },
     e(AsobaMark, {}),
-    e(Box, { marginTop: 1 }, e(Text, { bold: true, color: BRAND.accent }, 'NEHANDA')),
-    e(Text, { dimColor: true }, 'by Asoba'),
     e(Box, { marginTop: 2 }, e(Text, { color: BRAND.accent }, SPINNER_FRAMES[frame] + ' '), e(Text, { dimColor: true }, 'Loading Laya…')),
     e(Text, { dimColor: true }, 'Warming Laya sidecar into memory — please wait…'),
     e(Text, { dimColor: true, italic: true }, 'This may take a few seconds.'),
