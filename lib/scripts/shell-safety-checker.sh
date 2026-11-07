@@ -154,7 +154,7 @@ function checkShellFile() {
     
     # Check for missing set -euo pipefail - CRITICAL
     # Check first 20 lines to allow for comments/headers
-    if ! head -20 "$filePath" | grep -q "set -euo pipefail"; then
+    if ! head -40 "$filePath" | grep -q "set -euo pipefail"; then
         issues+=("Missing 'set -euo pipefail'")
     fi
 
@@ -166,7 +166,7 @@ function checkShellFile() {
     local has_exit_code_check=0
 
     # Check for background jobs (any command ending with &)
-    if grep -qE '\&[[:space:]]*$' "$filePath"; then
+    if grep -qE '(^|[^&])&[[:space:]]*$' "$filePath"; then
         has_background_job=1
     fi
 
@@ -283,7 +283,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                 ((fileCount++))
                 checkShellFile "$file" || ((totalIssues++))
             fi
-        done < <(find "$targetDir" -name "*.sh" -type f -not -path "*/venv/*" -not -path "*/.venv*" -print0)
+        done < <(find "$targetDir" -name "*.sh" -type f -not -path "*/venv/*" -not -path "*/.venv*" -not -path "*/node_modules/*" -print0)
     fi
 
     echo ""

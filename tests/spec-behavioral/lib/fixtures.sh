@@ -193,15 +193,15 @@ _fixture_insert_hook() {
   local shell_command="$4"
   
   # Ensure we have a session for hook invocations
-  fixture_db "INSERT OR IGNORE INTO conversations(id, project_dir, phase) VALUES ('fixture-conv', '/tmp', 'idle')" || true
-  fixture_db "INSERT OR IGNORE INTO sessions(session_id, conversation_id) VALUES ('fixture-sess', 'fixture-conv')" || true
+  fixture_db "INSERT OR IGNORE INTO conversations(id, project_dir, phase) VALUES ('fixture-conv', '/tmp', 'idle')" || true 2>/dev/null
+  fixture_db "INSERT OR IGNORE INTO sessions(session_id, conversation_id) VALUES ('fixture-sess', 'fixture-conv')" || true 2>/dev/null
   
   # Insert hook invocation record
   fixture_db "INSERT INTO hook_invocations (
     session_id, conversation_id, hook_event, hook_ordinal, matcher, command, input_json, started_at
   ) VALUES (
     'fixture-sess', 'fixture-conv', '$hook_event', $hook_ordinal, '$matcher', '$shell_command', '{}', datetime('now')
-  )" || true
+  )" || true 2>/dev/null
   
   return 0
 }
@@ -269,15 +269,15 @@ _fixture_insert_permission_rules() {
   local tool_category="$3"
   
   # Ensure we have a session for permission logs
-  fixture_db "INSERT OR IGNORE INTO conversations(id, project_dir, phase) VALUES ('fixture-conv', '/tmp', 'idle')" || true
-  fixture_db "INSERT OR IGNORE INTO sessions(session_id, conversation_id) VALUES ('fixture-sess', 'fixture-conv')" || true
+  fixture_db "INSERT OR IGNORE INTO conversations(id, project_dir, phase) VALUES ('fixture-conv', '/tmp', 'idle')" || true 2>/dev/null
+  fixture_db "INSERT OR IGNORE INTO sessions(session_id, conversation_id) VALUES ('fixture-sess', 'fixture-conv')" || true 2>/dev/null
   
   # Insert permission rule record
   fixture_db "INSERT INTO tool_permission_log (
     session_id, conversation_id, tool_name, tool_category, decision, decided_at
   ) VALUES (
     'fixture-sess', 'fixture-conv', '$tool_name', '$tool_category', '$rule_type', datetime('now')
-  )" || true
+  )" || true 2>/dev/null
   
   return 0
 }
@@ -446,7 +446,7 @@ teardown_fixture() {
   local temp_dir
   for temp_dir in "${FIXTURE_TEMP_DIRS[@]}"; do
     if [[ -d "$temp_dir" ]]; then
-      rm -rf "$temp_dir" || true
+      rm -rf "$temp_dir" || true 2>/dev/null
     fi
   done
   FIXTURE_TEMP_DIRS=()
@@ -455,7 +455,7 @@ teardown_fixture() {
   local temp_file
   for temp_file in "${FIXTURE_TEMP_FILES[@]}"; do
     if [[ -f "$temp_file" ]]; then
-      rm -f "$temp_file" || true
+      rm -f "$temp_file" || true 2>/dev/null
     fi
   done
   FIXTURE_TEMP_FILES=()

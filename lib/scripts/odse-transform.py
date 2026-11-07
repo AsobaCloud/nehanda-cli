@@ -131,7 +131,7 @@ def main() -> int:
     # Read full payload from stdin.
     try:
         payload = sys.stdin.read()
-    except Exception as exc:
+    except (OSError, ValueError, UnicodeError) as exc:
         print(f"[odse-transform] stdin read error: {exc}", file=sys.stderr)
         return 2
 
@@ -141,7 +141,7 @@ def main() -> int:
 
     # Import odse — fail fast with a clear message if not installed.
     try:
-        from odse.transformer import transform  # noqa: PLC0415
+        from odse.transformer import transform
     except ImportError:
         print(
             "[odse-transform] odse package not found. Run: pip install odse",
@@ -179,7 +179,7 @@ def main() -> int:
         else:
             # ndjson — default for non-TTY / piped callers
             print(_render_ndjson(records))
-    except Exception as exc:
+    except (OSError, ValueError, TypeError, UnicodeError) as exc:
         print(f"[odse-transform] serialization error: {exc}", file=sys.stderr)
         return 1
 

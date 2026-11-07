@@ -46,7 +46,7 @@ echo "PASS: output variable assigned before SubagentStop hook call"
 # Also verify via actual execution: the error message must not appear
 # Run with a no-op model (lm_studio_local with no server) — it will fail to connect
 # but the ReferenceError happens BEFORE the model call, so we can catch it
-SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Agent","input":{"prompt":"test"}}' >/dev/null 2>&1 || true
+SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Agent","input":{"prompt":"test"}}' >/dev/null 2>/dev/null || true
 RESULT=$(sqlite3 "$AGENT_SDLC_DB" "SELECT payload_json FROM transcript_entries WHERE entry_type='tool_result' ORDER BY id DESC LIMIT 1")
 
 echo "$RESULT" | grep -qi "before initialization\|ReferenceError" && {

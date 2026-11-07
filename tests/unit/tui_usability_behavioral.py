@@ -5,7 +5,6 @@ import contextlib
 import http.server
 import json
 import os
-from pathlib import Path
 import pty
 import re
 import select
@@ -17,7 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 NODE = shutil.which('node')

@@ -29,28 +29,28 @@ touch "$TESTDIR/README.md"
 touch "$TESTDIR/src/main.mjs"
 
 # ── Test 1: *.mjs pattern ────────────────────────────────────
-SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Glob","input":{"pattern":"*.mjs","path":"'"$TESTDIR"'"}}' >/dev/null 2>&1 || true
+SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Glob","input":{"pattern":"*.mjs","path":"'"$TESTDIR"'"}}' >/dev/null 2>/dev/null || true
 RESULT=$(last_tool_result)
 echo "$RESULT" | grep -q '"is_error":false' || { echo "FAIL: *.mjs — is_error should be false"; exit 1; }
 echo "$RESULT" | grep -q 'foo.mjs' || { echo "FAIL: *.mjs did not match foo.mjs (got: $RESULT)"; exit 1; }
 echo "PASS: *.mjs matched foo.mjs"
 
 # ── Test 2: *.ipynb pattern ──────────────────────────────────
-SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Glob","input":{"pattern":"*.ipynb","path":"'"$TESTDIR"'"}}' >/dev/null 2>&1 || true
+SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Glob","input":{"pattern":"*.ipynb","path":"'"$TESTDIR"'"}}' >/dev/null 2>/dev/null || true
 RESULT=$(last_tool_result)
 echo "$RESULT" | grep -q '"is_error":false' || { echo "FAIL: *.ipynb — is_error should be false"; exit 1; }
 echo "$RESULT" | grep -q 'bar.ipynb' || { echo "FAIL: *.ipynb did not match bar.ipynb (got: $RESULT)"; exit 1; }
 echo "PASS: *.ipynb matched bar.ipynb"
 
 # ── Test 3: README.md exact pattern ─────────────────────────
-SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Glob","input":{"pattern":"README.md","path":"'"$TESTDIR"'"}}' >/dev/null 2>&1 || true
+SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Glob","input":{"pattern":"README.md","path":"'"$TESTDIR"'"}}' >/dev/null 2>/dev/null || true
 RESULT=$(last_tool_result)
 echo "$RESULT" | grep -q '"is_error":false' || { echo "FAIL: README.md — is_error should be false"; exit 1; }
 echo "$RESULT" | grep -q 'README.md' || { echo "FAIL: README.md pattern did not match README.md (got: $RESULT)"; exit 1; }
 echo "PASS: README.md matched README.md"
 
 # ── Test 4: Preservation — src/** still works (no special chars) ──
-SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Glob","input":{"pattern":"src/**","path":"'"$TESTDIR"'"}}' >/dev/null 2>&1 || true
+SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Glob","input":{"pattern":"src/**","path":"'"$TESTDIR"'"}}' >/dev/null 2>/dev/null || true
 RESULT=$(last_tool_result)
 echo "$RESULT" | grep -q '"is_error":false' || { echo "FAIL: src/** — is_error should be false"; exit 1; }
 echo "$RESULT" | grep -q 'main.mjs' || { echo "FAIL: src/** did not match src/main.mjs (got: $RESULT)"; exit 1; }

@@ -221,7 +221,7 @@ fixture_db "INSERT INTO memories(id, type, title, content, keywords, anticipated
 ORDERED_MEMORIES=$(fixture_db "SELECT id FROM memories WHERE id LIKE 'mem_rank_%' ORDER BY attention_score DESC")
 
 # Parse the ordered results
-IFS=$'\n' read -rd '' -a MEMORY_IDS <<<"$ORDERED_MEMORIES" || true
+IFS=$'\n' read -rd '' -a MEMORY_IDS <<<"$ORDERED_MEMORIES" 2>/dev/null || true
 
 # Verify the order: attention_score 10 should come first, then 5, then 1
 if [[ "${MEMORY_IDS[0]}" != "mem_rank_10" ]]; then

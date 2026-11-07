@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import json
 import sys
-import traceback
 import time
+import traceback
 
 _router = None
 _agent = None
@@ -65,7 +65,7 @@ def _ensure_loaded():
             _loaded = True
             ms = int((time.time() - t0) * 1000)
             print(f"[laya-worker] loaded via Router in {ms}ms", file=sys.stderr)
-        except Exception:
+        except (ImportError, RuntimeError, OSError, TypeError, ValueError, AttributeError):
             try:
                 import laya
                 _agent = laya.load("convaiinnovations/laya")
@@ -76,10 +76,10 @@ def _ensure_loaded():
                 _loaded = True
                 ms = int((time.time() - t0) * 1000)
                 print(f"[laya-worker] loaded laya.load() in {ms}ms", file=sys.stderr)
-            except Exception as e2:
+            except (ImportError, RuntimeError, OSError, TypeError, ValueError, AttributeError, KeyError) as e2:
                 _load_error = f"laya load failed: {e2}"
                 raise RuntimeError(_load_error) from e2
-    except Exception as e:
+    except (ImportError, OSError, ValueError, AttributeError, KeyError) as e:
         _load_error = f"laya load failed: {e}"
         raise RuntimeError(_load_error) from e
 
@@ -105,7 +105,7 @@ def _to_dict(result):
                 try:
                     out[k] = dict(v)
                     continue
-                except Exception:
+                except (TypeError, ValueError, AttributeError, KeyError):
                     pass
             if isinstance(v, dict):
                 nested = {}
@@ -114,7 +114,7 @@ def _to_dict(result):
                         try:
                             nested[nk] = dict(nv)
                             continue
-                        except Exception:
+                        except (TypeError, ValueError, AttributeError, KeyError):
                             pass
                     nested[nk] = nv
                 out[k] = nested
@@ -161,7 +161,7 @@ def main():
             sys.stdout.flush()
             if do_exit:
                 return 0
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError, OSError, AttributeError, KeyError) as e:
             traceback.print_exc(file=sys.stderr)
             sys.stdout.write(json.dumps({
                 "id": msg.get("id"),

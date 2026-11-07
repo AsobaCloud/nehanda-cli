@@ -1,10 +1,9 @@
 """Issue #25: copy a bounded project tree without following symlinks."""
 
 import os
-from pathlib import Path
 import stat
 import sys
-
+from pathlib import Path
 
 MAX_BYTES = 256 * 1024 * 1024
 MAX_ENTRIES = 10000

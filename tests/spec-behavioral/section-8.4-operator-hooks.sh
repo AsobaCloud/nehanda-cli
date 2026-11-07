@@ -23,8 +23,8 @@ source "$SCRIPT_DIR/lib/assertions.sh"
 
 cleanup() {
   local ec=$?
-  teardown_fixture || true
-  [[ -n "${SPEC_TMP:-}" && -d "$SPEC_TMP" ]] && rm -rf "$SPEC_TMP" || true
+  teardown_fixture 2>/dev/null || true
+  [[ -n "${SPEC_TMP:-}" && -d "$SPEC_TMP" ]] && rm -rf "$SPEC_TMP" 2>/dev/null || true
   return "$ec"
 }
 trap cleanup EXIT

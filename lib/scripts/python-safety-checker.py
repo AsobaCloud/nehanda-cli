@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 
+
 class PythonSafetyChecker:
     def __init__(self, root_path):
         self.root_path = root_path
@@ -34,7 +35,7 @@ class PythonSafetyChecker:
             result = subprocess.run(
                 ['bandit', '-r', self.root_path,
                  '--exclude', 'scripts/python-safety-checker.py,tests/,*/test_*.py,.aws-sam/,build/,dist/,node_modules/,.venv/,venv/,./.venv-ci/,./.venv-configure-tests/,./_pt/,./.tvenv/,./.agent-venv/,.venv-ci/,.venv-configure-tests/,_pt/,.tvenv/,.agent-venv/'],
-                capture_output=True, text=True
+                check=False, capture_output=True, text=True
             )
             # Only report High/Critical severity issues as errors (warnings are non-blocking)
             if result.returncode == 1 and result.stdout:
@@ -79,7 +80,7 @@ class PythonSafetyChecker:
             # Exclude Jupyter notebooks from Ruff checks (they have different structure)
             result = subprocess.run(
                 ['ruff', 'check', self.root_path, '--exclude', '*.ipynb,node_modules,.venv-ci,.tvenv,.venv-configure-tests,.agent-venv,_pt'],
-                capture_output=True, text=True
+                check=False, capture_output=True, text=True
             )
             # Only add Ruff issues if exit code is non-zero (actual errors found)
             if result.returncode != 0 and result.stdout:
@@ -138,13 +139,11 @@ class PythonSafetyChecker:
                         value_is_from_env = False
                         if isinstance(node.value, ast.Call):
                             # Check for os.getenv(), os.environ.get(), etc.
-                            if isinstance(node.value.func, ast.Attribute):
-                                if node.value.func.attr in ['getenv', 'get'] and isinstance(node.value.func.value, ast.Name) and node.value.func.value.id == 'os':
-                                    value_is_from_env = True
+                            if isinstance(node.value.func, ast.Attribute) and node.value.func.attr in ['getenv', 'get'] and isinstance(node.value.func.value, ast.Name) and node.value.func.value.id == 'os':
+                                value_is_from_env = True
                             # Check for os.environ['KEY'] or os.environ.get('KEY')
-                            if isinstance(node.value.func, ast.Subscript) and isinstance(node.value.func.value, ast.Attribute):
-                                if node.value.func.value.attr == 'environ' and isinstance(node.value.func.value.value, ast.Name) and node.value.func.value.value.id == 'os':
-                                    value_is_from_env = True
+                            if isinstance(node.value.func, ast.Subscript) and isinstance(node.value.func.value, ast.Attribute) and node.value.func.value.attr == 'environ' and isinstance(node.value.func.value.value, ast.Name) and node.value.func.value.value.id == 'os':
+                                value_is_from_env = True
                         elif isinstance(node.value, ast.Attribute):
                             # Check for os.environ['KEY'] assignments
                             if isinstance(node.value.value, ast.Attribute) and node.value.value.attr == 'environ':

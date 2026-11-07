@@ -27,7 +27,7 @@ last_tool_result() {
 
 # ── Test 1: relative traversal Write ────────────────────────
 EVIL1="$TMPDIR_TEST/evil_traversal.txt"
-SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Write","input":{"file_path":"../evil_traversal.txt","content":"pwned"}}' --cwd "$CWD_DIR" >/dev/null 2>&1 || true
+SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Write","input":{"file_path":"../evil_traversal.txt","content":"pwned"}}' --cwd "$CWD_DIR" >/dev/null 2>/dev/null || true
 RESULT=$(last_tool_result)
 echo "$RESULT" | grep -q '"is_error":true' || { echo "FAIL: relative traversal Write — expected is_error:true, got: $RESULT"; exit 1; }
 echo "$RESULT" | grep -qi "outside working directory" || { echo "FAIL: relative traversal Write — expected 'outside working directory' in content, got: $RESULT"; exit 1; }
@@ -36,7 +36,7 @@ echo "PASS: relative traversal Write rejected"
 
 # ── Test 2: absolute path outside cwd Write ─────────────────
 EVIL2="$TMPDIR_TEST/evil_abs.txt"
-SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Write","input":{"file_path":"'"$EVIL2"'","content":"pwned"}}' --cwd "$CWD_DIR" >/dev/null 2>&1 || true
+SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Write","input":{"file_path":"'"$EVIL2"'","content":"pwned"}}' --cwd "$CWD_DIR" >/dev/null 2>/dev/null || true
 RESULT=$(last_tool_result)
 echo "$RESULT" | grep -q '"is_error":true' || { echo "FAIL: absolute outside cwd Write — expected is_error:true, got: $RESULT"; exit 1; }
 test ! -f "$EVIL2" || { echo "FAIL: absolute outside cwd Write — file was created at $EVIL2"; exit 1; }
@@ -45,14 +45,14 @@ echo "PASS: absolute path outside cwd Write rejected"
 # ── Test 3: relative traversal Edit ─────────────────────────
 EVIL3="$TMPDIR_TEST/evil_edit.txt"
 echo "original" > "$EVIL3"
-SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Edit","input":{"file_path":"../evil_edit.txt","old_string":"original","new_string":"hacked"}}' --cwd "$CWD_DIR" >/dev/null 2>&1 || true
+SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Edit","input":{"file_path":"../evil_edit.txt","old_string":"original","new_string":"hacked"}}' --cwd "$CWD_DIR" >/dev/null 2>/dev/null || true
 RESULT=$(last_tool_result)
 echo "$RESULT" | grep -q '"is_error":true' || { echo "FAIL: relative traversal Edit — expected is_error:true, got: $RESULT"; exit 1; }
 grep -q "original" "$EVIL3" || { echo "FAIL: relative traversal Edit — file content was modified"; exit 1; }
 echo "PASS: relative traversal Edit rejected, file unchanged"
 
 # ── Preservation: in-cwd Write still works ──────────────────
-SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Write","input":{"file_path":"safe.txt","content":"ok"}}' --cwd "$CWD_DIR" >/dev/null 2>&1 || true
+SDLC_DISABLE_ALL_HOOKS=1 node "$ONA" --eval '{"tool":"Write","input":{"file_path":"safe.txt","content":"ok"}}' --cwd "$CWD_DIR" >/dev/null 2>/dev/null || true
 RESULT=$(last_tool_result)
 echo "$RESULT" | grep -q '"is_error":false' || { echo "FAIL: in-cwd Write — expected is_error:false, got: $RESULT"; exit 1; }
 test -f "$CWD_DIR/safe.txt" || { echo "FAIL: in-cwd Write — file not created at $CWD_DIR/safe.txt"; exit 1; }

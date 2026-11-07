@@ -69,7 +69,7 @@ class CodeIntegrityAuditor:
         for dirpath, dirnames, filenames in os.walk(root_dir):
             dirnames[:] = [d for d in dirnames if d not in skip_dirs and not d.startswith(".")]
             for f in filenames:
-                if f.endswith(".sh") or f.endswith(".py"):
+                if f.endswith((".sh", ".py")):
                     files.append(os.path.join(dirpath, f))
         return sorted(files)
 
@@ -78,7 +78,8 @@ class CodeIntegrityAuditor:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
                 lines = content.splitlines()
-        except Exception:
+        except (OSError, UnicodeDecodeError, SyntaxError, ValueError) as exc:
+            sys.stderr.write(f"[audit-code-integrity] unreadable shell source: {exc}\n")
             return
 
         has_trap = "trap " in content or "cleanup()" in content
@@ -92,8 +93,7 @@ class CodeIntegrityAuditor:
         ]
 
         for create_cmd, remove_cmd, resource_desc in creations:
-            if create_cmd in content:
-                if not has_trap or remove_cmd not in content:
+            if create_cmd in content and (not has_trap or remove_cmd not in content):
                     self.findings["lifecycle_parity"].append({
                         "file": rel_path,
                         "severity": "FAIL",
@@ -134,7 +134,8 @@ class CodeIntegrityAuditor:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
             tree = ast.parse(content, filename=file_path)
-        except Exception:
+        except (OSError, UnicodeDecodeError, SyntaxError, ValueError) as exc:
+            sys.stderr.write(f"[audit-code-integrity] unreadable Python source: {exc}\n")
             return
 
         is_test_file = (
@@ -153,8 +154,7 @@ class CodeIntegrityAuditor:
             # 2. Architectural Naming Verification
             if isinstance(node, ast.Assign):
                 for target in node.targets:
-                    if isinstance(target, ast.Name) and "LAMBDA" in target.id.upper():
-                        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    if isinstance(target, ast.Name) and "LAMBDA" in target.id.upper() and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
                             val = node.value.value
                             if val and not val.startswith("ona-") and not val.startswith("/ona/") and not val.startswith("/aws/lambda/"):
                                 self.findings["architectural_naming"].append({
@@ -166,8 +166,7 @@ class CodeIntegrityAuditor:
                                 })
 
             # 3. Swallowed Error Exceptions
-            if isinstance(node, ast.ExceptHandler):
-                if len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
+            if isinstance(node, ast.ExceptHandler) and len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
                     self.findings["error_handling"].append({
                         "file": rel_path,
                         "line": node.lineno,
@@ -277,13 +276,12 @@ class CodeIntegrityAuditor:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     content = f.read()
                 tree = ast.parse(content)
-            except Exception:
-                continue
+            except (OSError, UnicodeDecodeError, SyntaxError, ValueError) as exc: sys.stderr.write(f"[audit-code-integrity] skipping unparseable Python source: {exc}\n"); continue
 
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef):
                     fname = node.name
-                    if fname.startswith("_") or fname in ignored_names or fname.startswith("test_"):
+                    if fname.startswith(("_", "test_")) or fname in ignored_names:
                         continue
 
                     # 1. Duplicate Function Name Check
@@ -319,8 +317,8 @@ class CodeIntegrityAuditor:
                                     })
                             else:
                                 ast_hashes_seen[norm_ast] = (fname, rel_path, node.lineno)
-                        except Exception:
-                            pass
+                        except (OSError, UnicodeDecodeError, SyntaxError, ValueError) as exc:
+                            sys.stderr.write(f"[audit-code-integrity] duplicate-hash analysis skipped: {exc}\n")
 
     def _save_json_report(self):
         os.makedirs(self.output_dir, exist_ok=True)
