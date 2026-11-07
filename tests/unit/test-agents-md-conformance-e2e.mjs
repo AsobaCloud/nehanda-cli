@@ -112,6 +112,15 @@ await (async () => {
     fs.rmSync(tmp, { recursive: true, force: true })
   })
 
+  await test('SDLC-CONFORM-0: missing maps produce a tiny .ona/map fallback plan', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mapfallback-'))
+    const msg = buildExploreUserMessage('fix hello (#1)', tmp)
+    assert.match(msg, /\.ona\/map\/map\.md/)
+    assert.match(msg, /No docs\/MAP\.md or \.ona\/map\/map\.md exists/)
+    assert.match(msg, /explicitly approves/i)
+    fs.rmSync(tmp, { recursive: true, force: true })
+  })
+
   await test('SDLC-CONFORM-5: validation threshold rejects sub-70% coverage', async () => {
     const { db, dbPath, dir } = tmpDb()
     const intro = seed(db, 'test')
