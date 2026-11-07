@@ -205,6 +205,26 @@ function SplashScreen({ onDone }) {
     e(Box, { marginTop: 1 }, e(Text, { dimColor: true }, 'press any key to continue…')),
   )
 }
+
+// ── Laya (System-1) warm-up loading screen ───────────────────
+// Rendered synchronously while ensureLayaReady() loads the checkpoint so the
+// terminal is never blank during the multi-second warm-up.
+function LayaLoadingScreen() {
+  const [frame, setFrame] = React.useState(0)
+  React.useEffect(() => {
+    const t = setInterval(() => setFrame(f => (f + 1) % SPINNER_FRAMES.length), 80)
+    return () => clearInterval(t)
+  }, [])
+  let cols = 80; try { cols = process.stdout.columns || 80 } catch {}
+  return e(Box, { flexDirection: 'column', alignItems: 'center', marginY: 1 },
+    e(AsobaMark, {}),
+    e(Box, { marginTop: 1 }, e(Text, { bold: true, color: BRAND.accent }, 'NEHANDA')),
+    e(Text, { dimColor: true }, 'by Asoba'),
+    e(Box, { marginTop: 2 }, e(Text, { color: BRAND.accent }, SPINNER_FRAMES[frame] + ' '), e(Text, { dimColor: true }, 'Loading Laya…')),
+    e(Text, { dimColor: true }, 'Warming Laya sidecar into memory — please wait…'),
+    e(Text, { dimColor: true, italic: true }, 'This may take a few seconds.'),
+  )
+}
 function WelcomeBanner({ model, endpoint, cwd = LAUNCH_CWD }) {
   let cols = 80; try { cols = process.stdout.columns || 80 } catch {}
   const bw = Math.min(cols - 2, 80)
@@ -1142,13 +1162,18 @@ bridge.onSubmit = async (text) => {
 }
 
 // Provision Laya venv and warm the sidecar before the first turn.
+// Render an animated loading screen for the whole warm-up so the terminal is
+// never blank, then tear it down and paint the real UI once Laya is ready.
 // This is mandatory — if it fails, abort with a clear error.
+const layaLoadingInstance = render(e(LayaLoadingScreen, {}), { exitOnCtrlC: false })
 try {
   await ensureLayaReady()
 } catch (e) {
+  try { layaLoadingInstance.unmount() } catch {}
   process.stderr.write(`[startup] Laya provisioning failed: ${e.message}\n`)
   process.stderr.write('[startup] Cannot start: Laya (System-1) is required. Fix the error above and retry.\n')
   process.exit(1)
 }
-
+try { layaLoadingInstance.unmount() } catch {}
+if (process.stdout.isTTY) process.stdout.write('\x1b[2J\x1b[3J\x1b[H')
 render(e(App, { bridge }), { exitOnCtrlC: false })
