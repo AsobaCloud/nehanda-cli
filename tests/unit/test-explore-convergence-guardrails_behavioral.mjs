@@ -33,4 +33,8 @@ section('exploration exhaustion handoff is explicit', () => {
   assert.match(text, /Exploration complete/i);
 });
 
+section('no-match failure mode is explicit', () => {
+  assert.match(text, /No matching context in current repo; provide clarification or expanded scope\./);
+});
+
 console.log('\nSummary: all guardrail assertions passed.');

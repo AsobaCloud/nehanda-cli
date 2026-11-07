@@ -84,4 +84,16 @@ node tests/unit/test-explore-convergence-guardrails_behavioral.mjs
 echo "Running: test-explore-tool-guardrails_behavioral.mjs"
 node tests/unit/test-explore-tool-guardrails_behavioral.mjs
 
+echo "Running: test-explore-read-cache-continuity_behavioral.mjs"
+node tests/unit/test-explore-read-cache-continuity_behavioral.mjs
+
+echo "Running: test-permission-reuse-behavioral.mjs"
+node tests/unit/test-permission-reuse-behavioral.mjs
+
+echo "Running: test-jev-state-durability-behavioral.mjs"
+node tests/unit/test-jev-state-durability-behavioral.mjs
+
+echo "Running: test-jev-negative-observation-behavioral.mjs"
+node tests/unit/test-jev-negative-observation-behavioral.mjs
+
 echo "✓ All unit tests passed!"
