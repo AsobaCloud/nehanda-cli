@@ -103,11 +103,18 @@ function mockFetch(content, { finishReason = 'stop', usage = null } = {}) {
 }
 
 const VALID_PLAN = `## Objective
-Fix the thing.
+Fix the thing (#42).
 
 ## Plan
 1. Edit \`lib/example.mjs\` function \`doThing\` to return 42.
 2. Run \`node tests/unit/example.mjs\`.
+
+## Behavioral Specification
+Given a widget When running Then returns 42.
+
+## Coverage Matrix
+| Scenario | Test File |
+| FL-1 | tests/test_example.mjs |
 
 ## Proof of Success
 \`node tests/unit/example.mjs\` exits 0.`
@@ -127,7 +134,7 @@ tests.push(['BG-5: planGate approves a valid plan (happy path unchanged)', async
     const plan = db.prepare(`SELECT * FROM plans WHERE conversation_id = ?`).get(conversationId)
     assert.ok(plan, 'plan row persisted')
     assert.strictEqual(plan.status, 'approved')
-    assert.strictEqual(getPhase(db, conversationId), 'implement')
+    assert.strictEqual(getPhase(db, conversationId), 'test')
     // No retry nudge entry should have been appended
     const nudges = db.prepare(`SELECT COUNT(*) AS n FROM transcript_entries WHERE session_id = ? AND payload_json LIKE '%Do NOT use any tools%'`).get(sessionId)
     assert.strictEqual(nudges.n, 0)
