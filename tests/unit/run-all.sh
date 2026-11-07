@@ -78,4 +78,10 @@ node tests/unit/color_contrast_behavioral.mjs
 
 python3 tests/unit/tui_usability_behavioral.py --without-sandbox
 
+echo "Running: test-explore-convergence-guardrails_behavioral.mjs"
+node tests/unit/test-explore-convergence-guardrails_behavioral.mjs
+
+echo "Running: test-explore-tool-guardrails_behavioral.mjs"
+node tests/unit/test-explore-tool-guardrails_behavioral.mjs
+
 echo "✓ All unit tests passed!"
