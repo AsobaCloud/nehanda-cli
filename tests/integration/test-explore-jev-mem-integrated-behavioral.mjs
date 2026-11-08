@@ -198,22 +198,24 @@ await test('IJ-3: sufficient graph bypasses disk tools on explore turn (graph-fi
       },
     },
   }
-  await withTimeout(runUserTurn(db, rt, 'Review health check endpoint (#37)', autoIo), 45000, 'IJ-3 runUserTurn')
+  try {
+    await withTimeout(runUserTurn(db, rt, 'Review health check endpoint (#37)', autoIo), 45000, 'IJ-3 runUserTurn')
 
-  assert.equal(
-    readAttempts,
-    0,
-    `IJ-3: sufficient graph must bypass disk Reads (graph-first); got ${readAttempts} Read starts`
-  )
-  const phase = getPhase(db, cid)
-  assert.ok(
-    phase !== 'explore' && phase !== 'idle',
-    `IJ-3: must hand off out of explore/idle after graph-first, got ${phase}`
-  )
-
-  await mock.close()
-  closeStore(dbPath)
-  fs.rmSync(dir, { recursive: true, force: true })
+    assert.equal(
+      readAttempts,
+      0,
+      `IJ-3: sufficient graph must bypass disk Reads (graph-first); got ${readAttempts} Read starts`
+    )
+    const phase = getPhase(db, cid)
+    assert.ok(
+      phase !== 'explore' && phase !== 'idle',
+      `IJ-3: must hand off out of explore/idle after graph-first, got ${phase}`
+    )
+  } finally {
+    if (mock) await mock.close();
+    closeStore(dbPath);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 })
 
 await test('IJ-4: saturation handoff pins explore digest in pinned_context', async () => {
@@ -256,19 +258,21 @@ await test('IJ-4: saturation handoff pins explore digest in pinned_context', asy
       },
     },
   }
-  await withTimeout(runUserTurn(db, rt, 'Review health check endpoint (#37)', autoIo), 45000, 'IJ-4 runUserTurn')
+  try {
+    await withTimeout(runUserTurn(db, rt, 'Review health check endpoint (#37)', autoIo), 45000, 'IJ-4 runUserTurn')
 
-  upsertPinnedContext(db, sid, 'explore_candidates_snapshot', 'MAP.md → src/index.mjs')
-  const pinned = getPinnedContextBlocks(db, sid)
-  const keys = pinned.map((p) => p.key)
-  assert.ok(
-    keys.some((k) => /explore/i.test(k)),
-    `IJ-4: expected pinned explore digest key after saturation handoff, got keys=${JSON.stringify(keys)}`
-  )
-
-  await mock.close()
-  closeStore(dbPath)
-  fs.rmSync(dir, { recursive: true, force: true })
+    upsertPinnedContext(db, sid, 'explore_candidates_snapshot', 'MAP.md → src/index.mjs')
+    const pinned = getPinnedContextBlocks(db, sid)
+    const keys = pinned.map((p) => p.key)
+    assert.ok(
+      keys.some((k) => /explore/i.test(k)),
+      `IJ-4: expected pinned explore digest key after saturation handoff, got keys=${JSON.stringify(keys)}`
+    )
+  } finally {
+    if (mock) await mock.close();
+    closeStore(dbPath);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 })
 
 // Demonstrate real pinned_context API exists (control — should PASS)
