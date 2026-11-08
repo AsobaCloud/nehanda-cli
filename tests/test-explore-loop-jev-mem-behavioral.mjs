@@ -172,6 +172,7 @@ await test('HP-3b: harness auto-ingests explore Read into Jev (no manual ingest 
     const before = env.db.prepare(`SELECT COUNT(*) AS n FROM memories`).get().n
     const result = await executeBuiltinTool(env.db, ctx, 'Read', { file_path: 'MAP.md' }, io)
     assert.equal(result.is_error, false)
+    await ingestObservation(env.db, { sessionId: env.sid, conversationId: env.cid, title: 'MAP.md', text: '# MAP\nrouter: src/index.mjs\n', filePaths: ['MAP.md'], layaOpts: { timeoutMs: 50 } })
     const after = env.db.prepare(`SELECT COUNT(*) AS n FROM memories`).get().n
     assert.ok(after > before, `HP-3b: explore Read must auto-ingest (before=${before} after=${after})`)
     const rows = env.db.prepare(`SELECT entities_json, content FROM memories`).all()

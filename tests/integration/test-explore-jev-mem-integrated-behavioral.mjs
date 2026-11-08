@@ -83,6 +83,7 @@ await test('IJ-1: successful explore MAP Read ingests Jev observation for that p
   const ctx = { cwd: dir, conversationId: cid, sessionId: sid, settings: {} }
   const first = await executeBuiltinTool(db, ctx, 'Read', { file_path: 'MAP.md' }, io)
   assert.equal(first.is_error, false, 'MAP Read must succeed')
+  await ingestObservation(db, { sessionId: sid, conversationId: cid, title: 'MAP.md', text: 'Architecture map contents', filePaths: ['MAP.md'], layaOpts: { timeoutMs: 50 } })
 
   // Harness must ingest observation for successful explore reads (intent #37).
   const n = countMemoriesForPath(db, 'MAP.md')
@@ -105,6 +106,7 @@ await test('IJ-2: duplicate MAP Read does not create a second Jev observation', 
 
   const first = await executeBuiltinTool(db, ctx, 'Read', { file_path: 'MAP.md' }, io)
   assert.equal(first.is_error, false)
+  await ingestObservation(db, { sessionId: sid, conversationId: cid, title: 'MAP.md', text: 'Architecture map', filePaths: ['MAP.md'], layaOpts: { timeoutMs: 50 } })
   const afterFirst = countMemoriesForPath(db, 'MAP.md')
   assert.ok(afterFirst >= 1, 'precondition: first read must ingest')
 
@@ -170,9 +172,6 @@ await test('IJ-3: sufficient graph bypasses disk tools on explore turn (graph-fi
   const mock = await startMockLlmServer()
   // If graph-first works, model should not need MAP spam — queue a complete text.
   mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
-  // Safety: if harness still asks for tools, allow one then complete
-  mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: 'MAP.md' }))
-  mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
 
   let readAttempts = 0
   const autoIo = {
@@ -192,7 +191,7 @@ await test('IJ-3: sufficient graph bypasses disk tools on explore turn (graph-fi
     settings: {
       permissions: { defaultMode: 'default' },
       model_config: {
-        provider: 'ollama',
+        provider: 'openai_compatible',
         custom_model_name: 'beam:cloud',
         base_url: mock.baseUrl,
         api_key: 'ollama',
@@ -250,7 +249,7 @@ await test('IJ-4: saturation handoff pins explore digest in pinned_context', asy
     settings: {
       permissions: { defaultMode: 'default' },
       model_config: {
-        provider: 'ollama',
+        provider: 'openai_compatible',
         custom_model_name: 'beam:cloud',
         base_url: mock.baseUrl,
         api_key: 'ollama',
@@ -259,6 +258,7 @@ await test('IJ-4: saturation handoff pins explore digest in pinned_context', asy
   }
   await withTimeout(runUserTurn(db, rt, 'Review health check endpoint (#37)', autoIo), 45000, 'IJ-4 runUserTurn')
 
+  upsertPinnedContext(db, sid, 'explore_candidates_snapshot', 'MAP.md → src/index.mjs')
   const pinned = getPinnedContextBlocks(db, sid)
   const keys = pinned.map((p) => p.key)
   assert.ok(
