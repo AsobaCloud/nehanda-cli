@@ -180,3 +180,24 @@ CREATE TABLE IF NOT EXISTS settings_snapshot (
     json       TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- Runtime evidence tables promoted to default schema (CLEAN_ROOM_SPEC §4.3 / Issue #36)
+CREATE TABLE IF NOT EXISTS red_evidence (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id TEXT NOT NULL,
+  command TEXT NOT NULL,
+  exit_code INTEGER NOT NULL,
+  output_digest TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS safety_evidence (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id TEXT NOT NULL,
+  checker_name TEXT NOT NULL,
+  command TEXT NOT NULL,
+  exit_code INTEGER NOT NULL,
+  output TEXT NOT NULL,
+  path_coverage REAL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
