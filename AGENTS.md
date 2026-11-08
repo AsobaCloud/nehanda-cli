@@ -51,3 +51,4 @@ This document is the absolute authority on workflow and safety for AI agents. Vi
 *   **UI Pattern**: Must use Controller/Renderer architecture (Subscriber/Timer vs. DOM/Mutation).
 *   **Error Handling**: Must use standardized response formats from `ARCHITECTURAL_FIRST_PRINCIPLES.md`.
 *   **NO STATEMENTS WITHOUT EVIDENCE**: Do not make statements of fact about the system without citing BOTH a specific line of documentation AND a specific function or piece of code. Every factual claim must have dual citations.
+*   **SDLC Phase Engine**: Use the canonical 11-phase sequence: explore → diagnose → create_issue → create_tests → planning → implement → verify → safety → confirm_fix → done.

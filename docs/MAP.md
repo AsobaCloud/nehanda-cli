@@ -41,7 +41,7 @@ Reference document for key architectural decisions, module contracts, and follow
 
 **Injection point:** `runUserTurn` (single entry point, `lib/orchestrate.mjs`). Classification runs once per user turn for `idle` and `explore` phases only. Result is attached to `rt._intentMeta` and threaded into `buildSystemPrompt` as the 7th parameter.
 
-**Phase gate:** `[TASK CONTEXT — System 1]` block is injected only for `idle`, `explore`, and `default` phases. Not injected in `implement`, `test`, or `planning` — those phases use generated template messages that carry no real user intent signal.
+**Phase gate:** `[TASK CONTEXT — System 1]` block is injected only for `idle`, `explore`, and `default` phases. Not injected in `implement`, `verify`, `safety`, `planning`, `create_tests`, `create_issue`, `diagnose`, or `confirm_fix` — those phases use generated template messages that carry no real user intent signal.
 
 **Null safety:** `rt._intentMeta = null` when classification fails or is skipped. `buildSystemPrompt` handles `null` gracefully — output is identical to pre-#4 behavior.
 

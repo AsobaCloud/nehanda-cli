@@ -152,7 +152,7 @@ async function mainInteractive(opts) {
   /done         Workflow status
 
 Workflow transitions are automatic:
-  Plan → approve → implement → SubmitImplementation → approve → tests → approve → done
+  explore → diagnose → create_issue → create_tests → planning → implement → verify → safety → confirm_fix → done
 
 Tools:
   /init         Create Ona.md
@@ -937,30 +937,32 @@ async function mainPipe(opts) {
     }
     if (line === '/test') {
       const phase = getPhase(db, conversationId)
-      if (phase !== 'implement' && phase !== 'test') { io.println(`  Cannot test in phase: ${phase}`); continue }
+      if (phase !== 'implement' && phase !== 'create_tests' && phase !== 'verify') { io.println(`  Cannot test in phase: ${phase}`); continue }
       const plan = db.prepare(`SELECT content FROM plans WHERE conversation_id = ? AND status = 'approved' ORDER BY id DESC LIMIT 1`).get(conversationId)
       if (!plan) { io.println('  No approved plan.'); continue }
       const { generateAndRunTests } = await import('../lib/testgen.mjs')
       settings = getEffectiveSettings(db)
       const trt = { sessionId, conversationId, runtimeDbPath: dbPath, cwd, bareMode: opts.bare, settings }
       const results = await generateAndRunTests(db, trt, plan.content, s => io.println(`  ${s}`))
-      if (phase === 'implement') setPhase(db, conversationId, 'test', 'cli_admin')
+      if (phase === 'implement' || phase === 'create_tests') setPhase(db, conversationId, 'verify', 'cli_admin')
       const passed = results.filter(r => r.passed).length
       io.println(`  Tests: ${passed}/${results.length} passed`)
       continue
     }
     if (line === '/verify') {
-      if (getPhase(db, conversationId) !== 'test') { io.println('  Must be in test phase.'); continue }
+      const phase = getPhase(db, conversationId)
+      if (phase !== 'verify' && phase !== 'safety' && phase !== 'confirm_fix') { io.println('  Must be in verify, safety, or confirm_fix phase.'); continue }
       const results = db.prepare(`SELECT detail FROM events WHERE conversation_id = ? AND event_type = 'test_result' ORDER BY id`).all(conversationId)
       if (!results.length) { io.println('  No test results. Run /test.'); continue }
-      for (const r of results) { const d = JSON.parse(r.detail); io.println(`  ${d.passed ? '✓' : '✗'} ${d.criterion}`) }
+      for (const r of results) { const d = JSON.parse(r.detail); io.println(`  ${d.passed ? '✓' : '✗'} ${ (d.criterion || d.command || 'test') }`) }
       continue
     }
     if (line === '/issue') {
       io.println('  /issue requires interactive mode (run ona in TTY).'); continue
     }
     if (line === '/done') {
-      if (getPhase(db, conversationId) !== 'verify') { io.println('  Must be in verify phase.'); continue }
+      const phase = getPhase(db, conversationId)
+      if (phase !== 'safety' && phase !== 'confirm_fix' && phase !== 'verify') { io.println('  Must be in verify, safety, or confirm_fix phase.'); continue }
       setPhase(db, conversationId, 'done', 'cli_admin')
       const { spawnSync: sp } = await import('node:child_process')
       const plan = db.prepare(`SELECT content FROM plans WHERE conversation_id = ? AND status = 'approved' ORDER BY id DESC LIMIT 1`).get(conversationId)
