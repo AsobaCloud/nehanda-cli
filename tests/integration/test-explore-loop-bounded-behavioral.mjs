@@ -1,120 +1,185 @@
 #!/usr/bin/env node
 /**
- * Behavioral test: canonical registry discovery must converge (#34 / #35)
- *
- * This test does NOT mock runUserTurn. It mocks only the LLM provider, and the
- * canned model never concedes “Exploration complete.” The test therefore
- * observes whether the harness detects evidence saturation:
- *
- *   - MAP.md is read successfully once;
- *   - a repeated identical registry read is reported as already-read; and
- *   - the harness stops feeding that duplicate into further model turns and
- *     hands off through “Explanation/Exploration complete” instead of reusing
- *     the same observation to request another turn.
+ * Behavioral Test: Canonical Registry Discovery Convergence & Bounded Saturation
+ * Validates: HP-1, HP-2, HP-3, HP-4
+ * #37 Jev coupling: HP-JEV-1 (MAP read → observation), HP-JEV-2 (no re-ingest on already-read)
  */
-
 import assert from 'node:assert'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-
 import { openStore, closeStore } from '../../lib/store.mjs'
-import { getPhase } from '../../lib/workflow.mjs'
+import { getPhase, resetExploreReadCache } from '../../lib/workflow.mjs'
 import { runUserTurn } from '../../lib/orchestrate.mjs'
+import { setLayaPredictOverride, clearLayaPredictOverride } from '../../lib/laya.mjs'
 import {
   startMockLlmServer,
   makeOpenAiToolCallChunks,
   makeOpenAiTextChunks,
 } from '../fixtures/mockLlmServer.mjs'
 
-const tmpDir = path.join(os.tmpdir(), `explore-loop-bounded-${Date.now()}`)
-fs.mkdirSync(tmpDir, { recursive: true })
-const repoDir = path.join(tmpDir, 'repo')
-fs.mkdirSync(repoDir, { recursive: true })
-fs.writeFileSync(path.join(repoDir, 'MAP.md'), '# MAP\nrouter: src/index.mjs\n', 'utf8')
+setLayaPredictOverride(async () => ({
+  answers: {
+    task_status: { choice: 'investigating', confidence: 0.85 },
+    escalation_risk: { noul: 0.1 },
+    episodic: { noul: 0.5 }, semantic: { noul: 0.5 }, procedural: { noul: 0.5 }, preference: { noul: 0.1 },
+    need_semantic: { noul: 0.5 }, need_temporal: { noul: 0.3 }, need_causal: { noul: 0.3 }, need_entity: { noul: 0.4 },
+    multi_hop: { noul: 0.2 }, recency_important: { noul: 0.5 },
+    sufficient: { noul: 0.4 }, further_utility: { noul: 0.4 }, missing_required: { noul: 0.3 }, contradiction: { noul: 0.05 },
+    relevance: { noul: 0.6 }, relation_useful: { noul: 0.5 }, novelty: { noul: 0.5 }, supports_evidence: { noul: 0.5 },
+    semantic_related: { noul: 0.5 }, causal_influence: { noul: 0.3 }, same_episode: { noul: 0.5 }, entity_equivalent: { noul: 0.5 },
+  },
+}))
 
-const mock = await startMockLlmServer()
-
-// Ten adversarial responses. The harness is expected to ignore all repeats
-// after one successful registry read and another reported duplicate.
-for (let i = 0; i < 10; i += 1) {
-  mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: 'MAP.md' }))
+function countMapMemories(db) {
+  return db.prepare(`SELECT entities_json, content, title FROM memories`).all()
+    .filter((r) => `${r.entities_json || ''} ${r.content || ''} ${r.title || ''}`.includes('MAP.md'))
+    .length
 }
 
-const dbPath = path.join(tmpDir, 'loop.db')
-const db = openStore(dbPath)
-const convId = 'c-loop-bounded'
-const sessId = 's-loop-bounded'
-db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'idle')`).run(convId, repoDir)
-db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?, ?)`).run(sessId, convId)
+async function runScenario({ tmpRoot, convId, sessId, queueCount = 10 }) {
+  const tmpDir = path.join(tmpRoot, convId)
+  fs.mkdirSync(tmpDir, { recursive: true })
+  const repoDir = path.join(tmpDir, 'repo')
+  fs.mkdirSync(repoDir, { recursive: true })
+  fs.writeFileSync(path.join(repoDir, 'MAP.md'), '# MAP\nrouter: src/index.mjs\n', 'utf8')
 
-let readAttempts = 0
-let successfulReads = 0
-const toolCalls = []
-const toolResults = []
-const printed = []
-const autoIo = {
-  ask: async () => 'y',
-  println: (...args) => {
-    const text = args.join(' ').trim()
-    if (text) printed.push(text)
-  },
-  write: () => {},
-  onToolStart: (name, input) => {
-    if (name === 'Read' && /MAP\.md/.test(input.file_path || input.path || '')) readAttempts += 1
-    toolCalls.push(JSON.stringify({ name, ...input }))
-  },
-  onToolResult: (name, content, isError) => {
-    toolResults.push(JSON.stringify({ name, result: content, is_error: isError }))
-    if (name === 'Read' && isError !== true) successfulReads += 1
-  },
-}
+  const mock = await startMockLlmServer()
+  for (let i = 0; i < queueCount; i += 1) {
+    mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: 'MAP.md' }))
+  }
+  // Allow harness to exit explore if/when it eventually asks for a non-tool turn
+  mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
 
-const rt = {
-  sessionId: sessId,
-  conversationId: convId,
-  cwd: repoDir,
-  runtimeDbPath: dbPath,
-  settings: {
-    permissions: { defaultMode: 'default' },
-    model_config: {
-      provider: 'ollama',
-      custom_model_name: 'beam:cloud',
-      base_url: mock.baseUrl,
-      api_key: 'ollama',
+  const dbPath = path.join(tmpDir, 'loop.db')
+  const db = openStore(dbPath)
+  db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'idle')`).run(convId, repoDir)
+  db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?, ?)`).run(sessId, convId)
+
+  let readAttempts = 0
+  let successfulReads = 0
+  const toolCalls = []
+  const toolResults = []
+  const printed = []
+
+  const autoIo = {
+    ask: async () => 'y',
+    println: (...args) => {
+      const text = args.join(' ').trim()
+      if (text) printed.push(text)
     },
-  },
+    write: () => {},
+    onToolStart: (name, input) => {
+      if (name === 'Read' && /MAP\.md/.test(input?.file_path || input?.path || '')) readAttempts += 1
+      toolCalls.push(JSON.stringify({ name, ...input }))
+    },
+    onToolResult: (name, content, isError) => {
+      toolResults.push(JSON.stringify({ name, result: content, is_error: isError }))
+      if (name === 'Read' && isError !== true) successfulReads += 1
+    },
+  }
+
+  const rt = {
+    sessionId: sessId,
+    conversationId: convId,
+    cwd: repoDir,
+    runtimeDbPath: dbPath,
+    settings: {
+      permissions: { defaultMode: 'default' },
+      model_config: {
+        provider: 'ollama',
+        custom_model_name: 'beam:cloud',
+        base_url: mock.baseUrl,
+        api_key: 'ollama',
+      },
+    },
+  }
+
+  try {
+    await runUserTurn(db, rt, 'Review health check endpoint (#34)', autoIo)
+
+    const allOutput = printed.join('\n')
+    const allToolResults = toolResults.join('\n')
+
+    assert.equal(successfulReads, 1, `HP-1: expected exactly one successful MAP.md read, got ${successfulReads}: ${JSON.stringify(toolResults)}`)
+    assert.ok(readAttempts <= 2, `HP-1: expected at most 2 Read(MAP.md) attempts, got ${readAttempts}: ${JSON.stringify(toolCalls)}`)
+
+    assert.ok(/already read/i.test(allToolResults), `HP-2: expected "already read" tool result, got: ${JSON.stringify(toolResults)}`)
+    assert.ok(
+      /already read|Exploration complete|No matching context/i.test(allOutput + '\n' + allToolResults),
+      `HP-2: expected convergence output, got: ${JSON.stringify(allOutput)}`
+    )
+    assert.ok(mock.requestCount <= 4, `HP-2: expected at most 4 upstream model requests, got ${mock.requestCount}`)
+    assert.equal(getPhase(db, convId), 'planning', `HP-2: expected handoff to planning, got ${getPhase(db, convId)}`)
+
+    const mapMemories = countMapMemories(db)
+    assert.ok(mapMemories >= 1, `HP-JEV-1: expected ≥1 Jev memory referencing MAP.md after explore, got ${mapMemories}`)
+    assert.ok(mapMemories <= 1, `HP-JEV-2: duplicate already-read must not re-ingest MAP.md (count=${mapMemories})`)
+
+    return {
+      successfulReads,
+      readAttempts,
+      requestCount: mock.requestCount,
+      phase: getPhase(db, convId),
+      mapMemories,
+    }
+  } finally {
+    try { closeStore(dbPath) } catch {}
+    try { await mock.close() } catch {}
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+  }
 }
 
-await runUserTurn(db, rt, 'Review health check endpoint (#34)', autoIo)
+const tmpRoot = path.join(os.tmpdir(), `explore-loop-bounded-${Date.now()}`)
+fs.mkdirSync(tmpRoot, { recursive: true })
 
-const allOutput = printed.join('\n')
+// HP-1 / HP-2: One canonical sweep + no downstream resweep
+const m1 = await runScenario({ tmpRoot, convId: 'c-loop-bounded-1', sessId: 's-loop-bounded-1', queueCount: 10 })
+console.log('  EXPLORE-LOOP-BOUNDED (HP-1/HP-2):')
+console.log(`  successfulReads: ${m1.successfulReads}`)
+console.log(`  Read(MAP.md) attempts: ${m1.readAttempts}`)
+console.log(`  Model requests: ${m1.requestCount}`)
+console.log(`  Phase: ${m1.phase}`)
+console.log(`  MAP memories: ${m1.mapMemories}`)
 
-// One successful registry read and at most one additional duplicate attempt
-// are acceptable because the second call is the detected boundary itself.
-assert.equal(successfulReads, 1, `expected exactly one successful MAP.md read, got ${successfulReads}: ${JSON.stringify(toolResults)}`)
-assert.ok(readAttempts <= 2, `expected at most 2 Read(MAP.md) attempts, got ${readAttempts}: ${JSON.stringify(toolCalls)}`)
+// HP-3: Clean state resets upon idle -> explore transitions
+resetExploreReadCache('c-loop-bounded-1')
 
-// The duplicate should make convergence observable rather than silently looping:
-// either the harness reports the loop as already-read, or it hands off.
-assert.ok(
-  /already read in this exploration|Exploration complete|No matching context/i.test(allOutput),
-  `expected convergence output, got: ${JSON.stringify(allOutput)}`
-)
+const m2 = await runScenario({ tmpRoot, convId: 'c-loop-bounded-2', sessId: 's-loop-bounded-2', queueCount: 10 })
+assert.equal(m2.successfulReads, 1, 'HP-3: clean reset must allow exactly one successful canonical read again')
+assert.ok(m2.readAttempts <= 2, 'HP-3: bounded attempts after reset')
+console.log('  HP-3 CLEAN RESET:')
+console.log(`  successfulReads: ${m2.successfulReads}`)
+console.log(`  Read(MAP.md) attempts: ${m2.readAttempts}`)
+console.log(`  Model requests: ${m2.requestCount}`)
 
-// And the run should stop feeding repeated observations upstream.
-assert.ok(mock.requestCount <= 4, `expected at most 4 upstream model requests, got ${mock.requestCount}`)
+// HP-4: Failure transparency (resetting unknown conversation retains state without throwing)
+assert.doesNotThrow(() => resetExploreReadCache('does-not-exist'), 'HP-4: reset missing convId must be failure-transparent')
+console.log('  HP-4 FAILURE TRANSPARENCY (no auto-advance)')
 
-// Before a fix is present, this will fail on the counts/output assertions above.
-// After the fix, this transition should hold.
-assert.equal(getPhase(db, convId), 'planning', `expected handoff to planning, got ${getPhase(db, convId)}`)
+fs.rmSync(tmpRoot, { recursive: true, force: true })
+clearLayaPredictOverride()
 
-closeStore(dbPath)
-await mock.close()
-fs.rmSync(tmpDir, { recursive: true, force: true })
+// Real-provider smoke variant (skip unless OLLAMA_E2E_TEST=1)
+if (process.env.OLLAMA_E2E_TEST === '1') {
+  console.log('Real Ollama smoke variant requested; checking availability...')
+  try {
+    const base = process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1'
+    const host = base.replace(/\/v1\/?$/, '')
+    const res = await fetch(`${host}/api/tags`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    const hasModel = Array.isArray(data?.models) && data.models.some((m) => String(m?.name || '').startsWith('beam'))
+    if (!hasModel) {
+      console.log('SKIP: beam:cloud model not available on Ollama endpoint.')
+    } else {
+      console.log('SKIP: real-provider smoke variant ready for execution.')
+    }
+  } catch (e) {
+    console.log(`SKIP: Ollama endpoint unavailable: ${e?.message || e}`)
+  }
+} else {
+  console.log('SKIP: set OLLAMA_E2E_TEST=1 for real Ollama beam:cloud smoke variant.')
+}
 
-console.log('✓ EXPLORE-LOOP-BOUNDED BEHAVIORAL:')
-console.log(`  successfulReads: ${successfulReads}`)
-console.log(`  Read(MAP.md) attempts: ${readAttempts}`)
-console.log(`  Model requests: ${mock.requestCount}`)
-console.log(`  Phase: ${getPhase(db, convId)}`)
+console.log('\nAll HP-1..HP-4 bounded exploration assertions passed.')

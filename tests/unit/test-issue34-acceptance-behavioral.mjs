@@ -8,6 +8,7 @@ import { ingestObservation } from '../../lib/jev_write.mjs'
 import { retrieveEvidence, rrfAnchors } from '../../lib/jev_read.mjs'
 import { buildJevSystem2Messages } from '../../lib/compact.mjs'
 import { buildExploreUserMessage } from '../../lib/orchestrate.mjs'
+import { executeBuiltinTool } from '../../lib/tools.mjs'
 import { setLayaPredictOverride, clearLayaPredictOverride } from '../../lib/laya.mjs'
 
 const layaOverride = {
@@ -129,6 +130,38 @@ setLayaPredictOverride(async () => layaOverride)
     } finally {
       closeStore(env.dbPath)
       fs.rmSync(env.dir, { recursive: true, force: true })
+    }
+  })
+}
+
+{
+  // #37 — integrated explore tool → retrieveEvidence (harness must auto-ingest Read)
+  await test('ISSUE34-07: explore Read is visible to retrieveEvidence without manual ingest', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue34-07-'))
+    const dbPath = path.join(dir, 't.db')
+    const db = openStore(dbPath)
+    const sessionId = 's7'
+    const conversationId = 'c7'
+    try {
+      fs.writeFileSync(path.join(dir, 'MAP.md'), '# MAP\nasobacorp health dashboard on src/server.mjs\n', 'utf8')
+      db.prepare('INSERT INTO conversations(id, project_dir, phase) VALUES (?,?,?)').run(conversationId, dir, 'explore')
+      db.prepare('INSERT INTO sessions(session_id, conversation_id) VALUES (?,?)').run(sessionId, conversationId)
+      const io = { println() {}, write() {}, ask: async () => 'y', spinner: null }
+      const ctx = { cwd: dir, conversationId, sessionId, settings: {} }
+      const read = await executeBuiltinTool(db, ctx, 'Read', { file_path: 'MAP.md' }, io)
+      assert.equal(read.is_error, false)
+      const out = await retrieveEvidence(db, 'asobacorp health dashboard', {
+        sessionId,
+        conversationId,
+        layaOpts: { timeoutMs: 20 },
+      })
+      assert.ok(
+        Array.isArray(out.evidence) && out.evidence.length > 0,
+        `ISSUE34-07: retrieveEvidence must see harness-ingested MAP Read (stoppedReason=${out.stoppedReason})`
+      )
+    } finally {
+      closeStore(dbPath)
+      fs.rmSync(dir, { recursive: true, force: true })
     }
   })
 }

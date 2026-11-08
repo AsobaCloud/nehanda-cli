@@ -57,5 +57,25 @@ await (async () => {
     env.cleanup()
   })
 
+  await test('EXP-GUARD-4: duplicate Read does not create a second Jev observation for MAP.md', async () => {
+    const env = tempEnv()
+    try {
+      const ctx = { cwd: env.dir, conversationId: env.conversationId, sessionId: env.sessionId, settings: {} }
+      const io = { println() {}, write() {}, ask: async () => 'y', spinner: null }
+      const first = await executeBuiltinTool(env.db, ctx, 'Read', { file_path: 'MAP.md' }, io)
+      assert.equal(first.is_error, false)
+      const countAfterFirst = env.db.prepare(`SELECT COUNT(*) AS n FROM memories`).get().n
+      assert.ok(countAfterFirst >= 1, `EXP-GUARD-4: first explore Read must ingest (≥1 memory), got ${countAfterFirst}`)
+      const second = await executeBuiltinTool(env.db, ctx, 'Read', { file_path: 'MAP.md' }, io)
+      assert.equal(second.is_error, true)
+      assert.match(second.content, /already read/i)
+      const countAfterSecond = env.db.prepare(`SELECT COUNT(*) AS n FROM memories`).get().n
+      assert.equal(countAfterSecond, countAfterFirst, 'EXP-GUARD-4: already-read must not re-ingest')
+    } finally {
+      env.cleanup()
+    }
+  })
+
   console.log(`\nSummary: ${passed} Passed, ${failed} Failed (RED)`)
 })().catch(err => { console.error(err); process.exit(1) })
+if (failed > 0) process.exitCode = 1

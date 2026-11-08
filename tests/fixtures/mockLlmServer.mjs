@@ -160,6 +160,7 @@ export function startMockLlmServer() {
         baseUrl: `http://127.0.0.1:${port}/v1`,
         origin: `http://127.0.0.1:${port}`,
         requests,
+        get requestCount() { return requests.length },
         queueResponse(responder) { responseQueue.push(responder) },
         close() {
           return new Promise((res, rej) => {
