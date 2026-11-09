@@ -298,7 +298,7 @@ Then the usage is permitted
   await check('CANON-E2E-1: canonical phase order', async () => {
     assert.deepStrictEqual(phasesSeen, [
       'explore', 'diagnose', 'create_issue', 'create_tests', 'planning',
-      'implement', 'verify', 'safety', 'confirm_fix', 'done',
+      'implement', 'verify', 'safety', 'confirm_fix', 'done', 'idle',
     ])
   })
 
