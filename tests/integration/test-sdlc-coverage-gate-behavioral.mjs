@@ -100,14 +100,38 @@ try {
 
   // Boundary probe: once the original regression is accepted, running another
   // GREEN test must not substitute its coverage under the same approved test ID.
+  // Negative control must itself have HIGH measured coverage. Otherwise a
+  // rejection can be explained by a low coverage ratio, not test-identity
+  // enforcement. Exercise the same branches from a DIFFERENT regression file.
   fs.writeFileSync(path.join(cwd, 'tests/other.test.mjs'),
-    "import test from 'node:test';import assert from 'node:assert/strict';import {classify} from '../src/subject.mjs';test('other',()=>{assert.equal(classify(3),'positive')})\n")
+    `import test from 'node:test'
+import assert from 'node:assert/strict'
+import { classify } from '../src/subject.mjs'
+test('unrelated complete branch probe', () => {
+  assert.equal(classify(42), 'positive')
+  assert.equal(classify(-42), 'negative')
+  assert.equal(classify(0), 'zero')
+  assert.equal(classify(Number.NaN), 'invalid')
+})\n`)
+  // This is a verifier-boundary fixture, not an attempt to execute Bash in
+  // confirm_fix. Return to an allowed verification context before running the
+  // alternate regression, without changing the approved test identity.
+  db.prepare("UPDATE conversations SET phase='verify' WHERE id=?").run(cid)
+  assert.equal(getPhase(db, cid), 'verify', 'alternate execution must occur in verify')
   const alternate = await runWithMarker('node --test tests/other.test.mjs; rc=$?; exit "$rc"')
-  assert.equal(alternate.is_error, false)
+  assert.equal(alternate.is_error, false, `alternate regression must execute successfully in verify: ${String(alternate.content).slice(-1500)}`)
   recordRedTestEvidence(db, cid, {
     command: 'node --test tests/other.test.mjs; rc=$?; exit "$rc"', exit_code: 0, output_digest: alternate.content,
   })
-  nativeCoverage('tests/other.test.mjs')
+  const unrelatedLcov = nativeCoverage('tests/other.test.mjs')
+  const unrelatedRecord = unrelatedLcov.split(/^end_of_record\s*$/m)
+    .find(record => /^SF:src\/subject\.mjs$/m.test(record))
+  assert.ok(unrelatedRecord, 'alternate LCOV must measure the same real production module')
+  const altDenominator = Number(unrelatedRecord.match(/^BRF:(\d+)$/m)?.[1])
+  const altNumerator = Number(unrelatedRecord.match(/^BRH:(\d+)$/m)?.[1])
+  assert.ok(Number.isFinite(altDenominator) && altDenominator > 0 &&
+    altNumerator / altDenominator >= 0.7,
+    `negative control must pass the threshold independently: ${altNumerator}/${altDenominator}`)
   db.prepare("UPDATE conversations SET phase='safety' WHERE id=?").run(cid)
   const unrelated = await safetyGate(db, rt, io)
   assert.equal(unrelated, false, 'an unrelated later regression cannot replace approved GREEN coverage')

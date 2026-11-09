@@ -25,6 +25,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const entry = path.join(root, 'bin', 'nehanda-ui.mjs')
+const ptyDriver = path.join(root, 'tests', 'fixtures', 'pty_driver.py')
 const FIRST_FRAME = /⠋\s+Analyzing…/
 const SPINNER = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+Analyzing…/
 const READY = /Type \/help for commands/
@@ -38,10 +39,6 @@ function terminalText(bytes) {
     .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '') // OSC
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')         // CSI (including erases)
     .replace(/\x1b[@-_]/g, '')                           // other ESC sequences
-}
-
-function shQuote(value) {
-  return `'${String(value).replaceAll("'", "'\\''")}'`
 }
 
 async function eventually(predicate, deadlineMs, description, state) {
@@ -58,8 +55,9 @@ async function main() {
   assert.ok(fs.existsSync(entry), `Actual TUI entrypoint missing: ${entry}`)
   assert.ok(process.platform === 'linux' || process.platform === 'darwin',
     'SP-1 PTY integration requires Linux or macOS')
-  const hasScript = spawnSync('script', ['--help'], { stdio: 'ignore' })
-  assert.notEqual(hasScript.error?.code, 'ENOENT', 'script(1) required to drive the actual Ink terminal')
+  assert.ok(fs.existsSync(ptyDriver), `True PTY driver missing: ${ptyDriver}`)
+  const ptyCheck = spawnSync('python3', ['-c', 'import pty, termios, fcntl'], { encoding: 'utf8' })
+  assert.equal(ptyCheck.status, 0, `Python 3 standard-library PTY support required: ${ptyCheck.stderr || ptyCheck.error}`)
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nehanda-sp1-'))
   const home = path.join(tmp, 'home')
@@ -94,6 +92,7 @@ export async function load(url, context, nextLoad) {
   let server
   let waitingResponse = null
   let providerRequests = 0
+  let firstRequestAt = null
   let responseReleased = false
   let afterPromptOffset = 0
   let enteredAt = 0
@@ -102,6 +101,7 @@ export async function load(url, context, nextLoad) {
     server = http.createServer((req, res) => {
       if (req.method === 'POST' && /^\/v1\/chat\/completions(?:[/?]|$)/.test(req.url || '')) {
         providerRequests++
+        if (firstRequestAt === null) firstRequestAt = Date.now()
         req.resume()  // drain the real model request; withhold every response byte
         waitingResponse = res
         return
@@ -121,11 +121,10 @@ export async function load(url, context, nextLoad) {
     }, null, 2))
 
     const nodeCommand = [process.execPath, '--no-warnings', '--experimental-loader', layaLoader, entry]
-    const scriptArgs = process.platform === 'darwin'
-      ? ['-q', '/dev/null', ...nodeCommand]
-      : ['-q', '-f', '-c', nodeCommand.map(shQuote).join(' '), '/dev/null']
-
-    child = spawn('script', scriptArgs, {
+    // Python pty.fork() establishes a real controlling terminal on macOS and
+    // Linux. macOS script(1) cannot attach piped stdin to a controlling TTY.
+    // Only terminal transport is external; the application runs unmodified.
+    child = spawn('python3', [ptyDriver, ...nodeCommand], {
       cwd: workspace,
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -162,32 +161,74 @@ export async function load(url, context, nextLoad) {
     await eventually(() => READY.test(terminalText(state.terminal)),
       STARTUP_TIMEOUT_MS, 'real Ink input screen', state)
 
+    // Ink receives keypress chunks from the controlling TTY. Sending the
+    // entire prompt and Enter in ONE pipe write can deliver "text\r" as a
+    // single input chunk, which Ink TextInput renders as text without firing
+    // its Enter/onSubmit callback. Type and submit as distinct TTY events.
+    const prompt = `sp1-render-first-frame-${process.pid}`
+    const beforeTypingOffset = state.terminal.length
+    child.stdin.write(prompt)
+    await eventually(
+      () => terminalText(state.terminal.slice(beforeTypingOffset)).includes(prompt),
+      TURN_TIMEOUT_MS,
+      'controlled TextInput echo before Enter',
+      state,
+    )
+    // Echo indicates rendering; give React one tick to commit controlled state.
+    await delay(100)
     afterPromptOffset = state.terminal.length
-    enteredAt = Date.now()
-    child.stdin.write(`sp1-render-first-frame-${process.pid}\r`)
+    enteredAt = Date.now() // deadline begins with the actual Enter key, not typing
+    child.stdin.write('\r')
 
-    // Assert the FIRST spinner frame, not an arbitrary later rotating label.
-    await eventually(() => state.firstSpinnerAt !== null,
-      TURN_TIMEOUT_MS, 'first visible ⠋ Analyzing… terminal frame', state)
-    const renderDelay = state.firstSpinnerAt - enteredAt
-    assert.ok(renderDelay >= 0 && renderDelay <= MAX_FIRST_FRAME_MS,
-      `SP-1: first Analyzing frame took ${renderDelay}ms (max ${MAX_FIRST_FRAME_MS}ms)`)
-    assert.equal(providerRequests, 0,
-      'SP-1: initial spinner frame must appear before the first upstream request')
-
-    // The real orchestrator asks whether to enter SDLC while idle. Choose the
-    // non-SDLC path to reach a single model request without unrelated gates.
-    await eventually(() => SDLC_QUESTION.test(terminalText(state.terminal)),
+    // Observe the precise first outcome of real prompt submission.  In the
+    // current production implementation, the idle-phase orchestrator can
+    // prompt for SDLC consent before Ink has painted an Analyzing frame.
+    // AskPrompt intentionally hides Spinner while the question is visible.
+    // This is not a PTY failure: it is a potentially real SP-1 violation.
+    // Continue through the consent question to independently exercise the
+    // held-provider spinner, without moving the initial 1-second deadline.
+    await eventually(
+      () => state.firstSpinnerAt !== null ||
+        SDLC_QUESTION.test(terminalText(state.terminal.slice(afterPromptOffset))),
+      TURN_TIMEOUT_MS, 'first spinner frame or real SDLC confirmation question', state,
+    )
+    await eventually(() => SDLC_QUESTION.test(terminalText(state.terminal.slice(afterPromptOffset))),
       TURN_TIMEOUT_MS, 'real SDLC entry prompt', state)
+    const initialTranscript = terminalText(state.terminal.slice(afterPromptOffset))
+    const questionIndex = initialTranscript.search(SDLC_QUESTION)
+    const initialFrameBeforeHITL = FIRST_FRAME.test(initialTranscript.slice(0, questionIndex))
+    const initialFrameAt = initialFrameBeforeHITL ? state.firstSpinnerAt : null
+    const initialRenderDelay = initialFrameAt === null ? null : initialFrameAt - enteredAt
+    assert.equal(providerRequests, 0,
+      'SP-1: the initial UI feedback / SDLC consent question must precede model traffic')
+
+    // This is a genuine Ink AskPrompt. Answer 'n' rather than fabricating the
+    // response or bypassing orchestrator's SDLC choice; the turn then makes
+    // one real model request against our held loopback HTTP provider.
     const afterAnswerOffset = state.terminal.length
-    child.stdin.write('n\r')
+    child.stdin.write('n')
+    await eventually(
+      () => /❯\s+n/.test(terminalText(state.terminal.slice(afterAnswerOffset))),
+      TURN_TIMEOUT_MS, 'real Ink SDLC answer echoed before Return', state,
+    )
+    child.stdin.write('\r')
 
     // The local HTTP server now holds the real POST response open. The Ink
     // spinner must be visible during this pending request, not just initially.
     await eventually(() => waitingResponse !== null,
       TURN_TIMEOUT_MS, 'pending real upstream model request', state)
-    await eventually(() => SPINNER.test(terminalText(state.terminal.slice(afterAnswerOffset))),
-      TURN_TIMEOUT_MS, 'visible Analyzing spinner while provider is pending', state)
+    // Observe animation generated *after* the provider request began. An
+    // earlier frame in the terminal transcript does not establish ongoing
+    // visibility; distinct live spinner frames while HTTP is blocked do.
+    const pendingOffset = state.terminal.length
+    await eventually(() => {
+      const glyphs = [...terminalText(state.terminal.slice(pendingOffset)).matchAll(
+        /([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏])\s+Analyzing…/g,
+      )].map(match => match[1])
+      return new Set(glyphs).size >= 2
+    }, TURN_TIMEOUT_MS, 'multiple live Analyzing frames while model response is withheld', state)
+    assert.ok(SPINNER.test(terminalText(state.terminal.slice(afterAnswerOffset))),
+      'provider-pending terminal output must include the visible Analyzing spinner')
 
     assert.equal(providerRequests, 1, 'SP-1: expected exactly one model request')
     assert.equal(responseReleased, false, 'SP-1: model must not respond before spinner assertion')
@@ -213,7 +254,16 @@ export async function load(url, context, nextLoad) {
     await eventually(() => /❯\s/.test(terminalText(state.terminal.slice(afterReleaseOffset))),
       TURN_TIMEOUT_MS, 'normal input restored after spinner completes', state)
 
-    console.log(`PASS SP-1: first Ink frame ⠋ Analyzing… rendered in ${renderDelay}ms; visible during a held model request; normal input restored after release`)
+    assert.ok(initialFrameBeforeHITL,
+      'SP-1 production RED: the real SDLC consent question replaced the initial ⠋ Analyzing… frame; ' +
+      'no required first frame was rendered between submitting the prompt and showing AskPrompt ' +
+      '(the provider-pending spinner was evaluated separately and does not substitute)')
+    assert.ok(initialRenderDelay >= 0 && initialRenderDelay <= MAX_FIRST_FRAME_MS,
+      `SP-1: initial Analyzing frame appeared after ${initialRenderDelay}ms (max ${MAX_FIRST_FRAME_MS}ms)`)
+    assert.ok(initialFrameAt !== null && initialFrameAt <= firstRequestAt,
+      'SP-1: initial Analyzing frame must precede model HTTP request')
+
+    console.log(`PASS SP-1: initial frame in ${initialRenderDelay}ms; animated while HTTP was held; input restored`)
   } catch (error) {
     throw new Error(`${error.message}\n--- Last 1,600 chars of real terminal output ---\n${terminalText(state.terminal).slice(-1600)}`)
   } finally {

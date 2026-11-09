@@ -305,10 +305,22 @@ await test('IJ-3-NEG: insufficient graph allows the real exploration Read throug
   try {
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memories').get().n, 0, 'negative graph starts empty')
     mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: 'MAP.md' }))
-    mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
-    mock.queueResponse(makeOpenAiTextChunks('Read MAP.md; health router maps to src/health.mjs.'))
+    // This negative control stops at the actual successful Read result. Later
+    // explore->diagnose gates are tested by IJ-3 positive and AGENTS-SDLC-1,
+    // so they must not turn a successful insufficient-graph Read into a false
+    // failure of IJ-3-NEG.
+    // The global positive-control Laya fixture reports sufficient=0.95. A
+    // hot-path prompt observation can therefore make an initially empty graph
+    // look sufficient before the model's Read reaches the dispatcher. This
+    // NEGATIVE control must supply the opposite external Laya assessment.
+    const insufficient = structuredClone(layaOverride)
+    insufficient.answers.sufficient = { noul: 0.05 }
+    insufficient.answers.further_utility = { noul: 0.95 }
+    insufficient.answers.missing_required = { noul: 0.90 }
+    setLayaPredictOverride(async () => insufficient)
     let reads = 0, success = 0
-    const handoff = new Error('IJ3 negative handoff')
+    const toolResults = []
+    const observedRead = new Error('IJ-3 negative control observed production Read result')
     const rt = { sessionId: sid, conversationId: cid, cwd, runtimeDbPath: dbPath,
       settings: { permissions: { defaultMode: 'default' }, model_config: {
         provider: 'openai_compatible', custom_model_name: 'fixture', base_url: mock.baseUrl, api_key: 'test',
@@ -316,17 +328,34 @@ await test('IJ-3-NEG: insufficient graph allows the real exploration Read throug
     }
     await assert.rejects(
       withTimeout(runUserTurn(db, rt, 'Explore the health router from MAP.md', {
-        println(msg) { if (/Entering diagnose phase/.test(String(msg))) throw handoff },
+        println() {},
         write() {},
         onToolStart(name) { if (name === 'Read') reads++ },
-        onToolResult(name, content, isError) { if (name === 'Read' && !isError) success++ },
+        onToolResult(name, content, isError) {
+          if (name === 'Read') {
+            toolResults.push({ content: String(content), isError })
+            if (!isError && String(content).includes('health router: src/health.mjs')) success++
+            // Only abort the test AFTER the real Read has returned through
+            // the production dispatcher. This prevents unrelated later
+            // orchestration gates from affecting the read-specific result.
+            throw observedRead
+          }
+        },
       }), 45000, 'IJ-3 insufficient-graph turn'),
-      err => err === handoff,
+      err => err === observedRead,
     )
-    assert.equal(reads, 1, 'insufficient graph must dispatch the real filesystem Read')
-    assert.equal(success, 1, 'Read must return actual source content without being intercepted')
-    assert.equal(getPhase(db, cid), 'diagnose')
+    const modelRequests = mock.requests.filter(r => /\/chat\/completions/.test(r.url))
+    assert.ok(modelRequests.length >= 1, 'negative control must reach the real model transport')
+    assert.equal(reads, 1, `insufficient graph must dispatch the real filesystem Read; observed ${reads} starts and ${JSON.stringify(toolResults)}`)
+    assert.equal(success, 1, `Read must return actual source content without interception: ${JSON.stringify(toolResults)}`)
+    assert.equal(toolResults.some(x => /graph evidence is sufficient|filesystem Read bypassed/i.test(x.content)), false,
+      'insufficient-graph negative control must not report a graph-first bypass')
+    // Do not assert diagnose here: the negative control's acceptance
+    // criterion is filesystem access below the graph-sufficiency threshold.
+    // Transition evidence is tested independently by IJ-3 positive and the
+    // AGENTS-SDLC workflow suite.
   } finally {
+    setLayaPredictOverride(async () => layaOverride)
     await mock.close()
     closeStore(dbPath)
     fs.rmSync(dir, { recursive: true, force: true })

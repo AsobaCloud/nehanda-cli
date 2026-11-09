@@ -98,6 +98,25 @@ test('equal boundary is allowed', () => assert.equal(allowEqual(7, 7), true))
   assert.notEqual(probe.status, 0, `JS fixture must fail real checker: ${probe.stdout}\n${probe.stderr}`)
   assert.match(`${probe.stdout}\n${probe.stderr}`, /Duplicate function definitions|duplicate/i)
 
+  // Calibrate the other two violations against their ACTUAL executables.
+  // A missing checker executable alone is not a legitimate fixture failure;
+  // diagnostic output must identify the targeted rule.
+  const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../lib/scripts')
+  const shellProbe = cp.spawnSync('bash', [path.join(scriptRoot, 'shell-safety-checker.sh'), cwd], {
+    cwd, encoding: 'utf8', timeout: 30000,
+  })
+  assert.notEqual(shellProbe.status, 0, 'Shell fixture must fail the real shell checker')
+  assert.match(`${shellProbe.stdout}\n${shellProbe.stderr}`, /Missing 'set -euo pipefail'/,
+    'Shell negative control must fail for the actual planted violation')
+
+  const pythonProbe = cp.spawnSync('python3', [path.join(scriptRoot, 'python-safety-checker.py'), cwd], {
+    cwd, encoding: 'utf8', timeout: 30000,
+  })
+  assert.notEqual(pythonProbe.status, 0, 'Python fixture must fail the real Python checker')
+  assert.match(`${pythonProbe.stdout}\n${pythonProbe.stderr}`, /Insecure function 'eval'/,
+    'Python negative control must fail its AST contract, not solely for missing optional tools')
+
+
   const before = db.prepare("SELECT COUNT(*) AS n FROM events WHERE conversation_id=? AND event_type='safety_checker'").get(cid).n
   assert.equal(await safetyGate(db, rt, io), false, 'genuine checker violations block safety')
   assert.equal(getPhase(db, cid), 'safety', 'gate must remain closed')

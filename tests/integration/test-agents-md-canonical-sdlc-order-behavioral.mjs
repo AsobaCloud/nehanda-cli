@@ -10,6 +10,8 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { setLayaPredictOverride, clearLayaPredictOverride } from '../../lib/laya.mjs'
 
 import { openStore, closeStore } from '../../lib/store.mjs'
 import { runUserTurn } from '../../lib/orchestrate.mjs'
@@ -72,6 +74,32 @@ test('invalid usage and limit are rejected', () => {
 })
 `
 
+// Independent fixture calibration (never stored as production RED/GREEN evidence).
+// This proves the mocked model's proposed test is capable of rejecting the
+// defective implementation and accepting the corrected implementation.
+function calibrateRegressionFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canon-fixture-calibration-'))
+  try {
+    fs.mkdirSync(path.join(root, 'tests'))
+    fs.mkdirSync(path.join(root, 'src'))
+    fs.writeFileSync(path.join(root, testPath), behavioralTest)
+    fs.writeFileSync(path.join(root, productionPath), defectiveSource)
+    const execute = () => spawnSync(process.execPath, ['--test', testPath], {
+      cwd: root, encoding: 'utf8', timeout: 20000,
+    })
+    const red = execute()
+    assert.notEqual(red.status, 0, `fixture must actually be RED: ${red.stdout} ${red.stderr}`)
+    assert.match(red.stdout + red.stderr, /ERR_ASSERTION|AssertionError|false !== true/,
+      'fixture RED must be a behavioral assertion failure')
+    fs.writeFileSync(path.join(root, productionPath), correctedSource)
+    const green = execute()
+    assert.equal(green.status, 0, `same fixture must actually turn GREEN: ${green.stdout} ${green.stderr}`)
+    console.log('CANON-FIXTURE: independently confirmed actual RED and GREEN (no database evidence inserted)')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+}
+
 function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 }
@@ -121,6 +149,12 @@ try {
     mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: 'MAP.md' }))
   }
   mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
+  // exploreGateOpenAICompat makes a separate real model request for each
+  // successfully explored file's summary BEFORE entering diagnose. Without
+  // this response all subsequent phase-specific fixture messages misalign.
+  mock.queueResponse(makeOpenAiTextChunks(
+    'MAP.md identifies src/memory.mjs as the boundary implementation and tests/memory.behavior.test.mjs as its regression.'
+  ))
 
   // Subsequent model turns supply actions, never fabricated tool results.
   // Canonical order: diagnose, create_issue, create_tests, planning,
@@ -150,14 +184,31 @@ Then the usage is permitted
     content: correctedSource,
   }))
   mock.queueResponse(makeOpenAiTextChunks('Fixed the memory limit comparison.'))
+  // implementGate requests its own summary turn before asking the operator to
+  // accept implementation, so reserve a realistic model response for it.
+  mock.queueResponse(makeOpenAiTextChunks('Implemented the approved equality-boundary correction in src/memory.mjs.'))
   // Coverage is generated before the final GREEN command so a successful
   // verification cannot advance to safety before LCOV exists.
   mock.queueResponse(makeOpenAiToolCallChunks('Bash', { command: coverageCommand }))
   mock.queueResponse(makeOpenAiToolCallChunks('Bash', { command: redGreenCommand }))
   mock.queueResponse(makeOpenAiTextChunks('Original regression passes; native LCOV coverage generated.'))
 
+  calibrateRegressionFixture()
+  // Laya is an external controller, not the behavior under test; deterministic
+  // replies avoid 250ms sidecar timeouts and prevent incidental graph gating.
+  setLayaPredictOverride(async () => ({ answers: {
+    task_status: { choice: 'investigating', confidence: 0.9 },
+    sufficient: { noul: 0.05 }, missing_required: { noul: 0.9 },
+    further_utility: { noul: 0.9 }, contradiction: { noul: 0.01 },
+    episodic: { noul: 0.6 }, semantic: { noul: 0.7 }, procedural: { noul: 0.3 }, preference: { noul: 0.1 },
+    need_semantic: { noul: 0.6 }, need_temporal: { noul: 0.4 }, need_causal: { noul: 0.3 }, need_entity: { noul: 0.4 },
+    relevance: { noul: 0.7 }, relation_useful: { noul: 0.6 }, novelty: { noul: 0.3 }, supports_evidence: { noul: 0.7 },
+    semantic_related: { noul: 0.6 }, causal_influence: { noul: 0.3 }, same_episode: { noul: 0.4 }, entity_equivalent: { noul: 0.6 },
+  } }))
+
   const asked = []
   const toolCalls = []
+  const toolResults = []
   const autoIo = {
     ask: async (prompt) => {
       asked.push(prompt)
@@ -168,7 +219,9 @@ Then the usage is permitted
     onToolStart: (name, input) => {
       toolCalls.push({ name, input })
     },
-    onToolResult: () => {},
+    onToolResult: (name, content, isError) => {
+      toolResults.push({ name, isError: !!isError, content: String(content || '').slice(-900) })
+    },
   }
 
   const rt = {
@@ -199,18 +252,33 @@ Then the usage is permitted
   const safetyEvents = readEvents(db, cid, 'safety_checker')
   const coverageEvents = readEvents(db, cid, 'branch_coverage')
 
-  await check('CANON-E2E-1: canonical phase order', async () => {
-    assert.deepStrictEqual(phasesSeen, [
-      'explore', 'diagnose', 'create_issue', 'create_tests', 'planning',
-      'implement', 'verify', 'safety', 'confirm_fix', 'done',
-    ])
-  })
-
   await check('CANON-E2E-2: tests precede planning and implementation', async () => {
     assert.ok(phasesSeen.indexOf('create_tests') < phasesSeen.indexOf('planning'))
     assert.ok(phasesSeen.indexOf('planning') < phasesSeen.indexOf('implement'))
     assert.ok(phasesSeen.indexOf('create_tests') >= 0)
   })
+
+  // Establish the FIRST divergence before evaluating downstream safety and
+  // completion. Four assertions downstream of a missing RED are one blocked
+  // lifecycle, not four independent production defects.
+  const wroteRegression = toolCalls.some(({ name, input }) => name === 'Write' && input?.file_path === testPath)
+  const ranRed = toolCalls.some(({ name, input }) => name === 'Bash' && input?.command === redGreenCommand)
+  const persistedRealRed = redRows.some(row => row.command === redGreenCommand && Number(row.exit_code) !== 0)
+  const executedRed = testResults.some(row => row.command === redGreenCommand && row.passed === false &&
+    /AssertionError|ERR_ASSERTION/.test(String(row.output_digest || '')))
+  const reachedRealRedBoundary = wroteRegression && ranRed && persistedRealRed && executedRed
+  if (!reachedRealRedBoundary) {
+    const modelCalls = mock.requests.filter(req => /\/chat\/completions/.test(req.url || ''))
+    console.error('CANON-FIRST-DIVERGENCE: create_tests -> planning requires executed RED evidence')
+    console.error(JSON.stringify({
+      wroteRegression, ranRed, persistedRealRed, executedRed,
+      modelRequestCount: modelCalls.length,
+      toolCalls: toolCalls.map(({name,input}) => ({ name, file_path: input?.file_path, command: input?.command })),
+      toolResults: toolResults.slice(-8),
+      redEvidence: redRows.map(({command,exit_code}) => ({command,exit_code})),
+      phasesSeen,
+    }, null, 2))
+  }
 
   await check('CANON-E2E-3: genuine RED and approved plan', async () => {
     assert.ok(asked.some((prompt) => /Approve this plan\?/i.test(String(prompt))), 'missing plan HITL')
@@ -224,6 +292,14 @@ Then the usage is permitted
     assert.equal(fs.readFileSync(path.join(repoDir, productionPath), 'utf8'), correctedSource)
     assert.equal(redRows.some((r) => /simulated/i.test(r.command)), false,
       'fabricated RED evidence must never be accepted')
+  })
+
+  if (reachedRealRedBoundary) {
+  await check('CANON-E2E-1: canonical phase order', async () => {
+    assert.deepStrictEqual(phasesSeen, [
+      'explore', 'diagnose', 'create_issue', 'create_tests', 'planning',
+      'implement', 'verify', 'safety', 'confirm_fix', 'done',
+    ])
   })
 
   await check('CANON-E2E-4: actual GREEN, measured coverage and final HITL', async () => {
@@ -257,7 +333,11 @@ Then the usage is permitted
     const phase = db.prepare('SELECT phase FROM conversations WHERE id = ?').get(cid).phase
     assert.equal(phase, 'idle', 'completed SDLC must return conversation to idle')
   })
+  } else {
+    console.log('BLOCKED CANON-E2E-1 (full phase order), CANON-E2E-4 (GREEN, coverage, safety, final HITL), CANON-E2E-6 (return to idle): upstream executed RED prerequisite absent')
+  }
 } finally {
+  clearLayaPredictOverride()
   try { if (mock) await mock.close() } catch {}
   try { if (db) closeStore(db) } catch {}
   try { fs.rmSync(root, { recursive: true, force: true }) } catch {}
