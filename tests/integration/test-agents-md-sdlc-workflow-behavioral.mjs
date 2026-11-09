@@ -332,3 +332,4 @@ if (failed > 0) {
   console.log(`\nConfirmed RED for the following diagnosed AGENTS.md workflow gates:`)
   failures.forEach((f, i) => console.log(`  ${i + 1}. ${f.name}`))
 }
+process.exit(failed === 0 ? 0 : 1)

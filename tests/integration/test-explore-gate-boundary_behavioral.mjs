@@ -30,9 +30,10 @@ await (async () => {
     const db = openStore(dbPath)
     const cid = 'c-gb'
     db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'explore')`).run(cid, dir)
-    const tr = canTransition(db, cid, 'implement')
-    assert.equal(tr.ok, false)
-    assert.match(tr.reason, /Cannot transition/i)
+    const transitionCtx = {}
+    const tr = canTransition(db, cid, 'implement', transitionCtx)
+    assert.equal(tr, false)
+    assert.match(transitionCtx.lastRejectionReason, /Cannot transition/i)
     closeStore(dbPath); fs.rmSync(dir, { recursive: true, force: true })
   })
 
@@ -46,18 +47,22 @@ await (async () => {
     assert.equal(phaseBefore, 'planning')
     // Planning phase requires plan approval to move to implement.
     const tr = canTransition(db, cid, 'implement')
-    assert.equal(tr.ok, false)
+    assert.equal(tr, false)
     closeStore(dbPath); fs.rmSync(dir, { recursive: true, force: true })
   })
 
-  await test('EXP-GATE-BOUNDARY-4: explore phase can advance only through planning', async () => {
+  await test('EXP-GATE-BOUNDARY-4: explore phase rejects planning/implement; diagnose requires exploration evidence', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gateboundary4-'))
     const dbPath = path.join(dir, 'db.sqlite')
     const db = openStore(dbPath)
     const cid = 'c-gb4'
     db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'explore')`).run(cid, dir)
-    assert.equal(canTransition(db, cid, 'planning').ok, true)
-    assert.equal(canTransition(db, cid, 'implement').ok, false)
+    assert.equal(canTransition(db, cid, 'planning'), false)
+    assert.equal(canTransition(db, cid, 'implement'), false)
+    const diagnoseCid = 'c-gb4-diagnose'
+    db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'explore')`).run(diagnoseCid, dir)
+    db.prepare(`INSERT INTO events (conversation_id, event_type, detail) VALUES (?, ?, ?)`).run(diagnoseCid, 'exploration_complete', 'EXP-GATE-BOUNDARY-4')
+    assert.equal(canTransition(db, diagnoseCid, 'diagnose'), true)
     closeStore(dbPath); fs.rmSync(dir, { recursive: true, force: true })
   })
 

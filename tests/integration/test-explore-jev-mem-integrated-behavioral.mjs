@@ -24,7 +24,7 @@ import { runUserTurn } from '../../lib/orchestrate.mjs'
 import { executeBuiltinTool } from '../../lib/tools.mjs'
 import { ingestObservation } from '../../lib/jev_write.mjs'
 import { retrieveEvidence } from '../../lib/jev_read.mjs'
-import { setLayaPredictOverride, clearLayaPredictOverride } from '../../lib/laya.mjs'
+import { setLayaPredictOverride, clearLayaPredictOverride, assessEvidence } from '../../lib/laya.mjs'
 import {
   startMockLlmServer,
   makeOpenAiToolCallChunks,
@@ -81,13 +81,21 @@ await test('IJ-1: successful explore MAP Read ingests Jev observation for that p
   db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?,?)`).run(sid, cid)
 
   const ctx = { cwd: dir, conversationId: cid, sessionId: sid, settings: {} }
+  const preN = countMemoriesForPath(db, 'MAP.md')
+  assert.equal(preN, 0, `precondition: expected zero MAP memories before Read, got ${preN}`)
   const first = await executeBuiltinTool(db, ctx, 'Read', { file_path: 'MAP.md' }, io)
   assert.equal(first.is_error, false, 'MAP Read must succeed')
-  await ingestObservation(db, { sessionId: sid, conversationId: cid, title: 'MAP.md', text: 'Architecture map contents', filePaths: ['MAP.md'], layaOpts: { timeoutMs: 50 } })
 
-  // Harness must ingest observation for successful explore reads (intent #37).
+  // Production Read ingress in explore must ingest the observation itself.
   const n = countMemoriesForPath(db, 'MAP.md')
   assert.ok(n >= 1, `expected ≥1 memory referencing MAP.md after explore Read, got ${n}`)
+  const row = db.prepare(`SELECT session_id, conversation_id, title, content, entities_json FROM memories WHERE session_id = ? ORDER BY observation_ts DESC LIMIT 1`).get(sid)
+  assert.ok(row, 'expected one persisted JEV observation')
+  assert.equal(row.session_id, sid, 'observation must belong to the session')
+  assert.equal(row.conversation_id, cid, 'observation must belong to the conversation')
+  const blob = `${row.entities_json || ''} ${row.content || ''} ${row.title || ''}`
+  assert.ok(blob.includes('MAP.md'), 'observation must reference MAP.md')
+  assert.ok(String(row.content || '').includes('router: src/index.mjs'), 'observation must retain actual MAP.md evidence')
 
   closeStore(dbPath)
   fs.rmSync(dir, { recursive: true, force: true })
@@ -104,17 +112,34 @@ await test('IJ-2: duplicate MAP Read does not create a second Jev observation', 
   db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?,?)`).run(sid, cid)
   const ctx = { cwd: dir, conversationId: cid, sessionId: sid, settings: {} }
 
+  const beforeFirst = countMemoriesForPath(db, 'MAP.md')
+  assert.equal(beforeFirst, 0, `precondition: expected zero MAP memories before first Read, got ${beforeFirst}`)
+
   const first = await executeBuiltinTool(db, ctx, 'Read', { file_path: 'MAP.md' }, io)
-  assert.equal(first.is_error, false)
-  await ingestObservation(db, { sessionId: sid, conversationId: cid, title: 'MAP.md', text: 'Architecture map', filePaths: ['MAP.md'], layaOpts: { timeoutMs: 50 } })
-  const afterFirst = countMemoriesForPath(db, 'MAP.md')
-  assert.ok(afterFirst >= 1, 'precondition: first read must ingest')
+  assert.equal(first.is_error, false, 'first MAP read must succeed')
+
+  const firstRows = db.prepare(`SELECT id, content, entities_json, title FROM memories WHERE session_id = ?`).all(sid)
+    .filter((r) => `${r.entities_json || ''} ${r.content || ''} ${r.title || ''}`.includes('MAP.md'))
+  const firstIds = firstRows.map((r) => r.id).sort()
+  const firstCount = firstRows.length
+  const firstContent = firstRows.map((r) => r.id + ':' + String(r.content || '')).sort().join('\n')
+  assert.ok(firstCount >= 1, `automatic ingestion expected after first Read, got ${firstCount}`)
+
+  fs.rmSync(path.join(dir, 'MAP.md'))
 
   const second = await executeBuiltinTool(db, ctx, 'Read', { file_path: 'MAP.md' }, io)
-  assert.equal(second.is_error, true)
-  assert.match(second.content, /already read/i)
-  const afterSecond = countMemoriesForPath(db, 'MAP.md')
-  assert.equal(afterSecond, afterFirst, 'duplicate already-read must not re-ingest')
+  assert.equal(second.is_error, true, 'duplicate read must still be rejected')
+  assert.equal(second.content, '[harness] already read: MAP.md', 'result must be harness rejection, not a filesystem error')
+
+  const secondRows = db.prepare(`SELECT id, content, entities_json, title FROM memories WHERE session_id = ?`).all(sid)
+    .filter((r) => `${r.entities_json || ''} ${r.content || ''} ${r.title || ''}`.includes('MAP.md'))
+  const secondIds = secondRows.map((r) => r.id).sort()
+  const secondCount = secondRows.length
+  const secondContent = secondRows.map((r) => r.id + ':' + String(r.content || '')).sort().join('\n')
+
+  assert.deepEqual(secondIds, firstIds, 'memory IDs must not change on duplicate read')
+  assert.equal(secondCount, firstCount, 'memory count must not change on duplicate read')
+  assert.equal(secondContent, firstContent, 'memory content must not change on duplicate read')
 
   closeStore(dbPath)
   fs.rmSync(dir, { recursive: true, force: true })
@@ -149,7 +174,6 @@ await test('IJ-3: sufficient graph bypasses disk tools on explore turn (graph-fi
   db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?,?,?)`).run(cid, repo, 'idle')
   db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?,?)`).run(sid, cid)
 
-  // Pre-seed a rich observation so retrieveEvidence can report sufficient.
   await ingestObservation(db, {
     sessionId: sid,
     conversationId: cid,
@@ -159,18 +183,19 @@ await test('IJ-3: sufficient graph bypasses disk tools on explore turn (graph-fi
     provenance: 'explore_seed',
     layaOpts: { timeoutMs: 50 },
   })
-  const prior = await retrieveEvidence(db, 'Review health check endpoint', {
+
+  const prior = await retrieveEvidence(db, 'Review health check endpoint (#37)', {
     sessionId: sid,
     conversationId: cid,
     layaOpts: { timeoutMs: 50 },
   })
-  assert.ok(
-    prior.stoppedReason === 'sufficient' || (prior.evidence && prior.evidence.length > 0),
-    `precondition: seeded graph must be retrievable, got ${JSON.stringify({ stoppedReason: prior.stoppedReason, n: prior.evidence?.length })}`
-  )
+  assert.equal(prior.stoppedReason, 'sufficient', 'precondition: graph must report sufficiency')
+  const seedEvidenceText = prior.evidence.map((e) => `- ${e.title}: ${String(e.content || '').slice(0, 300)}`).join('\n')
+  const layaDecision = await assessEvidence(`Query: Review health check endpoint (#37)\n\nEvidence:\n${seedEvidenceText}`, { timeoutMs: 50 })
+  assert.ok(layaDecision.sufficient >= 0.90, `precondition: Laya sufficiency must be ≥0.90, got ${layaDecision.sufficient}`)
 
   const mock = await startMockLlmServer()
-  // If graph-first works, model should not need MAP spam — queue a complete text.
+  mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: 'MAP.md' }))
   mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
 
   let readAttempts = 0
@@ -211,6 +236,14 @@ await test('IJ-3: sufficient graph bypasses disk tools on explore turn (graph-fi
       phase !== 'explore' && phase !== 'idle',
       `IJ-3: must hand off out of explore/idle after graph-first, got ${phase}`
     )
+
+    const negCid = 'c-ij3-neg'
+    const negSid = 's-ij3-neg'
+    db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?,?,?)`).run(negCid, repo, 'explore')
+    db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?,?)`).run(negSid, negCid)
+    const negCtx = { cwd: repo, conversationId: negCid, sessionId: negSid, settings: {} }
+    const negResult = await executeBuiltinTool(db, negCtx, 'Read', { file_path: 'MAP.md' }, autoIo)
+    assert.equal(negResult.is_error, false, 'negative control: without sufficient evidence, canonical Read must remain possible')
   } finally {
     if (mock) await mock.close();
     closeStore(dbPath);
@@ -229,6 +262,8 @@ await test('IJ-4: saturation handoff pins explore digest in pinned_context', asy
   const sid = 's-ij4'
   db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?,?,?)`).run(cid, repo, 'idle')
   db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?,?)`).run(sid, cid)
+  let pinnedBefore = db.prepare(`SELECT * FROM pinned_context WHERE session_id = ?`).all(sid)
+  assert.equal(pinnedBefore.length, 0, 'IJ-4 precondition: no explore digest exists before exploration')
 
   const mock = await startMockLlmServer()
   for (let i = 0; i < 8; i++) {
@@ -236,9 +271,10 @@ await test('IJ-4: saturation handoff pins explore digest in pinned_context', asy
   }
   mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
 
+  let diagnoseEntered = false
   const autoIo = {
     ask: async () => 'y',
-    println: () => {},
+    println: (text) => { if (/Entering diagnose/i.test(String(text))) { diagnoseEntered = true } },
     write: () => {},
     onToolStart: () => {},
     onToolResult: () => {},
@@ -261,13 +297,14 @@ await test('IJ-4: saturation handoff pins explore digest in pinned_context', asy
   try {
     await withTimeout(runUserTurn(db, rt, 'Review health check endpoint (#37)', autoIo), 45000, 'IJ-4 runUserTurn')
 
-    upsertPinnedContext(db, sid, 'explore_candidates_snapshot', 'MAP.md → src/index.mjs')
     const pinned = getPinnedContextBlocks(db, sid)
     const keys = pinned.map((p) => p.key)
-    assert.ok(
-      keys.some((k) => /explore/i.test(k)),
-      `IJ-4: expected pinned explore digest key after saturation handoff, got keys=${JSON.stringify(keys)}`
-    )
+    const digestEntry = pinned.find((p) => /explore/i.test(p.key))
+    assert.ok(digestEntry, `IJ-4: expected automatic pinned explore digest key after handoff, got keys=${JSON.stringify(keys)}`)
+    const digestText = digestEntry.content || digestEntry.value || ''
+    assert.match(String(digestText), /MAP\.md/, 'IJ-4: digest must contain MAP.md from actual exploration')
+    assert.equal(digestEntry.session_id, sid, 'IJ-4: digest must belong to the correct session')
+    assert.ok(diagnoseEntered, 'IJ-4: production explore gate must announce and perform the canonical explore -> diagnose transition')
   } finally {
     if (mock) await mock.close();
     closeStore(dbPath);
@@ -275,7 +312,6 @@ await test('IJ-4: saturation handoff pins explore digest in pinned_context', asy
   }
 })
 
-// Demonstrate real pinned_context API exists (control — should PASS)
 await test('IJ-CTRL: upsertPinnedContext round-trip (module contract)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ijc-'))
   const dbPath = path.join(dir, 't.db')
