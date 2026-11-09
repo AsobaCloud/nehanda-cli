@@ -25,8 +25,9 @@ const fixtureDir = path.join(projectDir, 'tests', 'red-green')
 fs.mkdirSync(fixtureDir, { recursive: true })
 
 const behavioralPath = path.join(fixtureDir, 'behavioral.mjs')
-const implementationPath = path.join(fixtureDir, 'math.mjs')
-fs.writeFileSync(behavioralPath, 'import { add } from "./math.mjs";\nimport assert from "node:assert/strict";\nassert.equal(add(2, 3), 5, "add(2, 3) must equal 5");\n')
+const implementationPath = path.join(projectDir, 'src', 'math.mjs')
+fs.mkdirSync(path.dirname(implementationPath), { recursive: true })
+fs.writeFileSync(behavioralPath, 'import { add } from "../../src/math.mjs";\nimport assert from "node:assert/strict";\nassert.equal(add(2, 3), 5, "add(2, 3) must equal 5");\n')
 fs.writeFileSync(implementationPath, 'export function add(a, b) { return 0; }\n')
 
 const dbPath = path.join(tmpDir, 'green.db')

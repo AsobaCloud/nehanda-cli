@@ -1,130 +1,126 @@
 #!/usr/bin/env node
 /**
- * Behavioral Test: AGENTS-SAFETY-1
- * Verifies production safety gate executes real JS/Shell/Python checkers.
+ * AGENTS-SAFETY-1 — Real three-checker execution and workspace routing.
+ *
+ * Defect fixture: a failing behavioral regression is corrected using the same
+ * test command before entering safety. A genuine JS/HTML, shell, and Python
+ * safety violation is introduced ONLY into a disposable project workspace.
+ * The production safety gate must observe those violations via its own real
+ * checker subprocesses. Never write fixtures into the installed checker code.
  */
 import assert from 'node:assert/strict'
+import cp from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-
+import { fileURLToPath } from 'node:url'
 import { openStore, closeStore, withTransaction } from '../../lib/store.mjs'
-import { planGate, createTestsGate, verifyGate, safetyGate } from '../../lib/orchestrate.mjs'
+import { createTestsGate, planGate, verifyGate, safetyGate } from '../../lib/orchestrate.mjs'
 import { executeBuiltinTool } from '../../lib/tools.mjs'
-import {
-  recordRedTestEvidence,
-  setPhase,
-  getPhase,
-  canTransition,
-} from '../../lib/workflow.mjs'
+import { recordRedTestEvidence, setPhase, getPhase } from '../../lib/workflow.mjs'
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'safety-exec-'))
-const projectDir = path.join(tmpDir, 'project')
-fs.mkdirSync(projectDir, { recursive: true })
-const jsViolationPath = path.join(process.cwd(), 'lib', 'scripts', 'safety-violation.html')
-const shellViolationPath = path.join(projectDir, 'bad.sh')
-const pythonViolationPath = path.join(projectDir, 'bad.py')
-
-let db = null
-function cleanupFixtures() {
-  for (const filePath of [jsViolationPath, shellViolationPath, pythonViolationPath]) {
-    try { fs.rmSync(filePath, { force: true }) } catch {}
-  }
-}
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'real-safety-'))
+const cwd = path.join(root, 'project')
+const dbPath = path.join(root, 'safety.db')
+const cid = 'real-safety-conv', sid = 'real-safety-session'
+const source = path.join(cwd, 'src', 'guard.mjs')
+const regression = path.join(cwd, 'tests', 'guard.test.mjs')
+const command = 'node --test tests/guard.test.mjs; rc=$?; printf "REGRESSION_EXIT=%s\\n" "$rc"; exit "$rc"'
+const badHtml = path.join(cwd, 'src', 'bad.html')
+const badShell = path.join(cwd, 'bad.sh')
+const badPython = path.join(cwd, 'bad.py')
+const io = { println() {}, async ask() { return 'y' } }
+let db
 try {
-  fs.writeFileSync(path.join(projectDir, 'valid.sh'), '#!/usr/bin/env bash\nset -euo pipefail\nprintf \'ok\\n\'\n')
-  db = openStore(path.join(tmpDir, 'safety.db'))
-  const convId = 'c-safety-exec'
-  const sessId = 's-safety-exec'
-  db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'create_tests')`).run(convId, projectDir)
-  db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?, ?)`).run(sessId, convId)
+  fs.mkdirSync(path.dirname(source), { recursive: true })
+  fs.mkdirSync(path.dirname(regression), { recursive: true })
+  fs.writeFileSync(source, "export function allowEqual(a,b) { return a < b }\n")
+  const regressionText = `import test from 'node:test'
+import assert from 'node:assert/strict'
+import { allowEqual } from '../src/guard.mjs'
+test('equal boundary is allowed', () => assert.equal(allowEqual(7, 7), true))
+`
+  fs.writeFileSync(regression, regressionText)
+  db = openStore(dbPath)
+  db.prepare("INSERT INTO conversations(id,project_dir,phase) VALUES (?,?,'create_tests')").run(cid, cwd)
+  db.prepare('INSERT INTO sessions(session_id,conversation_id) VALUES (?,?)').run(sid, cid)
+  const rt = { cwd, conversationId: cid, sessionId: sid, runtimeDbPath: dbPath }
+  const ctx = { ...rt, settings: {} }
+  const runTest = () => executeBuiltinTool(db, ctx, 'Bash', { command }, io)
+  const red = await runTest()
+  assert.equal(red.is_error, true, 'real behavioral regression must be RED before correction')
+  assert.match(String(red.content), /AssertionError|ERR_ASSERTION/)
+  assert.match(String(red.content), /REGRESSION_EXIT=1/)
+  recordRedTestEvidence(db, cid, { command, exit_code: 1, output_digest: red.content })
+  assert.equal(await createTestsGate(db, rt, io, 'actual RED'), true)
+  assert.equal(await planGate(db, rt, io,
+    '## Issue Reference\nIssue #1\n## Behavioral Specification\nGiven a boundary equal to its limit\nWhen allowEqual(7,7) is called\nThen it returns true\n## Coverage Matrix\n| Scenario | Test File |\n| --- | --- |\n| Equal limit | tests/guard.test.mjs |'), true)
+  assert.equal(getPhase(db, cid), 'implement')
+  const updated = await executeBuiltinTool(db, ctx, 'Write', {
+    file_path: 'src/guard.mjs', content: 'export function allowEqual(a,b) { return a <= b }\n',
+  }, io)
+  assert.equal(updated.is_error, false, 'real implementation must correct production source')
+  withTransaction(db, () => db.prepare("INSERT INTO events(conversation_id,event_type,detail) VALUES (?, 'implement', ?)").run(cid, JSON.stringify({ accepted: true })))
+  assert.equal(setPhase(db, cid, 'verify'), true)
+  const green = await runTest()
+  assert.equal(green.is_error, false, 'same behavioral regression must become GREEN')
+  assert.match(String(green.content), /REGRESSION_EXIT=0/)
+  assert.equal(fs.readFileSync(regression, 'utf8'), regressionText, 'regression remains unchanged')
+  recordRedTestEvidence(db, cid, { command, exit_code: 0, output_digest: green.content })
+  assert.equal(await verifyGate(db, rt, io, 'same regression GREEN'), true)
+  assert.equal(getPhase(db, cid), 'safety')
 
-  const rt = { sessionId: sessId, conversationId: convId, cwd: projectDir }
-  const io = { println() {}, ask() { return Promise.resolve('y') } }
-  const ctx = { conversationId: convId, sessionId: sessId, cwd: projectDir }
-
-  const redFixture = path.join(projectDir, 'tests', 'safety', 'red.mjs')
-  const greenFixture = path.join(projectDir, 'tests', 'safety', 'green.mjs')
-  fs.mkdirSync(path.dirname(redFixture), { recursive: true })
-  fs.writeFileSync(redFixture, 'throw new Error("red")\n')
-  fs.writeFileSync(greenFixture, 'process.exit(0)\n')
-
-  // Genuine RED, then GREEN, so safety entry is legitimate.
-  const redRun = await executeBuiltinTool(db, ctx, 'Bash', { command: 'node tests/safety/red.mjs; rc=$?; exit $rc' }, {})
-  recordRedTestEvidence(db, convId, { command: 'node tests/safety/red.mjs; rc=$?; exit $rc', exit_code: 1, output_digest: String(redRun?.content || '') })
-  await createTestsGate(db, rt, io, 'red')
-  await planGate(db, rt, io, [
-    '## Issue Reference',
-    '#1',
-    '## Behavioral Specification',
-    'Given a project, When safety runs, Then all checkers are recorded.',
-    '## Coverage Matrix',
-    '| Scenario | Test File |',
-    '| Safety | tests/integration/test-sdlc-safety-execution-behavioral.mjs |',
-  ].join('\n'))
-  withTransaction(db, () => {
-    db.prepare(`INSERT INTO events (conversation_id, event_type, detail) VALUES (?, 'implement', ?)`).run(convId, JSON.stringify({ accepted: true }))
-  })
-  setPhase(db, convId, 'verify')
-  const greenRun = await executeBuiltinTool(db, ctx, 'Bash', { command: 'node tests/safety/green.mjs; rc=$?; exit $rc' }, {})
-  recordRedTestEvidence(db, convId, { command: 'node tests/safety/green.mjs; rc=$?; exit $rc', exit_code: 0, output_digest: String(greenRun?.content || '') })
-  assert.equal(await verifyGate(db, rt, io, 'green'), true, 'GREEN must permit verify -> safety')
-  assert.equal(getPhase(db, convId), 'safety', 'Entry to safety must be legitimate')
-
-  console.log('--- baseline real safety check ---')
-  const baselineGate = await safetyGate(db, rt, io)
-  assert.equal(baselineGate, false, 'Measured coverage is absent, so the safety gate must remain blocked')
-  const baselineCheckerRows = db.prepare(`SELECT detail FROM events WHERE conversation_id=? AND event_type='safety_checker'`).all(convId).map((r) => JSON.parse(r.detail))
+  // The production gate must run all real checkers, persist complete evidence,
+  // and reject missing measured coverage even when the workspace is clean.
+  assert.equal(await safetyGate(db, rt, io), false, 'checker success without measured coverage must block')
+  const baseline = db.prepare("SELECT detail FROM events WHERE conversation_id=? AND event_type='safety_checker'").all(cid).map(row => JSON.parse(row.detail))
   for (const id of ['JS', 'Shell', 'Python']) {
-    const rows = baselineCheckerRows.filter((r) => r.id === id)
-    assert.ok(rows.length > 0, `${id} checker must execute and persist`)
-    assert.ok(rows.some((r) => r.passed === true), `${id} baseline checker must pass`)
-    assert.ok(rows.every((r) => typeof r.command === 'string' && typeof r.exit_code === 'number'), `${id} must persist command and exit code`)
+    const hit = baseline.find(x => x.id === id)
+    assert.ok(hit, `production ${id} checker must execute`)
+    assert.equal(typeof hit.command, 'string')
+    assert.equal(typeof hit.exit_code, 'number')
+    assert.equal(typeof hit.output, 'string')
   }
-  const baselineMissingEvents = db.prepare(`SELECT detail FROM events WHERE conversation_id = ? AND event_type = 'coverage_evidence_missing' ORDER BY id`).all(convId).map((r) => JSON.parse(r.detail))
-  assert.ok(baselineMissingEvents.length > 0, 'A coverage_evidence_missing event must be persisted when measured coverage is absent')
-  const baselineMissing = baselineMissingEvents.at(-1)
-  assert.equal(baselineMissing.measured, false, 'Missing coverage evidence must be marked unmeasured')
-  assert.equal(baselineMissing.blocking, true, 'Missing coverage evidence must block the gate')
-  assert.equal(baselineMissing.threshold, 70, 'Missing coverage evidence must retain the 70% threshold')
-  assert.match(String(baselineMissing.reason || ''), /qualifying measured path coverage evidence absent/, 'Missing coverage evidence must identify the absent-evidence reason')
-  assert.equal(db.prepare(`SELECT COUNT(*) AS c FROM events WHERE conversation_id = ? AND event_type = 'path_coverage'`).get(convId).c, 0, 'No fabricated measured path_coverage record may exist')
+  const missing = db.prepare("SELECT detail FROM events WHERE conversation_id=? AND event_type='coverage_evidence_missing'").all(cid)
+  assert.ok(missing.length > 0, 'unmeasured coverage must be recorded as blocking')
+  assert.equal(JSON.parse(missing.at(-1).detail).blocking, true)
 
-  db.prepare(`UPDATE conversations SET phase = 'safety' WHERE id = ?`).run(convId)
-  console.log('--- genuine violation safety check ---')
-  fs.writeFileSync(jsViolationPath, '<script>function dup(){}\nfunction dup(){}</script>\n')
-  fs.writeFileSync(shellViolationPath, '#!/usr/bin/env bash\necho no strict mode\n')
-  fs.writeFileSync(pythonViolationPath, 'eval("1")\n')
-  assert.equal(await safetyGate(db, rt, io), false, 'Any checker failure must deny confirm_fix')
-  assert.equal(getPhase(db, convId), 'safety', 'Failed safety must not advance')
+  // All three violations are real source artifacts inside an isolated project.
+  fs.writeFileSync(badHtml, '<script>function duplicate(){}\nfunction duplicate(){}</script>\n')
+  fs.writeFileSync(badShell, '#!/usr/bin/env bash\necho unguarded script\n')
+  fs.writeFileSync(badPython, 'eval("1+1")\n')
 
-  const setupViolationRows = db.prepare(`SELECT detail FROM events WHERE conversation_id=? AND event_type='safety_checker'`).all(convId).map((r) => JSON.parse(r.detail))
-  const violationRows = setupViolationRows
-  const jsFailure = violationRows.find((r) => r.id === 'JS' && r.passed === false)
-  assert.ok(jsFailure, 'JS checker must report genuine failure')
-  assert.notEqual(jsFailure.exit_code, 0, 'JS failure must persist nonzero exit code')
-  assert.match(String(jsFailure.output || ''), /Duplicate function definitions/, 'JS failure must persist duplicate function evidence')
-  assert.ok(violationRows.some((r) => r.id === 'Shell' && r.passed === false), 'Shell violation must fail')
-  assert.ok(violationRows.some((r) => r.id === 'Python' && r.passed === false), 'Python violation must fail')
+  // Independent REAL checker invocation validates the JS fixture is detectable.
+  // The gate must then invoke that checker against the SAME workspace, not its
+  // own installed lib/scripts directory.
+  const checker = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../lib/scripts/js-safety-checker.cjs')
+  const probe = cp.spawnSync(process.execPath, [checker, cwd], { cwd, encoding: 'utf8', timeout: 30000 })
+  assert.notEqual(probe.status, 0, `JS fixture must fail real checker: ${probe.stdout}\n${probe.stderr}`)
+  assert.match(`${probe.stdout}\n${probe.stderr}`, /Duplicate function definitions|duplicate/i)
 
-  console.log('--- corrected safety check ---')
-  cleanupFixtures()
-  const correctedGate = await safetyGate(db, rt, io)
-  assert.equal(correctedGate, false, 'Checker success alone must not unlock safety without measured coverage')
-  const correctedRows = db.prepare(`SELECT detail FROM events WHERE conversation_id=? AND event_type='safety_checker'`).all(convId).map((r) => JSON.parse(r.detail))
+  const before = db.prepare("SELECT COUNT(*) AS n FROM events WHERE conversation_id=? AND event_type='safety_checker'").get(cid).n
+  assert.equal(await safetyGate(db, rt, io), false, 'genuine checker violations block safety')
+  assert.equal(getPhase(db, cid), 'safety', 'gate must remain closed')
+  const failures = db.prepare("SELECT detail FROM events WHERE conversation_id=? AND event_type='safety_checker' ORDER BY id").all(cid).slice(before).map(row => JSON.parse(row.detail))
   for (const id of ['JS', 'Shell', 'Python']) {
-    assert.ok(correctedRows.some((r) => r.id === id && r.passed === true), `${id} must pass after correction`)
+    const observed = failures.find(x => x.id === id)
+    assert.ok(observed, `missing ${id} checker execution`)
+    assert.equal(observed.passed, false, `${id} checker MUST fail on its real workspace violation`)
+    assert.notEqual(observed.exit_code, 0, `${id} checker failure MUST carry nonzero exit status`)
+    assert.ok(String(observed.output).length > 0, `${id} checker failure MUST persist its diagnostic output`)
   }
-  const correctedMissingEvents = db.prepare(`SELECT detail FROM events WHERE conversation_id = ? AND event_type = 'coverage_evidence_missing' ORDER BY id`).all(convId).map((r) => JSON.parse(r.detail))
-  assert.ok(correctedMissingEvents.length >= 3, 'Missing coverage evidence must be recorded on every gate attempt')
-  const correctedMissing = correctedMissingEvents.at(-1)
-  assert.equal(correctedMissing.measured, false, 'Corrected check still has no measured coverage')
-  assert.equal(correctedMissing.blocking, true, 'Corrected check remains blocked by coverage')
-  assert.equal(getPhase(db, convId), 'safety', 'Safety must remain safety without measured coverage')
 
-  console.log('\nAll AGENTS-SAFETY-1 assertions passed.')
+  // Clearing only the temporary violations permits a subsequent real check.
+  for (const f of [badHtml, badShell, badPython]) fs.rmSync(f)
+  const beforeRepair = db.prepare("SELECT COUNT(*) AS n FROM events WHERE conversation_id=? AND event_type='safety_checker'").get(cid).n
+  assert.equal(await safetyGate(db, rt, io), false, 'without measured coverage even corrected code cannot pass safety')
+  const repaired = db.prepare("SELECT detail FROM events WHERE conversation_id=? AND event_type='safety_checker' ORDER BY id").all(cid).slice(beforeRepair).map(row => JSON.parse(row.detail))
+  for (const id of ['JS', 'Shell', 'Python']) {
+    assert.ok(repaired.some(x => x.id === id && x.passed === true), `${id} checker must recover after correction`)
+  }
+  assert.equal(getPhase(db, cid), 'safety')
+  console.log('PASS AGENTS-SAFETY-1: true checker failures and remediation, independent of coverage')
 } finally {
-  cleanupFixtures()
-  try { if (db) closeStore(path.join(tmpDir, 'safety.db')) } catch {}
-  try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+  if (db) closeStore(dbPath)
+  fs.rmSync(root, { recursive: true, force: true })
 }

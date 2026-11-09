@@ -1,55 +1,32 @@
-import assert from 'node:assert/strict';
-import { runExplorationLoop } from '../../lib/orchestrate.mjs';
+#!/usr/bin/env node
+/** D1 — Opt-in real Ollama: actual runUserTurn, bounded model exploration and real diagnose handoff. */
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { runUserTurn } from '../../lib/orchestrate.mjs'
+import { getPhase } from '../../lib/workflow.mjs'
+import { requested, requireRealOllama, workspace } from '../fixtures/realOllamaHarness.mjs'
 
-/**
- * Addendum 1 Test D1: Real Ollama beam:cloud Bounded Exploration Test
- * Environment Gate: OLLAMA_E2E_TEST=1
- */
-async function runRealOllamaExplorationTest() {
-  if (process.env.OLLAMA_E2E_TEST !== '1') {
-    console.log('Skipping test-d1-ollama-exploration-bounded-behavioral.mjs: OLLAMA_E2E_TEST!=1');
-    return;
-  }
-
-  const realModelConfig = {
-    provider: 'ollama',
-    custom_model_name: 'beam:cloud',
-    base_url: process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1',
-    api_key: 'ollama',
-  };
-
+if (!requested) {
+  console.log('SKIP D1 (optional real-provider smoke): set OLLAMA_E2E_TEST=1')
+} else {
+  const provider = await requireRealOllama() // opted-in connection failure is a TEST FAILURE
+  const f = workspace('d1', 'explore')
   try {
-    const res = await fetch(`${realModelConfig.base_url}/models`, { signal: AbortSignal.timeout(3000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  } catch (err) {
-    console.log(`Skipping Ollama test: endpoint unavailable at ${realModelConfig.base_url} (${err.message})`);
-    return; // Exit 0 cleanly without false pass
-  }
-
-  console.log('--- Running test-d1-ollama-exploration-bounded-behavioral.mjs against beam:cloud ---');
-
-  const fixtureWorkspace = {
-    canonicalPaths: ['docs/MAP.md', 'lib/workflow.mjs'],
-    readLogs: [],
-  };
-
-  const result = await runExplorationLoop({
-    modelConfig: realModelConfig,
-    timeoutMs: 120000,
-    workspace: fixtureWorkspace,
-  });
-
-  // Assertions (HP-1, HP-2)
-  assert.equal(result.canonicalReads.get('docs/MAP.md'), 1, 'Canonical file docs/MAP.md must be read exactly once');
-  assert.ok(result.logs.some(l => l.includes('already read...')), 'Duplicate canonical read attempt must be logged as already read');
-  assert.ok(result.requestCount <= 4, `Provider request count must be <= 4 (Actual: ${result.requestCount})`);
-  assert.ok(result.logs.some(l => l.includes('Exploration complete.')), 'Must log "Exploration complete."');
-  assert.equal(result.finalPhase, 'planning', 'Must cleanly handoff to planning phase');
-
-  console.log('✔ Real Ollama beam:cloud exploration test passed.');
+    fs.mkdirSync(path.join(f.cwd, 'docs'), { recursive: true })
+    fs.writeFileSync(path.join(f.cwd, 'docs', 'MAP.md'), '# Registry\nService: src/health.mjs\n')
+    fs.mkdirSync(path.join(f.cwd, 'src'), { recursive: true })
+    fs.writeFileSync(path.join(f.cwd, 'src', 'health.mjs'), "export const health = () => 'ok'\n")
+    const handoff = new Error('diagnose handoff observed')
+    let entered = false
+    const io = { write() {}, println(line) {
+      if (/Entering diagnose phase/.test(String(line))) { entered = true; throw handoff }
+    }, onToolStart() {}, onToolResult() {} }
+    try { await runUserTurn(f.db, f.makeRt(provider), 'Explore the health service via docs/MAP.md, then hand off to diagnose.', io) }
+    catch (err) { if (err !== handoff) throw err }
+    assert.equal(entered, true, 'real Ollama exploration must complete with canonical diagnose handoff')
+    assert.equal(getPhase(f.db, f.cid), 'diagnose')
+    assert.ok((f.db.prepare("SELECT COUNT(*) AS n FROM events WHERE conversation_id=? AND event_type='saturation'").get(f.cid).n) <= 1)
+    console.log('PASS D1 real-Ollama exploration bounded and handed off to diagnose')
+  } finally { f.close() }
 }
-
-runRealOllamaExplorationTest().catch((err) => {
-  console.error('Test Failed:', err);
-  process.exit(1);
-});

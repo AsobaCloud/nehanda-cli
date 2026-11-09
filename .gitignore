@@ -6,3 +6,5 @@ node_modules/
 .devin/
 test.txt
 release.sh
+.docs/
+.ruff_cache/

@@ -160,6 +160,75 @@ await (async () => {
     }
   })
 
+  await test('AGENTS-PERM-3: planning stays read-only even with an already-approved plan row', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-perm-3-'))
+    const dbPath = path.join(root, 'state.db')
+    const db = openStore(dbPath)
+    const cid = 'planning-no-mutation', sid = 'planning-session'
+    const source = path.join(root, 'src', 'module.mjs')
+    fs.mkdirSync(path.dirname(source), { recursive: true })
+    fs.writeFileSync(source, 'export const value = 41\n')
+    const originalHash = sha256(fs.readFileSync(source))
+    try {
+      db.prepare("INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'planning')").run(cid, root)
+      db.prepare('INSERT INTO sessions(session_id, conversation_id) VALUES (?, ?)').run(sid, cid)
+      // Deliberately seed prior approval as a boundary probe; it must never
+      // grant write access while the actual phase is still planning.
+      db.prepare("INSERT INTO plans(conversation_id, content, hash, status) VALUES (?, ?, 'fixture-hash', 'approved')")
+        .run(cid, '## Issue Reference\n#1\n## Behavioral Specification\nGiven x\nWhen y\nThen z\n## Coverage Matrix\n| Scenario | Test File |\n| x | tests/x.mjs |')
+      const ctx = { cwd: root, conversationId: cid, sessionId: sid }
+      for (const [name, input] of [
+        ['Write', { file_path: 'src/module.mjs', content: 'CHANGED' }],
+        ['Edit', { file_path: 'src/module.mjs', old_string: '41', new_string: '42' }],
+        ['NotebookEdit', { file_path: 'src/module.mjs', cell_id: '1', new_source: 'CHANGED' }],
+        ['ApplyPatch', { file_path: 'src/module.mjs', patch: 'CHANGED' }],
+        ['Bash', { command: 'printf CHANGED > src/module.mjs' }],
+        ['Bash', { command: 'node -e "require(\'fs\').writeFileSync(\'src/module.mjs\',\'CHANGED\')"' }],
+      ]) {
+        const result = await executeBuiltinTool(db, ctx, name, input, {})
+        rejectResult(name, result)
+        assert.equal(sha256(fs.readFileSync(source)), originalHash, `${name} mutated production during planning`)
+      }
+    } finally {
+      closeStore(dbPath)
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  await test('AGENTS-PERM-4: create_tests rejects symlink escapes but implement permits production fixes', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-perm-4-'))
+    const dbPath = path.join(root, 'state.db')
+    const db = openStore(dbPath)
+    const cid = 'symlink-escape', sid = 'symlink-session'
+    fs.mkdirSync(path.join(root, 'tests'), { recursive: true })
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true })
+    const source = path.join(root, 'src', 'module.mjs')
+    fs.writeFileSync(source, 'export const original = true\n')
+    fs.symlinkSync(path.join(root, 'src'), path.join(root, 'tests', 'escape'))
+    const baseline = sha256(fs.readFileSync(source))
+    try {
+      db.prepare("INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'create_tests')").run(cid, root)
+      db.prepare('INSERT INTO sessions(session_id, conversation_id) VALUES (?, ?)').run(sid, cid)
+      const ctx = { cwd: root, conversationId: cid, sessionId: sid }
+      for (const [name, input] of [
+        ['Write', { file_path: 'tests/escape/module.mjs', content: 'WRONG' }],
+        ['Edit', { file_path: 'tests/escape/module.mjs', old_string: 'true', new_string: 'false' }],
+      ]) {
+        rejectResult(name, await executeBuiltinTool(db, ctx, name, input, {}))
+        assert.equal(sha256(fs.readFileSync(source)), baseline, `${name} escaped via tests/ symlink`)
+      }
+      db.prepare("UPDATE conversations SET phase='implement' WHERE id=?").run(cid)
+      const allowed = await executeBuiltinTool(db, ctx, 'Write', {
+        file_path: 'src/module.mjs', content: 'export const original = false\n',
+      }, {})
+      assert.equal(allowed.is_error, false, 'real implement phase must permit approved source edits')
+      assert.match(fs.readFileSync(source, 'utf8'), /false/)
+    } finally {
+      closeStore(dbPath)
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   console.log(`\n${passed} passed, ${failed} failed`)
 })().catch((err) => {
   console.error(err)

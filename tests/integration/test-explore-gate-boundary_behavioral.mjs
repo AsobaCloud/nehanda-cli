@@ -37,18 +37,23 @@ await (async () => {
     closeStore(dbPath); fs.rmSync(dir, { recursive: true, force: true })
   })
 
-  await test('EXP-GATE-BOUNDARY-3: empty exploration uses planning gate without approved plan rejection', async () => {
+  await test('EXP-GATE-BOUNDARY-3: exploration cannot skip diagnose even when registry is missing', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gateboundary3-'))
     const dbPath = path.join(dir, 'db.sqlite')
     const db = openStore(dbPath)
-    const cid = 'c-gb3'
-    db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'planning')`).run(cid, dir)
-    const phaseBefore = getPhase(db, cid)
-    assert.equal(phaseBefore, 'planning')
-    // Planning phase requires plan approval to move to implement.
-    const tr = canTransition(db, cid, 'implement')
-    assert.equal(tr, false)
-    closeStore(dbPath); fs.rmSync(dir, { recursive: true, force: true })
+    try {
+      const cid = 'c-gb3'
+      db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'explore')`).run(cid, dir)
+      const ctx = { lastRejectionReason: null }
+      assert.equal(canTransition(db, cid, 'planning', ctx), false,
+        'explore cannot transition to planning before diagnose, issue and tests')
+      assert.equal(canTransition(db, cid, 'diagnose'), false,
+        'explore cannot transition to diagnose before exploration evidence exists')
+      assert.equal(getPhase(db, cid), 'explore')
+    } finally {
+      closeStore(dbPath)
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   await test('EXP-GATE-BOUNDARY-4: explore phase rejects planning/implement; diagnose requires exploration evidence', async () => {

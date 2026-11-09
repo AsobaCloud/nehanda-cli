@@ -1,74 +1,39 @@
-import assert from 'node:assert/strict';
-import { executeSdlcWorkflow } from '../../lib/orchestrate.mjs';
+#!/usr/bin/env node
+/** D2 — Opt-in real Ollama full SDLC: phase progression must be evidenced, never assumed. */
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { runUserTurn } from '../../lib/orchestrate.mjs'
+import { requested, requireRealOllama, workspace } from '../fixtures/realOllamaHarness.mjs'
 
-/**
- * Addendum 1 Test D2: Real Ollama beam:cloud E2E SDLC Workflow Test
- * Environment Gate: OLLAMA_E2E_TEST=1
- */
-async function runRealOllamaSdlcTest() {
-  if (process.env.OLLAMA_E2E_TEST !== '1') {
-    console.log('Skipping test-d2-ollama-issue35-observable-behavioral.mjs: OLLAMA_E2E_TEST!=1');
-    return;
-  }
-
-  const realModelConfig = {
-    provider: 'ollama',
-    custom_model_name: 'beam:cloud',
-    base_url: process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1',
-    api_key: 'ollama',
-  };
-
+if (!requested) {
+  console.log('SKIP D2 (optional real-provider workflow): set OLLAMA_E2E_TEST=1')
+} else {
+  const provider = await requireRealOllama()
+  const f = workspace('d2', 'idle')
   try {
-    const res = await fetch(`${realModelConfig.base_url}/models`, { signal: AbortSignal.timeout(3000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  } catch (err) {
-    console.log(`Skipping Ollama test: endpoint unavailable at ${realModelConfig.base_url} (${err.message})`);
-    return;
-  }
-
-  console.log('--- Running test-d2-ollama-issue35-observable-behavioral.mjs against beam:cloud ---');
-
-  let hitlPromptTriggered = false;
-  let operatorConfirmed = false;
-
-  const mockOperatorInterface = {
-    promptPlanApproval: async (planText) => {
-      hitlPromptTriggered = true;
-      assert.ok(planText.includes('## Issue Reference'), 'Plan must contain ## Issue Reference');
-      assert.ok(planText.includes('## Behavioral Specification'), 'Plan must contain ## Behavioral Specification');
-      assert.ok(planText.includes('## Coverage Matrix'), 'Plan must contain ## Coverage Matrix');
-      return 'y';
-    },
-    confirmCompletion: async () => {
-      operatorConfirmed = true;
-      return 'Y';
-    },
-  };
-
-  const workflowResult = await executeSdlcWorkflow({
-    modelConfig: realModelConfig,
-    timeoutMs: 120000,
-    operator: mockOperatorInterface,
-    issueRef: 'Issue #35',
-  });
-
-  assert.ok(hitlPromptTriggered, 'HITL approval prompt [y/N] must be triggered during planning');
-  assert.ok(workflowResult.redTestEvidence, 'Real RED test evidence must be recorded');
-  assert.notEqual(workflowResult.redTestEvidence.exit_code, 0, 'RED test exit code must be non-zero');
-
-  assert.equal(workflowResult.safetyResults.length, 3, 'All 3 safety checkers must be executed');
-  for (const s of workflowResult.safetyResults) {
-    assert.ok(s.command, 'Safety result must include executed command');
-    assert.equal(s.exit_code, 0, 'Safety checker must return exit code 0');
-  }
-
-  assert.ok(operatorConfirmed, 'Operator explicit Y confirmation required before task completion');
-  assert.equal(workflowResult.finalPhase, 'done', 'Workflow must complete in done phase');
-
-  console.log('✔ Real Ollama beam:cloud E2E SDLC workflow test passed.');
+    fs.mkdirSync(path.join(f.cwd, 'src'), { recursive: true })
+    fs.mkdirSync(path.join(f.cwd, 'tests'), { recursive: true })
+    fs.writeFileSync(path.join(f.cwd, 'src', 'limit.mjs'), 'export const valid = (x,n) => x < n\n')
+    fs.writeFileSync(path.join(f.cwd, 'docs.md'), '# limit\n')
+    const prompts = [], results = []
+    const io = { println() {}, write() {}, async ask(q) { prompts.push(q); return 'y' },
+      onToolStart() {}, onToolResult(name, content, isError) { results.push({ name, content, isError }) },
+    }
+    await runUserTurn(f.db, f.makeRt(provider), 'Fix the equality boundary in src/limit.mjs by writing and executing a real regression, then follow the SDLC gates.', io)
+    const phases = f.db.prepare("SELECT detail FROM events WHERE conversation_id=? AND event_type='phase' ORDER BY id").all(f.cid).map(r => r.detail)
+    for (const phase of ['explore','diagnose','create_issue','create_tests','planning','implement','verify','safety','confirm_fix','done']) {
+      assert.ok(phases.includes(phase), `Real Ollama failed to reach ${phase}; phases=${phases.join('->')}`)
+    }
+    const red = f.db.prepare('SELECT command, exit_code, output_digest FROM red_evidence WHERE conversation_id=?').all(f.cid)
+    assert.ok(red.some(row => row.exit_code !== 0 && !/simulated/i.test(row.command) && /AssertionError|ERR_ASSERTION/.test(row.output_digest)),
+      'real Ollama must produce executed RED evidence, not a simulated record')
+    assert.ok(prompts.some(q => /Approve this plan\?/.test(q)), 'real plan HITL must occur')
+    assert.ok(prompts.some(q => /Confirm fix and allow commit\?/.test(q)), 'real terminal HITL must occur')
+    const safety = f.db.prepare("SELECT detail FROM events WHERE conversation_id=? AND event_type='safety_checker'").all(f.cid).map(r => JSON.parse(r.detail))
+    for (const checker of ['JavaScript','Shell','Python']) {
+      assert.ok(safety.some(r => (r.checkerName || r.checker) === checker && r.passed === true), `${checker} must execute and pass`)
+    }
+    console.log('PASS D2 real-Ollama SDLC with genuine RED, safety and HITL evidence')
+  } finally { f.close() }
 }
-
-runRealOllamaSdlcTest().catch((err) => {
-  console.error('Test Failed:', err);
-  process.exit(1);
-});

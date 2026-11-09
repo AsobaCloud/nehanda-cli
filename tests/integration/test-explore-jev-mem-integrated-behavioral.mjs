@@ -3,13 +3,13 @@
  * #37 — Integrated explore × Jev-Mem behavioral suite
  *
  * UX / state intent:
- *  - IJ-1: Empty-graph explore that successfully Reads MAP must ingest a Jev observation
- *    referencing that path (observation plane grows with territory reads).
+ *  - IJ-1: Empty-graph explore Read must automatically persist the source and extracted file-path entities.
  *  - IJ-2: Duplicate MAP Read is harness-rejected (already read) and must NOT create a
  *    second observation for the same path.
  *  - IJ-3: When the graph is already sufficient for the task, explore must bypass disk
  *    tools (graph-first) and still hand off out of explore.
- *  - IJ-4: Forced saturation handoff packs an explore digest into pinned_context.
+ *  - IJ-4: Request 21 is blocked after 20 explore model requests; saturation
+ *    records the reason and pins the discovered-file digest before diagnose.
  *
  * These assert production harness + real lib/jev_*.mjs — not local API redefinitions.
  * Expected RED until explore loop wires ingest / sufficiency stop / pinned pack.
@@ -70,35 +70,80 @@ async function test(name, fn) {
   }
 }
 
-await test('IJ-1: successful explore MAP Read ingests Jev observation for that path', async () => {
+await test('IJ-1: explore Read automatically persists source evidence and extracted entities', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ij1-'))
   const dbPath = path.join(dir, 't.db')
   const db = openStore(dbPath)
   const cid = 'c-ij1'
   const sid = 's-ij1'
-  fs.writeFileSync(path.join(dir, 'MAP.md'), '# MAP\nrouter: src/index.mjs\n', 'utf8')
-  db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?,?,?)`).run(cid, dir, 'explore')
-  db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?,?)`).run(sid, cid)
+  const sourceText = '# MAP\nrouter: src/index.mjs\nhealth: lib/router/health.mjs\n'
 
-  const ctx = { cwd: dir, conversationId: cid, sessionId: sid, settings: {} }
-  const preN = countMemoriesForPath(db, 'MAP.md')
-  assert.equal(preN, 0, `precondition: expected zero MAP memories before Read, got ${preN}`)
-  const first = await executeBuiltinTool(db, ctx, 'Read', { file_path: 'MAP.md' }, io)
-  assert.equal(first.is_error, false, 'MAP Read must succeed')
+  try {
+    fs.writeFileSync(path.join(dir, 'MAP.md'), sourceText, 'utf8')
+    db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?,?,?)`).run(cid, dir, 'explore')
+    db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?,?)`).run(sid, cid)
 
-  // Production Read ingress in explore must ingest the observation itself.
-  const n = countMemoriesForPath(db, 'MAP.md')
-  assert.ok(n >= 1, `expected ≥1 memory referencing MAP.md after explore Read, got ${n}`)
-  const row = db.prepare(`SELECT session_id, conversation_id, title, content, entities_json FROM memories WHERE session_id = ? ORDER BY observation_ts DESC LIMIT 1`).get(sid)
-  assert.ok(row, 'expected one persisted JEV observation')
-  assert.equal(row.session_id, sid, 'observation must belong to the session')
-  assert.equal(row.conversation_id, cid, 'observation must belong to the conversation')
-  const blob = `${row.entities_json || ''} ${row.content || ''} ${row.title || ''}`
-  assert.ok(blob.includes('MAP.md'), 'observation must reference MAP.md')
-  assert.ok(String(row.content || '').includes('router: src/index.mjs'), 'observation must retain actual MAP.md evidence')
+    const before = db.prepare(`SELECT COUNT(*) AS n FROM memories WHERE session_id = ?`).get(sid).n
+    // Exercise production Read ingress directly. IJ-1 must not call
+    // ingestObservation(), extractEntities(), or an embedding writer.
+    const result = await executeBuiltinTool(
+      db,
+      { cwd: dir, conversationId: cid, sessionId: sid, settings: {} },
+      'Read',
+      { file_path: 'MAP.md' },
+      io
+    )
+    assert.equal(result.is_error, false, 'IJ-1 precondition: production MAP.md Read must succeed')
 
-  closeStore(dbPath)
-  fs.rmSync(dir, { recursive: true, force: true })
+    const observations = db.prepare(`
+      SELECT id, type, session_id, conversation_id, title, content,
+             entities_json, provenance, observation_ts
+      FROM memories WHERE session_id = ? AND conversation_id = ? AND type = 'jev_observation'
+      ORDER BY observation_ts DESC
+    `).all(sid, cid)
+    assert.equal(
+      observations.length,
+      1,
+      `IJ-1: exactly one automatic observation must be persisted by the successful Read; got ${observations.length}`
+    )
+    assert.equal(
+      db.prepare(`SELECT COUNT(*) AS n FROM memories WHERE session_id = ?`).get(sid).n,
+      before + 1,
+      'IJ-1: exactly one new memory must exist after one successful Read'
+    )
+
+    const observation = observations[0]
+    assert.equal(observation.session_id, sid, 'IJ-1: session ownership must match')
+    assert.equal(observation.conversation_id, cid, 'IJ-1: conversation ownership must match')
+    assert.ok(Number.isFinite(observation.observation_ts), 'IJ-1: ingestion timestamp must be recorded')
+    assert.ok(
+      `${observation.title || ''} ${observation.content || ''} ${observation.entities_json || ''}`.includes('MAP.md'),
+      'IJ-1: observation must identify the actual MAP.md source'
+    )
+    for (const line of ['router: src/index.mjs', 'health: lib/router/health.mjs']) {
+      assert.ok(
+        String(observation.content || '').includes(line),
+        `IJ-1: persisted observation must retain actual source evidence: ${line}`
+      )
+    }
+
+    let entities
+    assert.doesNotThrow(() => { entities = JSON.parse(observation.entities_json) },
+      'IJ-1: entities_json must contain valid JSON')
+    assert.ok(Array.isArray(entities), 'IJ-1: extracted entities must be an array')
+    for (const entity of ['MAP.md', 'src/index.mjs', 'lib/router/health.mjs']) {
+      assert.ok(
+        entities.includes(entity),
+        `IJ-1: automatically extracted entities must include ${entity}; got ${JSON.stringify(entities)}`
+      )
+    }
+    assert.equal(new Set(entities).size, entities.length, 'IJ-1: extracted entities must be deduplicated')
+
+
+  } finally {
+    closeStore(dbPath)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 await test('IJ-2: duplicate MAP Read does not create a second Jev observation', async () => {
@@ -127,9 +172,9 @@ await test('IJ-2: duplicate MAP Read does not create a second Jev observation', 
 
   fs.rmSync(path.join(dir, 'MAP.md'))
 
-  const second = await executeBuiltinTool(db, ctx, 'Read', { file_path: 'MAP.md' }, io)
+  const second = await executeBuiltinTool(db, ctx, 'Read', { file_path: './MAP.md' }, io)
   assert.equal(second.is_error, true, 'duplicate read must still be rejected')
-  assert.equal(second.content, '[harness] already read: MAP.md', 'result must be harness rejection, not a filesystem error')
+  assert.equal(second.content, '[harness] already read: ./MAP.md', 'canonical alias must be rejected before checking the now-deleted file on disk')
 
   const secondRows = db.prepare(`SELECT id, content, entities_json, title FROM memories WHERE session_id = ?`).all(sid)
     .filter((r) => `${r.entities_json || ''} ${r.content || ''} ${r.title || ''}`.includes('MAP.md'))
@@ -199,9 +244,10 @@ await test('IJ-3: sufficient graph bypasses disk tools on explore turn (graph-fi
   mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
 
   let readAttempts = 0
+  const reachedHandoff = new Error('IJ-3 reached diagnose handoff')
   const autoIo = {
     ask: async () => 'y',
-    println: () => {},
+    println: (message) => { if (/Entering diagnose phase/.test(String(message))) throw reachedHandoff },
     write: () => {},
     onToolStart: (name, input) => {
       if (name === 'Read') readAttempts += 1
@@ -224,7 +270,11 @@ await test('IJ-3: sufficient graph bypasses disk tools on explore turn (graph-fi
     },
   }
   try {
-    await withTimeout(runUserTurn(db, rt, 'Review health check endpoint (#37)', autoIo), 45000, 'IJ-3 runUserTurn')
+    await assert.rejects(
+      withTimeout(runUserTurn(db, rt, 'Review health check endpoint (#37)', autoIo), 45000, 'IJ-3 runUserTurn'),
+      error => error === reachedHandoff,
+      'graph-first explore must hand off to diagnose'
+    )
 
     assert.equal(
       readAttempts,
@@ -232,18 +282,8 @@ await test('IJ-3: sufficient graph bypasses disk tools on explore turn (graph-fi
       `IJ-3: sufficient graph must bypass disk Reads (graph-first); got ${readAttempts} Read starts`
     )
     const phase = getPhase(db, cid)
-    assert.ok(
-      phase !== 'explore' && phase !== 'idle',
-      `IJ-3: must hand off out of explore/idle after graph-first, got ${phase}`
-    )
+    assert.equal(phase, 'diagnose', `IJ-3: graph-first handoff must land precisely in diagnose, got ${phase}`)
 
-    const negCid = 'c-ij3-neg'
-    const negSid = 's-ij3-neg'
-    db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?,?,?)`).run(negCid, repo, 'explore')
-    db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?,?)`).run(negSid, negCid)
-    const negCtx = { cwd: repo, conversationId: negCid, sessionId: negSid, settings: {} }
-    const negResult = await executeBuiltinTool(db, negCtx, 'Read', { file_path: 'MAP.md' }, autoIo)
-    assert.equal(negResult.is_error, false, 'negative control: without sufficient evidence, canonical Read must remain possible')
   } finally {
     if (mock) await mock.close();
     closeStore(dbPath);
@@ -251,7 +291,49 @@ await test('IJ-3: sufficient graph bypasses disk tools on explore turn (graph-fi
   }
 })
 
-await test('IJ-4: saturation handoff pins explore digest in pinned_context', async () => {
+await test('IJ-3-NEG: insufficient graph allows the real exploration Read through runUserTurn', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ij3-negative-'))
+  const cwd = path.join(dir, 'repo')
+  fs.mkdirSync(cwd)
+  fs.writeFileSync(path.join(cwd, 'MAP.md'), '# MAP\nhealth router: src/health.mjs\n')
+  const dbPath = path.join(dir, 'state.db')
+  const db = openStore(dbPath)
+  const cid = 'ij3-negative-conversation', sid = 'ij3-negative-session'
+  db.prepare("INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'explore')").run(cid, cwd)
+  db.prepare('INSERT INTO sessions(session_id, conversation_id) VALUES (?, ?)').run(sid, cid)
+  const mock = await startMockLlmServer()
+  try {
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memories').get().n, 0, 'negative graph starts empty')
+    mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: 'MAP.md' }))
+    mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
+    mock.queueResponse(makeOpenAiTextChunks('Read MAP.md; health router maps to src/health.mjs.'))
+    let reads = 0, success = 0
+    const handoff = new Error('IJ3 negative handoff')
+    const rt = { sessionId: sid, conversationId: cid, cwd, runtimeDbPath: dbPath,
+      settings: { permissions: { defaultMode: 'default' }, model_config: {
+        provider: 'openai_compatible', custom_model_name: 'fixture', base_url: mock.baseUrl, api_key: 'test',
+      } },
+    }
+    await assert.rejects(
+      withTimeout(runUserTurn(db, rt, 'Explore the health router from MAP.md', {
+        println(msg) { if (/Entering diagnose phase/.test(String(msg))) throw handoff },
+        write() {},
+        onToolStart(name) { if (name === 'Read') reads++ },
+        onToolResult(name, content, isError) { if (name === 'Read' && !isError) success++ },
+      }), 45000, 'IJ-3 insufficient-graph turn'),
+      err => err === handoff,
+    )
+    assert.equal(reads, 1, 'insufficient graph must dispatch the real filesystem Read')
+    assert.equal(success, 1, 'Read must return actual source content without being intercepted')
+    assert.equal(getPhase(db, cid), 'diagnose')
+  } finally {
+    await mock.close()
+    closeStore(dbPath)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+await test('IJ-4: request 21 is blocked; forced saturation persists evidence and hands off to diagnose', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ij4-'))
   const repo = path.join(dir, 'repo')
   fs.mkdirSync(repo, { recursive: true })
@@ -261,54 +343,118 @@ await test('IJ-4: saturation handoff pins explore digest in pinned_context', asy
   const cid = 'c-ij4'
   const sid = 's-ij4'
   db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?,?,?)`).run(cid, repo, 'idle')
-  db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?,?)`).run(sid, cid)
-  let pinnedBefore = db.prepare(`SELECT * FROM pinned_context WHERE session_id = ?`).all(sid)
-  assert.equal(pinnedBefore.length, 0, 'IJ-4 precondition: no explore digest exists before exploration')
+  db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?, ?)`).run(sid, cid)
 
   const mock = await startMockLlmServer()
-  for (let i = 0; i < 8; i++) {
-    mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: 'MAP.md' }))
-  }
-  mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
-
-  let diagnoseEntered = false
-  const autoIo = {
-    ask: async () => 'y',
-    println: (text) => { if (/Entering diagnose/i.test(String(text))) { diagnoseEntered = true } },
-    write: () => {},
-    onToolStart: () => {},
-    onToolResult: () => {},
-  }
-  const rt = {
-    sessionId: sid,
-    conversationId: cid,
-    cwd: repo,
-    runtimeDbPath: dbPath,
-    settings: {
-      permissions: { defaultMode: 'default' },
-      model_config: {
-        provider: 'openai_compatible',
-        custom_model_name: 'beam:cloud',
-        base_url: mock.baseUrl,
-        api_key: 'ollama',
-      },
-    },
-  }
   try {
-    await withTimeout(runUserTurn(db, rt, 'Review health check endpoint (#37)', autoIo), 45000, 'IJ-4 runUserTurn')
+    assert.equal(
+      getPinnedContextBlocks(db, sid).length,
+      0,
+      'IJ-4 precondition: no pinned explore digest before the run'
+    )
+    assert.equal(
+      db.prepare(`SELECT COUNT(*) AS n FROM events WHERE conversation_id = ? AND event_type = 'saturation'`).get(cid).n,
+      0,
+      'IJ-4 precondition: no saturation event before the run'
+    )
+
+    // No model reply says "Exploration complete." during exploration. Each
+    // response asks for another Read, so request 21 would be necessary to
+    // continue normally. The production request budget must stop it instead.
+    const EXPLORE_LIMIT = 20
+    for (let i = 0; i < EXPLORE_LIMIT; i++) {
+      mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: 'MAP.md' }))
+    }
+    // The explore gate may request a file summary AFTER saturation; this reply
+    // is for that downstream summarization, not a 21st explore-phase request.
+    mock.queueResponse(makeOpenAiTextChunks('MAP.md identifies src/index.mjs as the router.'))
+
+    let saturationModelRequests = null
+    let saturationPhase = null
+    let saturationNotice = null
+    let diagnoseEntered = false
+    const reachedHandoff = new Error('IJ-4: observed completed explore -> diagnose handoff')
+    const autoIo = {
+      ask: async () => 'y',
+      println: (message) => {
+        const line = String(message || '')
+        if (/\[explore\].*Saturation: request budget exhausted/i.test(line)) {
+          saturationModelRequests = mock.requestCount
+          saturationPhase = getPhase(db, cid)
+          saturationNotice = line
+        }
+        if (/Entering diagnose phase\./.test(line)) {
+          diagnoseEntered = true
+          // End this scenario at the actual handoff. Continuing would enter
+          // unrelated diagnose/issue/planning gates, which IJ-4 does not test.
+          throw reachedHandoff
+        }
+      },
+      write: () => {},
+      onToolStart: () => {},
+      onToolResult: () => {},
+    }
+    const rt = {
+      sessionId: sid,
+      conversationId: cid,
+      cwd: repo,
+      runtimeDbPath: dbPath,
+      settings: {
+        permissions: { defaultMode: 'default' },
+        model_config: {
+          provider: 'openai_compatible',
+          custom_model_name: 'beam:cloud',
+          base_url: mock.baseUrl,
+          api_key: 'ollama',
+        },
+      },
+    }
+
+    await assert.rejects(
+      withTimeout(runUserTurn(db, rt, 'Review health check endpoint (#37)', autoIo), 45000, 'IJ-4 runUserTurn'),
+      (error) => error === reachedHandoff,
+      'IJ-4 must reach the production explore -> diagnose handoff before stopping the scenario'
+    )
+
+    assert.equal(saturationPhase, 'explore', 'saturation must occur while still in explore')
+    assert.equal(
+      saturationModelRequests,
+      EXPLORE_LIMIT,
+      `IJ-4: precisely ${EXPLORE_LIMIT} model requests must occur before explore blocks request ${EXPLORE_LIMIT + 1}`
+    )
+    assert.match(saturationNotice || '', /request budget exhausted at 20 upstream requests/i)
+    assert.equal(diagnoseEntered, true, 'explore must hand off to diagnose after saturation')
+    assert.equal(getPhase(db, cid), 'diagnose', 'handoff must persist diagnose as the next phase')
+
+    const budgetEvents = db.prepare(`
+      SELECT event_type, detail FROM events
+      WHERE conversation_id = ? AND event_type IN ('saturation', 'explore_request_budget_exhausted')
+      ORDER BY id
+    `).all(cid)
+    const saturated = budgetEvents.filter((event) => event.event_type === 'saturation')
+    const exhausted = budgetEvents.filter((event) => event.event_type === 'explore_request_budget_exhausted')
+    assert.equal(saturated.length, 1, 'production must persist exactly one saturation event')
+    assert.equal(exhausted.length, 1, 'production must persist the explicit request-budget exhaustion event')
+
+    const detail = JSON.parse(saturated[0].detail)
+    assert.equal(detail.reason, 'explore_request_budget_exhausted')
+    assert.equal(detail.limit, EXPLORE_LIMIT)
+    assert.equal(detail.blockingRequest, EXPLORE_LIMIT + 1)
+    const exhaustedDetail = JSON.parse(exhausted[0].detail)
+    assert.equal(exhaustedDetail.limit, EXPLORE_LIMIT)
+    assert.equal(exhaustedDetail.blockingRequest, EXPLORE_LIMIT + 1)
 
     const pinned = getPinnedContextBlocks(db, sid)
-    const keys = pinned.map((p) => p.key)
-    const digestEntry = pinned.find((p) => /explore/i.test(p.key))
-    assert.ok(digestEntry, `IJ-4: expected automatic pinned explore digest key after handoff, got keys=${JSON.stringify(keys)}`)
-    const digestText = digestEntry.content || digestEntry.value || ''
-    assert.match(String(digestText), /MAP\.md/, 'IJ-4: digest must contain MAP.md from actual exploration')
-    assert.equal(digestEntry.session_id, sid, 'IJ-4: digest must belong to the correct session')
-    assert.ok(diagnoseEntered, 'IJ-4: production explore gate must announce and perform the canonical explore -> diagnose transition')
+    const digestEntry = pinned.find((entry) => entry.key === 'explore_candidates_snapshot')
+    assert.ok(digestEntry, 'saturation handoff must automatically persist explore_candidates_snapshot')
+    const digestText = digestEntry.content ?? digestEntry.value ?? ''
+    assert.match(String(digestText), /MAP\.md/, 'pinned digest must identify the file actually explored')
+    assert.equal(digestEntry.session_id, sid, 'pinned digest must belong to the test session')
   } finally {
-    if (mock) await mock.close();
-    closeStore(dbPath);
-    fs.rmSync(dir, { recursive: true, force: true });
+    try { await mock.close() } finally {
+      closeStore(dbPath)
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   }
 })
 

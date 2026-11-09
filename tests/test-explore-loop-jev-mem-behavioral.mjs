@@ -6,7 +6,7 @@
  *
  * HP-1: Pre-seeded sufficient graph → retrieveEvidence stops as sufficient (System-1).
  * HP-2: Low-sufficiency / empty graph → retrieveEvidence does not claim sufficient; disk explore allowed.
- * HP-3: Real ingestObservation after explore tool success records path entities (async-safe await).
+ * HP-3: Successful explore Read automatically stores a source-linked observation.
  * HP-4: buildJevSystem2Messages remains the System-2 observation+working compaction path (pinned + canonical).
  *
  * Graph-first bypass of runUserTurn disk tools is covered by
@@ -114,21 +114,10 @@ await test('HP-3: explore tool success must be ingestible with path entities (re
     const result = await executeBuiltinTool(env.db, ctx, 'Read', { file_path: 'MAP.md' }, io)
     assert.equal(result.is_error, false)
 
-    // Intent: harness calls ingestObservation with filePaths from the tool.
-    // Until wired, tests may call ingest explicitly only to prove write-path —
-    // but then also assert the *harness* left a row. Prefer harness-owned ingest:
-    const before = env.db.prepare(`SELECT COUNT(*) AS n FROM memories`).get().n
-    await ingestObservation(env.db, {
-      sessionId: env.sid,
-      conversationId: env.cid,
-      title: 'Tool Execution: Read',
-      text: String(result.content).slice(0, 1000),
-      filePaths: ['MAP.md'],
-      provenance: 'explore_tool',
-      layaOpts: { timeoutMs: 50 },
-    })
+    // Tool success must already have persisted its own observation. The test
+    // never performs the production ingestion as a setup shortcut.
     const after = env.db.prepare(`SELECT COUNT(*) AS n FROM memories`).get().n
-    assert.ok(after > before, 'HP-3: ingestObservation must add a memory node')
+    assert.equal(after, 1, 'HP-3: exactly one observation must be auto-ingested by Read')
     const node = env.db.prepare(`SELECT * FROM memories ORDER BY observation_ts DESC LIMIT 1`).get()
     assert.match(String(node.entities_json || ''), /MAP\.md/)
   } finally {
@@ -172,7 +161,6 @@ await test('HP-3b: harness auto-ingests explore Read into Jev (no manual ingest 
     const before = env.db.prepare(`SELECT COUNT(*) AS n FROM memories`).get().n
     const result = await executeBuiltinTool(env.db, ctx, 'Read', { file_path: 'MAP.md' }, io)
     assert.equal(result.is_error, false)
-    await ingestObservation(env.db, { sessionId: env.sid, conversationId: env.cid, title: 'MAP.md', text: '# MAP\nrouter: src/index.mjs\n', filePaths: ['MAP.md'], layaOpts: { timeoutMs: 50 } })
     const after = env.db.prepare(`SELECT COUNT(*) AS n FROM memories`).get().n
     assert.ok(after > before, `HP-3b: explore Read must auto-ingest (before=${before} after=${after})`)
     const rows = env.db.prepare(`SELECT entities_json, content FROM memories`).all()

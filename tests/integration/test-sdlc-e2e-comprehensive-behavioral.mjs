@@ -1,135 +1,72 @@
 #!/usr/bin/env node
 /**
- * Comprehensive end-to-end SDLC behavioral coverage (#33)
- *
- * Written to exercise and assert the full workflow described by AGENTS.md:
- * - targeted exploration
- * - plan approval prompt and issue association
- * - TDD RED -> GREEN
- * - verification and safety gate
+ * E2E-ANTI-CHEAT: agent prose must not be promoted into RED/GREEN evidence.
+ * Canonical positive RED -> GREEN coverage is in test-agents-md-canonical...
+ * This negative control exercises the production model->gate route, not source
+ * regexes, canned red_evidence rows, or a mocked SDLC orchestrator.
  */
-
-import assert from 'node:assert'
+import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { openStore, closeStore } from '../../lib/store.mjs'
-import {
-  getPhase,
-} from '../../lib/workflow.mjs'
 import { runUserTurn } from '../../lib/orchestrate.mjs'
-import {
-  startMockLlmServer,
-  makeOpenAiTextChunks,
-  makeOpenAiToolCallChunks,
-} from '../fixtures/mockLlmServer.mjs'
+import { getPhase } from '../../lib/workflow.mjs'
+import { startMockLlmServer, makeOpenAiTextChunks } from '../fixtures/mockLlmServer.mjs'
 
-const tmpDir = path.join(os.tmpdir(), `sdlc-comp-${Date.now()}`)
-fs.mkdirSync(tmpDir, { recursive: true })
-const e2eDir = path.join(tmpDir, 'repo')
-fs.mkdirSync(e2eDir, { recursive: true })
-fs.writeFileSync(path.join(e2eDir, 'package.json'), '{"name":"test-pkg","version":"1.0.0"}')
-
-const mock = await startMockLlmServer()
-
-mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: 'package.json' }))
-mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
-mock.queueResponse(makeOpenAiTextChunks(`
-# Plan for Issue #1636
-
-## Behavioral Specification
-Given a service
-When invoked
-Then it succeeds
-
-## Coverage Matrix
-| Scenario | Test File |
-| FL-1 | tests/mem_behavioral.mjs |
-`))
-mock.queueResponse(makeOpenAiToolCallChunks('Bash', { command: 'node -e "process.exit(1)"' }))
-mock.queueResponse(makeOpenAiTextChunks('Tests failed: 1 failed (RED as expected).'))
-mock.queueResponse(makeOpenAiToolCallChunks('Write', { file_path: 'out.txt', content: 'fixed' }))
-mock.queueResponse(makeOpenAiTextChunks('Done: Changes applied.'))
-mock.queueResponse(makeOpenAiTextChunks('Updated out.txt.'))
-mock.queueResponse(makeOpenAiToolCallChunks('Bash', { command: 'echo "test pass"' }))
-mock.queueResponse(makeOpenAiTextChunks('Tests passed: 1 passed.'))
-
-const e2eDbPath = path.join(tmpDir, 'e2e.db')
-const db = openStore(e2eDbPath)
-const convId = 'c-comp-1'
-const sessId = 's-comp-1'
-db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'idle')`).run(convId, e2eDir)
-db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?, ?)`).run(sessId, convId)
-
-const asks = []
-const toolCalls = []
-const e2eRt = {
-  sessionId: sessId,
-  conversationId: convId,
-  cwd: e2eDir,
-  runtimeDbPath: e2eDbPath,
-  settings: {
-    permissions: { defaultMode: 'default' },
-    model_config: {
-      provider: 'ollama',
-      custom_model_name: 'beam:cloud',
-      base_url: mock.baseUrl,
-      api_key: 'ollama',
-    }
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-no-fake-red-'))
+const cwd = path.join(temp, 'project'); fs.mkdirSync(cwd)
+const dbPath = path.join(temp, 'runtime.db')
+const db = openStore(dbPath)
+const cid = 'no-fake-red-conv', sid = 'no-fake-red-session'
+let mock
+try {
+  db.prepare("INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'idle')").run(cid, cwd)
+  db.prepare('INSERT INTO sessions(session_id, conversation_id) VALUES (?, ?)').run(sid, cid)
+  mock = await startMockLlmServer()
+  // The model deliberately supplies NO test-creation tool call and NO test command.
+  // Only external model replies are mocked; every gate is production.
+  mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
+  mock.queueResponse(makeOpenAiTextChunks('Diagnose: boundary comparator is strict.'))
+  mock.queueResponse(makeOpenAiTextChunks('Issue: create a regression for the equal-boundary case.'))
+  mock.queueResponse(makeOpenAiTextChunks('Tests failed: I say this is RED, but I ran no command.'))
+  // Guard against silently continuing into unrelated phases if the harness cheats.
+  const unexpectedHandoff = new Error('production advanced past create_tests without executing any regression')
+  const phaseLog = []
+  const toolCalls = []
+  const io = {
+    ask: async () => 'y',
+    println(msg) {
+      const line = String(msg || '')
+      phaseLog.push(line)
+      if (/RED confirmed|Entering planning phase/i.test(line)) throw unexpectedHandoff
+    },
+    write() {},
+    onToolStart(name, input) { toolCalls.push({ name, input }) },
+    onToolResult() {},
   }
+  const rt = {
+    sessionId: sid, conversationId: cid, cwd, runtimeDbPath: dbPath,
+    settings: { permissions: { defaultMode: 'default' }, model_config: {
+      provider: 'openai_compatible', custom_model_name: 'fixture', base_url: mock.baseUrl, api_key: 'test',
+    } },
+  }
+  let observed = null
+  try { await runUserTurn(db, rt, 'Fix boundary behavior (#36)', io) }
+  catch (err) { observed = err; if (err !== unexpectedHandoff) throw err }
+
+  assert.notEqual(observed, unexpectedHandoff,
+    'Production created fake RED evidence and advanced the phase after model prose with no test execution')
+  assert.equal(getPhase(db, cid), 'create_tests',
+    'Without a real failing behavioral test, create_tests must remain blocked')
+  assert.deepEqual(toolCalls, [], 'Model never requested a tool; no test was executed')
+  const red = db.prepare('SELECT command, exit_code, output_digest FROM red_evidence WHERE conversation_id=?').all(cid)
+  assert.equal(red.length, 0, `No legitimate RED exists; found ${JSON.stringify(red)}`)
+  const phases = db.prepare("SELECT detail FROM events WHERE conversation_id=? AND event_type='phase' ORDER BY id").all(cid).map(r => r.detail)
+  assert.deepEqual(phases, ['explore', 'diagnose', 'create_issue', 'create_tests'])
+  console.log('PASS E2E-ANTI-CHEAT: model prose cannot manufacture RED evidence or bypass TDD')
+} finally {
+  if (mock) await mock.close()
+  closeStore(dbPath)
+  fs.rmSync(temp, { recursive: true, force: true })
 }
-
-const autoIo = {
-  ask: async (q) => {
-    asks.push(q)
-    return 'y'
-  },
-  println: () => {},
-  write: () => {},
-  onToolStart: (name, input) => {
-    toolCalls.push(JSON.stringify({ name, ...input }))
-    return undefined
-  },
-  onToolResult: () => {},
-}
-
-await runUserTurn(db, e2eRt, 'fix memory leak (#1636)', autoIo)
-
-const events = db.prepare(`SELECT detail FROM events WHERE conversation_id = ? AND event_type = 'phase' ORDER BY id ASC`).all(convId)
-const phasesSeen = events.map(e => e.detail)
-const asksJson = JSON.stringify(asks)
-const toolCallsJson = JSON.stringify(toolCalls)
-const planRow = db.prepare(`SELECT content FROM plans WHERE conversation_id = ? AND status = 'approved' ORDER BY id DESC LIMIT 1`).get(convId)
-const plan = planRow ? planRow.content : ''
-const planCount = db.prepare(`SELECT COUNT(*) AS n FROM plans WHERE conversation_id = ?`).get(convId).n
-const safetyCheckerRecorded = db.prepare(`SELECT COUNT(*) AS n FROM events WHERE conversation_id = ? AND event_type = 'safety_checker'`).get(convId).n
-
-assert.ok(phasesSeen.includes('explore'), `expected explore phase: ${phasesSeen.join(' -> ')}`)
-assert.ok(phasesSeen.includes('planning'), `expected planning phase: ${phasesSeen.join(' -> ')}`)
-assert.ok(phasesSeen.includes('test') && phasesSeen.includes('implement'), `expected test/implement phases: ${phasesSeen.join(' -> ')}`)
-
-const testIdx = phasesSeen.indexOf('test')
-const implementIdx = phasesSeen.indexOf('implement')
-assert.ok(testIdx !== -1 && testIdx < implementIdx, `TDD order wrong: ${phasesSeen.join(' -> ')}`)
-
-assert.ok(asksJson.includes('Approve this plan') || asksJson.includes('y/N'),
-  `plan approval prompt not captured: ${asksJson}`)
-
-assert.ok(plan.includes('#1636'), `approved plan does not preserve issue number: ${plan}`)
-assert.ok(plan.includes('Coverage Matrix'), `approved plan missing coverage matrix: ${plan}`)
-
-assert.ok(!toolCallsJson.includes('**/*.py'), 'broad Python sweep attempted during exploration')
-assert.ok(!toolCallsJson.includes('**/*.sh'), 'broad Shell sweep attempted during exploration')
-
-assert.ok(fs.existsSync(path.join(e2eDir, 'out.txt')), 'implementation target was not written')
-assert.strictEqual(fs.readFileSync(path.join(e2eDir, 'out.txt'), 'utf8'), 'fixed')
-
-assert.ok(safetyCheckerRecorded >= 1, 'safety checker gate event not recorded')
-
-closeStore(e2eDbPath)
-await mock.close()
-fs.rmSync(tmpDir, { recursive: true, force: true })
-
-console.log('✓ SDLC-COMP-INTENT: runUserTurn took a fix-memory task through the full workflow with beam:cloud model config')
-console.log(`Phases observed: ${phasesSeen.join(' -> ')}`)
-console.log(`Approved plan rows: ${planCount}`)
