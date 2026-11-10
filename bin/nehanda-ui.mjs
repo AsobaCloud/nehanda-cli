@@ -1018,6 +1018,7 @@ async function handleCommand(cmd, bridge) {
 }
 
 // ── Entry point ───────────────────────────────────────────────
+let inkAppInstance = null
 const bridge = {
   convId:          `nehanda-${Date.now()}`,
   lastFailedText:  null,
@@ -1052,6 +1053,9 @@ bridge.onSubmit = async (text) => {
 
   bridge.setLoading(true)
   bridge.updateSpinner('Analyzing')
+  if (inkAppInstance && typeof inkAppInstance.rerender === 'function') {
+    inkAppInstance.rerender(e(App, { bridge }))
+  }
   const controller = new AbortController()
   bridge.abortCurrent = () => {
     bridge.updateSpinner('Cancelling…')   // #22: immediate UI feedback before abort propagates
@@ -1174,4 +1178,4 @@ try {
 }
 try { layaLoadingInstance.unmount() } catch {}
 if (process.stdout.isTTY) process.stdout.write('\x1b[2J\x1b[3J\x1b[H')
-render(e(App, { bridge }), { exitOnCtrlC: false })
+inkAppInstance = render(e(App, { bridge }), { exitOnCtrlC: false })
