@@ -1,81 +1,66 @@
-import assert from 'node:assert/strict';
-import { WorkflowState, setPhase } from '../../lib/workflow.mjs';
-
-/**
- * HP-8 & HP-10: Completion Evidence & Safety Gate Verification
- * Enforces AGENTS 7–8 and AGENTS 8–9 boundary requirements.
- */
-async function runTests() {
-  console.log('--- Running test-verify-completion-evidence-behavioral.mjs ---');
-
-  // Scenario 1: Non-zero safety checker exit code blocks transition to verify/done
-  {
-    const state = new WorkflowState({ currentPhase: 'test' });
-    const mockSafetyResults = [
-      { checker: 'js-safety-checker.cjs', command: 'node utilities/js-safety-checker.cjs', exit_code: 0, output: 'OK' },
-      { checker: 'shell-safety-checker.sh', command: './utilities/shell-safety-checker.sh', exit_code: 1, output: 'Syntax error' },
-      { checker: 'python-safety-checker.py', command: 'python3 utilities/python-safety-checker.py', exit_code: 0, output: 'OK' },
-    ];
-    
-    state.recordSafetyResults(mockSafetyResults);
-    state.setPathCoverage(85); // High coverage, but 1 checker failed
-
-    const transitionResult = setPhase(state, 'verify');
-    assert.equal(transitionResult.success, false, 'Transition to verify must fail when safety checker exits non-zero');
-    assert.equal(state.currentPhase, 'test', 'Phase must remain locked in test');
-    assert.match(
-      state.lastRejectionReason,
-      /AGENTS 7–8: GREEN pass, 3\/3 safety checker clearance, and >=70% path coverage required\./,
-      'Must emit exact AGENTS 7–8 rejection string'
-    );
-    console.log('✔ Passed Scenario 1: Non-zero safety exit code blocks phase promotion.');
-  }
-
-  // Scenario 2: Path coverage under 70% blocks completion offer
-  {
-    const state = new WorkflowState({ currentPhase: 'test' });
-    const mockSafetyResults = [
-      { checker: 'js-safety-checker.cjs', command: 'node utilities/js-safety-checker.cjs', exit_code: 0, output: 'OK' },
-      { checker: 'shell-safety-checker.sh', command: './utilities/shell-safety-checker.sh', exit_code: 0, output: 'OK' },
-      { checker: 'python-safety-checker.py', command: 'python3 utilities/python-safety-checker.py', exit_code: 0, output: 'OK' },
-    ];
-    
-    state.recordSafetyResults(mockSafetyResults);
-    state.setPathCoverage(65); // Coverage is 65% (< 70%)
-
-    const transitionResult = setPhase(state, 'verify');
-    assert.equal(transitionResult.success, false, 'Transition to verify must fail when path coverage < 70%');
-    assert.equal(state.currentPhase, 'test', 'Phase must remain locked in test');
-    assert.match(
-      state.lastRejectionReason,
-      /AGENTS 7–8/,
-      'Rejection reason must reference AGENTS 7–8 boundary mandate'
-    );
-    console.log('✔ Passed Scenario 2: Coverage < 70% suppresses completion gate.');
-  }
-
-  // Scenario 3: 3/3 safety pass AND >=70% coverage allows transition to verify
-  {
-    const state = new WorkflowState({ currentPhase: 'test' });
-    const mockSafetyResults = [
-      { checker: 'js-safety-checker.cjs', command: 'node utilities/js-safety-checker.cjs', exit_code: 0, output: 'OK' },
-      { checker: 'shell-safety-checker.sh', command: './utilities/shell-safety-checker.sh', exit_code: 0, output: 'OK' },
-      { checker: 'python-safety-checker.py', command: 'python3 utilities/python-safety-checker.py', exit_code: 0, output: 'OK' },
-    ];
-    
-    state.recordSafetyResults(mockSafetyResults);
-    state.setPathCoverage(75);
-
-    const transitionResult = setPhase(state, 'verify');
-    assert.equal(transitionResult.success, true, 'Transition to verify should succeed with clean safety + 75% coverage');
-    assert.equal(state.currentPhase, 'verify', 'Phase must advance to verify');
-    console.log('✔ Passed Scenario 3: 3/3 safety pass + 75% coverage allows transition to verify.');
-  }
-
-  console.log('All verify-completion-evidence tests passed successfully.');
+/** #36 C-5: completion uses actual safety checks and measured coverage. */
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fixture,nativeCoverage,yesIo } from '../fixtures/sdlcAcceptance.mjs'
+import { safetyGate } from '../../lib/orchestrate.mjs'
+import { getPhase,canTransition,recordRedTestEvidence } from '../../lib/workflow.mjs'
+for(const kind of ['valid','missing-coverage','failed-checker','stale-source']) {
+ test(`VE-${kind}: Given ${kind} safety evidence, When completing safety, Then only current valid evidence advances`,async()=>{
+  const f=fixture(`safety-${kind}`,'safety')
+  try {
+   const run=nativeCoverage(f)
+   recordRedTestEvidence(f.db,f.cid,{command:'node --test tests/probe.test.mjs',exit_code:0,output_digest:run.stdout+run.stderr,execution:run.execution})
+   if(kind==='missing-coverage')fs.rmSync(path.join(f.cwd,'coverage.lcov'))
+   if(kind==='failed-checker') fs.writeFileSync(path.join(f.cwd,'bad.sh'),'#!/bin/bash\nif then\n')
+   if(kind==='stale-source') {
+    assert.equal(await safetyGate(f.db,f.rt,yesIo),true,'establish valid prior measurement')
+    f.phase('safety')
+    fs.appendFileSync(path.join(f.cwd,'src/probe.mjs'),'\nexport const newBranch = x => x ? 1 : 0\n')
+    assert.equal(canTransition(f.db,f.cid,'confirm_fix'),false,'source change invalidates stored coverage')
+    return
+   }
+   const advanced=await safetyGate(f.db,f.rt,yesIo)
+   assert.equal(advanced,kind==='valid')
+   assert.equal(getPhase(f.db,f.cid),kind==='valid'?'confirm_fix':'safety')
+  } finally {f.close()}
+ })
 }
-
-runTests().catch((err) => {
-  console.error('Test Failed:', err);
-  process.exit(1);
-});
+for(const kind of ['latest-checker-failure','wrong-checker-identities','stale-lcov']){
+ test(`VE-${kind}: Given prior valid measurement, When ${kind} occurs, Then completion is blocked`,async()=>{
+  const f=fixture(kind,'safety')
+  try{
+   const run=nativeCoverage(f)
+   recordRedTestEvidence(f.db,f.cid,{command:'node --test tests/probe.test.mjs',exit_code:0,output_digest:run.stdout+run.stderr,execution:run.execution})
+   assert.equal(await safetyGate(f.db,f.rt,yesIo),true)
+   f.phase('safety')
+   if(kind==='latest-checker-failure'){
+    f.event('safety_checker',{checkerName:'Python',passed:false,exit_code:1,output:'newly failing check'})
+    assert.equal(canTransition(f.db,f.cid,'confirm_fix'),false,'an older success cannot override the latest failure')
+   }else if(kind==='wrong-checker-identities'){
+    f.db.prepare("DELETE FROM events WHERE conversation_id=? AND event_type='safety_checker'").run(f.cid)
+    for(const name of ['UnrelatedA','UnrelatedB','UnrelatedC'])f.event('safety_checker',{checkerName:name,passed:true,exit_code:0})
+    assert.equal(canTransition(f.db,f.cid,'confirm_fix'),false,'three arbitrary names are not the mandatory checker set')
+   }else{
+    fs.appendFileSync(path.join(f.cwd,'src/probe.mjs'),'\nexport function untested(x) { if(x) return 1; return 2 }\n')
+    assert.equal(await safetyGate(f.db,f.rt,yesIo),false,'a stale LCOV file cannot be rebound to changed source without rerunning tests')
+   }
+  }finally{f.close()}
+ })
+}
+test('VE-old-report-new-GREEN: rerunning ordinary tests cannot rebind old coverage to changed source',async()=>{
+ const f=fixture('old-report-new-green','safety')
+ try{
+  const run=nativeCoverage(f)
+  recordRedTestEvidence(f.db,f.cid,{command:'node --test tests/probe.test.mjs',exit_code:0,output_digest:run.stdout+run.stderr,execution:run.execution})
+  assert.equal(await safetyGate(f.db,f.rt,yesIo),true)
+  fs.appendFileSync(path.join(f.cwd,'src/probe.mjs'),'\nexport function uncovered(x) { if (x) return 1; return 2 }\n')
+  f.phase('verify')
+  const {executeBuiltinTool}=await import('../../lib/tools.mjs')
+  const passed=await executeBuiltinTool(f.db,f.rt,'Bash',{command:'node --test tests/probe.test.mjs'},yesIo)
+  assert.equal(passed.is_error,false,'ordinary tests still pass; no coverage execution occurred')
+  f.phase('safety')
+  assert.equal(await safetyGate(f.db,f.rt,yesIo),false,'old LCOV must remain invalid after a non-coverage GREEN rerun')
+ }finally{f.close()}
+})

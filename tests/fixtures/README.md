@@ -231,3 +231,15 @@ try {
   await mock.close()
 }
 ```
+
+## Issue #36 / #37 acceptance runs
+
+`NEHANDA_TEST_TRANSPORT=fetch` selects a provider-boundary `Request`/`Response`
+fixture when the runner cannot listen on localhost. Socket mode remains the
+default. Both modes feed realistic SSE payloads into the production parser;
+fetch mode is not proof of socket networking. Generated tool calls have unique
+IDs unless a test explicitly supplies an ID. Fetch fixtures restore the prior
+fetch function on close and must close in reverse creation order.
+
+The complete scoped inventory, Given/When/Then matrix and run commands are in
+[`../acceptance-36-37.md`](../acceptance-36-37.md).

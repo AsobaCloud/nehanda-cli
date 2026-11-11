@@ -65,7 +65,7 @@ await test('ES-1c: validateBashCommand detects write redirect outside cwd', () =
 await test('ES-2: toolBash auto-denies blocked command in headless mode (no io.confirmBlock)', async () => {
   const dbPath = path.join(os.tmpdir(), `es2-${Date.now()}.db`)
   const db = openStore(dbPath)
-  db.prepare(`INSERT INTO conversations(id, project_dir) VALUES ('c1', '/tmp')`).run()
+  db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES ('c1', '/tmp', 'implement')`).run()
   db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES ('s1', 'c1')`).run()
 
   // No io.confirmBlock — headless mode should auto-deny
@@ -194,7 +194,7 @@ await test('ES-6: _parseBlockedPayload pattern — JSON line on stderr is parsed
 await test('ES-7: headless auto-deny — content includes blocked reason text', async () => {
   const dbPath = path.join(os.tmpdir(), `es7-${Date.now()}.db`)
   const db = openStore(dbPath)
-  db.prepare(`INSERT INTO conversations(id, project_dir) VALUES ('c1', '/tmp')`).run()
+  db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES ('c1', '/tmp', 'implement')`).run()
   db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES ('s1', 'c1')`).run()
 
   const ctx = { conversationId: 'c1', sessionId: 's1', cwd: '/tmp', settings: {} }

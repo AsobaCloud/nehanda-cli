@@ -2,19 +2,19 @@
 /**
  * Behavioral tests — SQLite schema migration contract (#26)
  *
- * Contract source: lib/store.mjs — migrateStore, SCHEMA_VERSION=3, openStore
+ * Contract source: lib/store.mjs — migrateStore, SCHEMA_VERSION=4, openStore
  * README §Database Schema
  *
  * The contract: openStore on any DB — fresh, v1, v2, or v3 — must produce a
- * fully migrated v3 schema without losing existing rows.
+ * fully migrated v4 schema without losing existing rows.
  *
- * SM-1: Fresh DB (no schema_meta row) → all v3 tables present, schema_version=3
+ * SM-1: Fresh DB (no schema_meta row) → all current tables present, schema_version=4
  * SM-2: v1 DB (memories only, no Jev-Mem columns, no memory_edges) →
  *       memory_edges + laya_jev_state created; existing memories rows survive;
- *       schema_version=3
+ *       schema_version=4
  * SM-3: v2 DB (has memory_edges + laya_jev_state, no pinned_context) →
- *       pinned_context created; existing memory_edges rows survive; schema_version=3
- * SM-4: v3 DB → openStore again is idempotent; schema_version still 3; no tables dropped
+ *       pinned_context created; existing memory_edges rows survive; schema_version=4
+ * SM-4: v3 DB → openStore again is idempotent; schema_version still 4; no tables dropped
  */
 
 import assert from 'node:assert'
@@ -61,7 +61,7 @@ console.log('Running store migration behavioral tests (#26)...\n')
 
 // ── SM-1 ──────────────────────────────────────────────────────────────────────
 
-await test('SM-1: fresh DB produces all v3 tables and schema_version=3', () => {
+await test('SM-1: fresh DB produces all current tables and schema_version=4', () => {
   const dbPath = tmpPath()
   try {
     const db = openStore(dbPath)
@@ -73,8 +73,8 @@ await test('SM-1: fresh DB produces all v3 tables and schema_version=3', () => {
     assert.ok(tables.has('pinned_context'), 'pinned_context table must exist')
     assert.ok(tables.has('transcript_entries'), 'transcript_entries table must exist')
 
-    assert.strictEqual(schemaVersion(db), 3, 'schema_version must be 3')
-    assert.strictEqual(SCHEMA_VERSION, 3, 'SCHEMA_VERSION constant must be 3')
+    assert.strictEqual(schemaVersion(db), 4, 'schema_version must be 4')
+    assert.strictEqual(SCHEMA_VERSION, 4, 'SCHEMA_VERSION constant must be 4')
 
     closeStore(dbPath)
   } finally {
@@ -84,7 +84,7 @@ await test('SM-1: fresh DB produces all v3 tables and schema_version=3', () => {
 
 // ── SM-2 ──────────────────────────────────────────────────────────────────────
 
-await test('SM-2: v1 DB migrates to v3; existing memories rows survive; memory_edges + laya_jev_state created', () => {
+await test('SM-2: v1 DB migrates to v4; existing memories rows survive; memory_edges + laya_jev_state created', () => {
   const dbPath = tmpPath()
   try {
     // Build a v1 schema by hand — base tables as schema.sql defines them, but
@@ -220,7 +220,7 @@ await test('SM-2: v1 DB migrates to v3; existing memories rows survive; memory_e
     // Now open via openStore — should migrate to v3
     const db = openStore(dbPath)
 
-    assert.strictEqual(schemaVersion(db), 3, 'schema_version must be 3 after migration')
+    assert.strictEqual(schemaVersion(db), 4, 'schema_version must be 4 after migration')
 
     const tables = tableNames(db)
     assert.ok(tables.has('memory_edges'), 'memory_edges must be created by v1→v3 migration')
@@ -245,7 +245,7 @@ await test('SM-2: v1 DB migrates to v3; existing memories rows survive; memory_e
 
 // ── SM-3 ──────────────────────────────────────────────────────────────────────
 
-await test('SM-3: v2 DB migrates to v3; existing memory_edges rows survive; pinned_context created', () => {
+await test('SM-3: v2 DB migrates to v4; existing memory_edges rows survive; pinned_context created', () => {
   const dbPath = tmpPath()
   try {
     // Build a v2 schema — has memory_edges + laya_jev_state, no pinned_context
@@ -312,7 +312,7 @@ await test('SM-3: v2 DB migrates to v3; existing memory_edges rows survive; pinn
 
     const db = openStore(dbPath)
 
-    assert.strictEqual(schemaVersion(db), 3, 'schema_version must be 3 after v2→v3 migration')
+    assert.strictEqual(schemaVersion(db), 4, 'schema_version must be 4 after v2→v3 migration')
 
     const tables = tableNames(db)
     assert.ok(tables.has('pinned_context'), 'pinned_context must be created by v2→v3 migration')
@@ -331,7 +331,7 @@ await test('SM-3: v2 DB migrates to v3; existing memory_edges rows survive; pinn
 
 // ── SM-4 ──────────────────────────────────────────────────────────────────────
 
-await test('SM-4: calling openStore on a v3 DB is idempotent — schema_version stays 3, no tables dropped', () => {
+await test('SM-4: calling openStore on a current DB is idempotent — schema_version stays 4, no tables dropped', () => {
   const dbPath = tmpPath()
   try {
     // First open — creates v3
@@ -343,7 +343,7 @@ await test('SM-4: calling openStore on a v3 DB is idempotent — schema_version 
     const db2 = openStore(dbPath)
     const tablesAfter = tableNames(db2)
 
-    assert.strictEqual(schemaVersion(db2), 3, 'schema_version must still be 3')
+    assert.strictEqual(schemaVersion(db2), 4, 'schema_version must still be 4')
 
     // No tables should have been dropped
     for (const t of tablesBefore) {
@@ -354,6 +354,31 @@ await test('SM-4: calling openStore on a v3 DB is idempotent — schema_version 
   } finally {
     try { fs.unlinkSync(dbPath) } catch {}
   }
+})
+
+await test('SM-5: v3 execution evidence and legacy phases migrate without row loss, then reopen idempotently',()=>{
+ const dbPath=tmpPath()
+ try{
+  const old=openStore(dbPath)
+  old.prepare("INSERT INTO conversations(id,project_dir,phase) VALUES ('legacy-red','/tmp','test'),('legacy-green','/tmp','test')").run()
+  old.prepare("INSERT INTO events(conversation_id,event_type,detail) VALUES ('legacy-green','phase','implement')").run()
+  old.prepare("INSERT INTO red_evidence(conversation_id,command,exit_code,output_digest) VALUES ('legacy-red','old runner',1,'preserved historical failure')").run()
+  old.exec("UPDATE schema_meta SET value='3' WHERE key='schema_version'; DROP TABLE test_executions; ALTER TABLE red_evidence DROP COLUMN execution_json; ALTER TABLE red_evidence DROP COLUMN source;")
+  closeStore(dbPath)
+  const migrated=openStore(dbPath)
+  assert.equal(schemaVersion(migrated),4)
+  assert.ok(tableNames(migrated).has('test_executions'))
+  assert.ok(columnNames(migrated,'red_evidence').has('execution_json'))
+  assert.ok(columnNames(migrated,'red_evidence').has('source'))
+  assert.equal(migrated.prepare("SELECT phase FROM conversations WHERE id='legacy-red'").get().phase,'create_tests')
+  assert.equal(migrated.prepare("SELECT phase FROM conversations WHERE id='legacy-green'").get().phase,'verify')
+  assert.equal(migrated.prepare("SELECT output_digest FROM red_evidence WHERE conversation_id='legacy-red'").get().output_digest,'preserved historical failure')
+  closeStore(dbPath)
+  const reopened=openStore(dbPath)
+  assert.equal(schemaVersion(reopened),4)
+  assert.equal(reopened.prepare('SELECT COUNT(*) AS n FROM red_evidence').get().n,1)
+  closeStore(dbPath)
+ }finally{try{closeStore(dbPath)}catch{};try{fs.unlinkSync(dbPath)}catch{}}
 })
 
 console.log(`\n────────────────────────────────────────────────────────────`)

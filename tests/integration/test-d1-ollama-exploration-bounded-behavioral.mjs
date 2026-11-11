@@ -19,14 +19,20 @@ if (!requested) {
     fs.writeFileSync(path.join(f.cwd, 'src', 'health.mjs'), "export const health = () => 'ok'\n")
     const handoff = new Error('diagnose handoff observed')
     let entered = false
+    const reads=[]
+    const rt=f.makeRt(provider)
     const io = { write() {}, println(line) {
       if (/Entering diagnose phase/.test(String(line))) { entered = true; throw handoff }
-    }, onToolStart() {}, onToolResult() {} }
-    try { await runUserTurn(f.db, f.makeRt(provider), 'Explore the health service via docs/MAP.md, then hand off to diagnose.', io) }
+    }, onToolStart(name,input) {if(name==='Read')reads.push(input.file_path)}, onToolResult() {} }
+    try { await runUserTurn(f.db, rt, 'Explore the health service via docs/MAP.md, then hand off to diagnose.', io) }
     catch (err) { if (err !== handoff) throw err }
     assert.equal(entered, true, 'real Ollama exploration must complete with canonical diagnose handoff')
     assert.equal(getPhase(f.db, f.cid), 'diagnose')
     assert.ok((f.db.prepare("SELECT COUNT(*) AS n FROM events WHERE conversation_id=? AND event_type='saturation'").get(f.cid).n) <= 1)
+    assert.equal(reads[0],'docs/MAP.md','registry must be first disk read')
+    assert.ok(reads.includes('src/health.mjs'),'targeted territory must be inspected')
+    assert.ok(reads.filter(p=>p==='docs/MAP.md').length<=2,'MAP attempts must stay <=2')
+    assert.ok(rt._exploreRequestCount<=4,'convergent exploration must stay <=4 requests')
     console.log('PASS D1 real-Ollama exploration bounded and handed off to diagnose')
   } finally { f.close() }
 }

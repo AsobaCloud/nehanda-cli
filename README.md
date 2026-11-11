@@ -122,7 +122,7 @@ npm run test:sandbox
 
 * **Dynamic Tool Rescue (`[TOOL_CALL]`):** Native support for endpoints that strip OpenAI tool schemas (such as `nehandaMlProxy`). The engine dynamically injects active tool schemas directly into system prompts as `[TOOL_CALL]` blocks, parsing and executing tools locally without server-side function-calling support. Uses `[TOOL_CALL]` delimiters instead of `<tool_call>` XML to prevent vLLM's `--tool-call-parser qwen3_xml` stop-token interception.
 
-* **Deterministic SDLC Workflow:** Enforces an 11-phase state machine (`idle` → `explore` → `diagnose` → `create_issue` → `create_tests` → `planning` → `implement` → `verify` → `safety` → `confirm_fix` → `done`) following the AGENTS.md TDD mandate. Transitions are gated: `create_tests → planning` requires RED behavioral test evidence; `planning → implement` is blocked until an approved plan exists and the prior RED test is recorded; `verify → safety` requires a GREEN test result; `safety → confirm_fix` requires all three safety checkers to pass and at least 70% path coverage.
+* **Deterministic SDLC Workflow:** Enforces an 11-phase state machine (`idle` → `explore` → `diagnose` → `create_issue` → `create_tests` → `planning` → `implement` → `verify` → `safety` → `confirm_fix` → `done`) following the AGENTS.md TDD mandate. Transitions are gated: `create_tests → planning` requires RED behavioral test evidence; `planning → implement` is blocked until an approved plan exists and the prior RED test is recorded; `verify → safety` requires a GREEN test result; `safety → confirm_fix` requires all three safety checkers to pass and at least 70% measured production branch coverage.
 
 * **Interactive Safety Interventions:** When execution checkers flag a command — opening local sockets, inspecting HIL testbed hardware paths, or writing outside the working directory — the engine raises a structured `{ status, reason, risk_score, proposed_remediation }` payload rather than crashing. In the TUI, blocked operations surface a `BlockConfirmMenu` (`[A] Approve for Session | [S] Run in Docker Sandbox | [C] Cancel`) wired directly into the Ink event loop. Session approvals are cached so the same operation is not re-prompted within a session. Headless pipe mode auto-denies without prompting.
 
@@ -462,24 +462,29 @@ Numeric values are auto-converted. Changes persist in the local settings databas
 
 ## SDLC Workflow
 
-The engine enforces state transitions across seven distinct phases, aligned with the AGENTS.md TDD mandate:
+The canonical runtime order is:
 
-1. **`idle`**: Discovery and triage. Mutating file tools are available. Safety and analysis tools are available on-demand.
+`idle → explore → diagnose → create_issue → create_tests → planning → implement → verify → safety → confirm_fix → done`
 
-2. **`explore`**: Codebase exploration only. `lib/explore.mjs` drives this phase — the model uses Glob, Grep, and Read to aggregate file summaries before entering planning. Ends when the model outputs `Exploration complete.`
+| Phase | Required behavior |
+| --- | --- |
+| `idle` | Triage; no production mutation. |
+| `explore` | Graph-first retrieval, then MAP and targeted code. Only Read/Glob/Grep; cache duplicate reads/negative searches and hand off on stagnation or the hard request ceiling. |
+| `diagnose` | Record observed/expected behavior and evidenced cause. |
+| `create_issue` | Create a real local `.issues` artifact before tests. |
+| `create_tests` | Write and execute behavioral regressions. Genuine RED precedes planning. |
+| `planning` | Require the issue reference, Given/When/Then specification, coverage matrix and explicit approval. |
+| `implement` | Apply the approved production changes. |
+| `verify` | Run the original unchanged regression to GREEN against current source. |
+| `safety` | Execute JavaScript/Shell/Python checkers and require current measured production branch coverage ≥70%. |
+| `confirm_fix` | Require affirmative operator confirmation. |
+| `done` | Authorized completion; CLI commits preserve the issue reference and report real Git outcomes. |
 
-3. **`planning`**: Model formulates a plan using exploration summaries (`EnterPlanMode`). Mutating tools are blocked until a plan is approved. No code changes permitted.
+Runtime completion records a reset acknowledgment and returns to `idle`, retaining durable memory and clearing transient caches. Phase transitions belong to the harness; `EnterPlanMode`, `ExitPlanMode`, `SubmitImplementation` and `SubmitTest` cannot be used as model shortcuts.
 
-4. **`test`**: Behavioral test creation and RED confirmation. The model writes tests and runs them to confirm they fail for the diagnosed reason. **Gated:** `planning → implement` is blocked until at least one RED test result is recorded here.
+Schema v4 retains historical RED rows and adds an execution ledger containing test/source identities and coverage-report provenance. Stored overloaded `test` phases migrate to `create_tests` or `verify` according to prior implementation evidence. Old results without qualifying provenance must be rerun.
 
-5. **`implement`**: Code changes applied using file editing and shell execution (`ExitPlanMode`). Only reachable after a confirmed RED test exists and a plan is approved.
-
-6. **`test`**: Automated test execution to verify GREEN (`SubmitImplementation`). **All tools marked `mandatory_in: ["test"]` must run and pass** before this phase can advance — the system prompt enforces this.
-
-7. **`verify`**: Inspection of test outputs and coverage verification (`SubmitTest`). **Gated:** requires all test results passing and at least one safety checker event recorded.
-
-8. **`done`**: Final sign-off and git commit creation.
-
+See [the architecture contract](docs/sdlc-architecture.md) and [the executable acceptance matrix](tests/acceptance-36-37.md).
 ---
 
 ## Database Schema

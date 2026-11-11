@@ -276,7 +276,9 @@ class CodeIntegrityAuditor:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     content = f.read()
                 tree = ast.parse(content)
-            except (OSError, UnicodeDecodeError, SyntaxError, ValueError) as exc: sys.stderr.write(f"[audit-code-integrity] skipping unparseable Python source: {exc}\n"); continue
+            except (OSError, UnicodeDecodeError, SyntaxError, ValueError) as exc:
+                sys.stderr.write(f"[audit-code-integrity] skipping unparseable Python source: {exc}\n")
+                continue
 
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef):

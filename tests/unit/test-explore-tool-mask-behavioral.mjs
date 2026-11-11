@@ -42,18 +42,7 @@ await test('TM-1: core explore allowlist excludes mutators', () => {
   assert.equal(EXPLORE_ONLY_TOOLS.has('Bash'), false)
 })
 
-await test('TM-2: phase filter over OpenAI tool defs omits Write/Edit/Bash', () => {
-  const all = openAICompatToolDefinitions()
-  const filtered = all.filter((t) => {
-    const name = t.name || t.function?.name
-    return EXPLORE_ONLY_TOOLS.has(name)
-  })
-  const names = filtered.map((t) => t.name || t.function?.name)
-  assert.ok(names.includes('Read'))
-  assert.ok(!names.includes('Write'), `Write must be masked in explore filter: ${names}`)
-  assert.ok(!names.includes('Edit'), `Edit must be masked: ${names}`)
-  assert.ok(!names.includes('Bash'), `Bash must be masked: ${names}`)
-})
+// Outbound schema assertions are owned by test-phase-tool-filtering-openai.mjs.
 
 await test('TM-3: executeBuiltinTool denies Write/Edit/Bash in explore phase', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'explore-mask-'))
@@ -65,18 +54,21 @@ await test('TM-3: executeBuiltinTool denies Write/Edit/Bash in explore phase', a
   db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?,?)`).run(sid, cid)
   const ctx = { cwd: dir, conversationId: cid, sessionId: sid, settings: {} }
 
+  fs.writeFileSync(path.join(dir,'protected.txt'),'keep this content')
   const w = await executeBuiltinTool(db, ctx, 'Write', { file_path: 'x.txt', content: 'nope' }, io)
   assert.equal(w.is_error, true)
   assert.match(w.content, /not available in explore/i)
 
-  const e = await executeBuiltinTool(db, ctx, 'Edit', { file_path: 'x.txt', old_string: 'a', new_string: 'b' }, io)
+  const e = await executeBuiltinTool(db, ctx, 'Edit', { file_path: 'protected.txt', old_string: 'keep this content', new_string: 'overwritten' }, io)
   assert.equal(e.is_error, true)
   assert.match(e.content, /not available in explore/i)
 
-  const b = await executeBuiltinTool(db, ctx, 'Bash', { command: 'echo hi' }, io)
+  const b = await executeBuiltinTool(db, ctx, 'Bash', { command: 'printf overwritten > protected.txt' }, io)
   assert.equal(b.is_error, true)
   assert.match(b.content, /not available in explore/i)
 
+  assert.equal(fs.existsSync(path.join(dir,'x.txt')),false,'denied Write must not create a file')
+  assert.equal(fs.readFileSync(path.join(dir,'protected.txt'),'utf8'),'keep this content','denied Edit/Bash must preserve source')
   closeStore(dbPath)
   fs.rmSync(dir, { recursive: true, force: true })
 })

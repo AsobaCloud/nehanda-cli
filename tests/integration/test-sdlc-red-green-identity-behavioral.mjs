@@ -1,133 +1,125 @@
-#!/usr/bin/env node
-/**
- * Behavioral Test: AGENTS-GREEN-1
- * Proves TDD GREEN requires the original failing behavioral test to pass.
- */
+/** #36: original regression identity, freshness and genuine execution. */
+import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
-
-import { openStore, closeStore, withTransaction } from '../../lib/store.mjs'
-import { planGate, createTestsGate, verifyGate } from '../../lib/orchestrate.mjs'
-import { executeBuiltinTool } from '../../lib/tools.mjs'
-import {
-  recordRedTestEvidence,
-  getRedTestEvidence,
-  setPhase,
-  getPhase,
-  canTransition,
-} from '../../lib/workflow.mjs'
-
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-green-'))
-const projectDir = path.join(tmpDir, 'project')
-const fixtureDir = path.join(projectDir, 'tests', 'red-green')
-fs.mkdirSync(fixtureDir, { recursive: true })
-
-const behavioralPath = path.join(fixtureDir, 'behavioral.mjs')
-const implementationPath = path.join(projectDir, 'src', 'math.mjs')
-fs.mkdirSync(path.dirname(implementationPath), { recursive: true })
-fs.writeFileSync(behavioralPath, 'import { add } from "../../src/math.mjs";\nimport assert from "node:assert/strict";\nassert.equal(add(2, 3), 5, "add(2, 3) must equal 5");\n')
-fs.writeFileSync(implementationPath, 'export function add(a, b) { return 0; }\n')
-
-const dbPath = path.join(tmpDir, 'green.db')
-let db = null
-try {
-  db = openStore(dbPath)
-  const convId = 'c-agents-green'
-  const sessId = 's-agents-green'
-  const redCommand = 'node tests/red-green/behavioral.mjs; rc=$?; exit $rc'
-
-  db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'create_tests')`).run(convId, projectDir)
-  db.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?, ?)`).run(sessId, convId)
-
-  const rt = { sessionId: sessId, conversationId: convId, cwd: projectDir }
-  const io = {
-    println() {},
-    ask() { return Promise.resolve('y') },
-  }
-  const ctx = { conversationId: convId, sessionId: sessId, cwd: projectDir }
-
-  console.log('--- AGENTS-GREEN-1: RED evidence ---')
-  const redRun = await executeBuiltinTool(db, ctx, 'Bash', { command: redCommand }, {})
-  assert.equal(redRun?.is_error, true, 'RED test must fail before implementation')
-  assert.match(String(redRun?.content || ''), /AssertionError|1 !== 2|not.*5/i, 'RED failure output must be captured')
-  recordRedTestEvidence(db, convId, {
-    command: redCommand,
-    exit_code: 1,
-    output_digest: String(redRun?.content || '').slice(0, 1000),
-  })
-  const redEvidence = getRedTestEvidence(db, convId)
-  assert.ok(redEvidence && redEvidence.command === redCommand, 'RED evidence must preserve command identity')
-  assert.notEqual(Number(redEvidence.exit_code), 0, 'RED evidence must preserve nonzero exit code')
-
-  await createTestsGate(db, rt, io, 'RED generated')
-  assert.equal(getPhase(db, convId), 'planning', 'RED evidence must allow create_tests -> planning')
-
-  const planText = [
-    '## Issue Reference',
-    '#1',
-    '## Behavioral Specification',
-    'Given a failing RED behavioral test,',
-    'When implementation is corrected,',
-    'Then the original test exits 0.',
-    '## Coverage Matrix',
-    '| Scenario | Test File |',
-    '| RED-GREEN | tests/red-green/behavioral.mjs |',
-  ].join('\n')
-
-  const approved = await planGate(db, rt, io, planText)
-  assert.equal(approved, true, 'Valid plan with RED evidence must be approved')
-  assert.equal(getPhase(db, convId), 'implement', 'Approval must enter implement phase')
-
-  console.log('--- AGENTS-GREEN-1: unrelated command cannot be GREEN ---')
-  assert.equal(canTransition(db, convId, 'verify'), false, 'implement -> verify requires implementation evidence')
-  withTransaction(db, () => {
-    db.prepare(`INSERT INTO events (conversation_id, event_type, detail) VALUES (?, 'implement', ?)`).run(
-      convId,
-      JSON.stringify({ accepted: true })
-    )
-  })
-  assert.equal(setPhase(db, convId, 'verify'), true, 'Implementation evidence must allow verify entry')
-  assert.equal(getPhase(db, convId), 'verify', 'Phase must be verify before verification')
-
-  const unrelatedResult = await executeBuiltinTool(db, ctx, 'Bash', { command: 'echo "test pass"' }, {})
-  assert.equal(unrelatedResult?.is_error, false, 'Unrelated command must execute successfully')
-  assert.match(String(unrelatedResult?.content || ''), /test pass/i, 'Unrelated command output must be captured')
-  assert.equal(
-    db.prepare(`SELECT COUNT(*) AS c FROM events WHERE conversation_id = ? AND event_type = 'test_result' AND detail LIKE ?`).get(convId, '%echo "test pass"%').c,
-    0,
-    'An unrelated successful command must not create GREEN test_result evidence'
-  )
-  assert.equal(await verifyGate(db, rt, io, 'unrelated success'), false, 'Unrelated success cannot satisfy the GREEN verification boundary')
-  assert.equal(getPhase(db, convId), 'verify', 'Failed verification must leave phase in verify')
-
-  console.log('--- AGENTS-GREEN-1: corrected original test reaches GREEN ---')
-  fs.writeFileSync(implementationPath, 'export function add(a, b) { return a + b; }\n')
-  const greenRun = await executeBuiltinTool(db, ctx, 'Bash', { command: redCommand }, {})
-  assert.equal(greenRun?.is_error, false, 'Original behavioral test must pass after correction')
-  assert.equal(greenRun?.is_error === false ? 0 : 1, 0, 'Original GREEN run must have exit code 0')
-
-  recordRedTestEvidence(db, convId, {
-    command: redCommand,
-    exit_code: 0,
-    output_digest: String(greenRun?.content || '').slice(0, 1000),
-  })
-  const greenEvidence = getRedTestEvidence(db, convId)
-  assert.ok(greenEvidence && greenEvidence.command === redCommand, 'GREEN evidence must preserve original command identity')
-  assert.equal(Number(greenEvidence.exit_code), 0, 'GREEN evidence must preserve successful exit code')
-  assert.equal(typeof greenEvidence.output_digest, 'string', 'GREEN execution evidence must persist an output digest')
-
-  const verified = await verifyGate(db, rt, io, 'original regression passes')
-  assert.equal(verified, true, 'Harness must recognize the passing regression and permit verification')
-  assert.equal(getPhase(db, convId), 'safety', 'GREEN verification must advance verify -> safety')
-
-  console.log('\nAll AGENTS-GREEN-1 TDD assertions passed.')
-} finally {
-  try {
-    if (db) closeStore(dbPath)
-  } catch {}
-  try {
-    fs.rmSync(tmpDir, { recursive: true, force: true })
-  } catch {}
+import {fixture,actualRed,redCommand,validPlan,yesIo} from '../fixtures/sdlcAcceptance.mjs'
+import {planGate,verifyGate,createTestsGate} from '../../lib/orchestrate.mjs'
+import {executeBuiltinTool} from '../../lib/tools.mjs'
+import {setPhase,getPhase} from '../../lib/workflow.mjs'
+async function verifiedFixture(label){
+ const f=fixture(label,'create_tests')
+ try{
+  await actualRed(f)
+  assert.equal(await planGate(f.db,f.rt,yesIo,validPlan),true)
+  const changed=await executeBuiltinTool(f.db,f.rt,'Write',{file_path:'src/boundary.mjs',content:'export const allowed = (n,limit) => n <= limit\n'},yesIo)
+  assert.equal(changed.is_error,false)
+  f.event('implement',{accepted:true});assert.equal(setPhase(f.db,f.cid,'verify'),true)
+  return f
+ }catch(error){f.close();throw error}
 }
+test('GREEN-1: unrelated successful command cannot substitute for original RED test',async()=>{
+ const f=await verifiedFixture('unrelated-green')
+ try{
+  const unrelated=await executeBuiltinTool(f.db,f.rt,'Bash',{command:'true'},yesIo)
+  assert.equal(unrelated.is_error,false)
+  assert.equal(await verifyGate(f.db,f.rt,yesIo),false)
+  assert.equal(getPhase(f.db,f.cid),'verify')
+ }finally{f.close()}
+})
+test('GREEN-2: unchanged original regression becomes GREEN after implementation',async()=>{
+ const f=await verifiedFixture('original-green')
+ try{
+  const before=fs.readFileSync(path.join(f.cwd,'tests/boundary.test.mjs'),'utf8')
+  const green=await executeBuiltinTool(f.db,f.rt,'Bash',{command:redCommand},yesIo)
+  assert.equal(green.is_error,false)
+  assert.equal(fs.readFileSync(path.join(f.cwd,'tests/boundary.test.mjs'),'utf8'),before)
+  assert.equal(await verifyGate(f.db,f.rt,yesIo),true)
+  assert.equal(getPhase(f.db,f.cid),'safety')
+ }finally{f.close()}
+})
+test('GREEN-3: passing result recorded before a later source change is stale',async()=>{
+ const f=await verifiedFixture('stale-green')
+ try{
+  const green=await executeBuiltinTool(f.db,f.rt,'Bash',{command:redCommand},yesIo);assert.equal(green.is_error,false)
+  fs.writeFileSync(path.join(f.cwd,'src/boundary.mjs'),'export const allowed = () => false\n')
+  assert.equal(await verifyGate(f.db,f.rt,yesIo),false,'old passing evidence must not verify subsequently broken code')
+  assert.equal(getPhase(f.db,f.cid),'verify')
+ }finally{f.close()}
+})
+test('GREEN-4: changing the original regression into a no-op cannot qualify as GREEN',async()=>{
+ const f=await verifiedFixture('changed-test')
+ try{
+  fs.writeFileSync(path.join(f.cwd,'tests/boundary.test.mjs'),'// regression removed\n')
+  const changed=await executeBuiltinTool(f.db,f.rt,'Bash',{command:redCommand},yesIo);assert.equal(changed.is_error,false)
+  assert.equal(await verifyGate(f.db,f.rt,yesIo),false,'command identity alone cannot prove the original regression passed')
+ }finally{f.close()}
+})
+test('GREEN-5: source mutation during a passing regression invalidates the run',async()=>{
+ const f=fixture('source-mutated-during-run','create_tests')
+ try{
+  fs.mkdirSync(path.join(f.cwd,'src'));fs.mkdirSync(path.join(f.cwd,'tests'))
+  fs.writeFileSync(path.join(f.cwd,'src/boundary.mjs'),'export const allowed = () => false\n')
+  const body="import assert from 'node:assert/strict'\nimport fs from 'node:fs'\nimport {allowed} from '../src/boundary.mjs'\nassert.equal(allowed(5,5),true)\nfs.writeFileSync(new URL('../src/boundary.mjs',import.meta.url),'export const allowed = () => false\\n')\n"
+  await executeBuiltinTool(f.db,f.rt,'Write',{file_path:'tests/boundary.test.mjs',content:body},yesIo)
+  const red=await executeBuiltinTool(f.db,f.rt,'Bash',{command:redCommand},yesIo)
+  assert.equal(red.is_error,true)
+  const {createTestsGate}=await import('../../lib/orchestrate.mjs')
+  assert.equal(await createTestsGate(f.db,f.rt,yesIo),true)
+  assert.equal(await planGate(f.db,f.rt,yesIo,validPlan),true)
+  await executeBuiltinTool(f.db,f.rt,'Write',{file_path:'src/boundary.mjs',content:'export const allowed = () => true\n'},yesIo)
+  f.event('implement',{accepted:true});assert.equal(setPhase(f.db,f.cid,'verify'),true)
+  const green=await executeBuiltinTool(f.db,f.rt,'Bash',{command:redCommand},yesIo)
+  assert.equal(green.is_error,false,'regression exits successfully but changes the production input')
+  assert.equal(await verifyGate(f.db,f.rt,yesIo),false,'changed source during execution cannot verify itself')
+ }finally{f.close()}
+})
+
+test('GREEN-6: npm test preserves the actual regression identity through RED and GREEN',async()=>{
+ const f=fixture('npm-red-green','create_tests')
+ try{
+  fs.mkdirSync(path.join(f.cwd,'src'));fs.mkdirSync(path.join(f.cwd,'tests'))
+  fs.writeFileSync(path.join(f.cwd,'package.json'),JSON.stringify({type:'module',scripts:{test:'node --test tests/boundary.test.mjs'}}))
+  fs.writeFileSync(path.join(f.cwd,'src/boundary.mjs'),'export const allowed = (n,limit) => n < limit\n')
+  fs.writeFileSync(path.join(f.cwd,'tests/boundary.test.mjs'),"import assert from 'node:assert/strict';import {allowed} from '../src/boundary.mjs';assert.equal(allowed(5,5),true)\n")
+  const red=await executeBuiltinTool(f.db,f.rt,'Bash',{command:'npm test'},yesIo)
+  assert.equal(red.is_error,true);assert.match(red.content,/ERR_ASSERTION|AssertionError/)
+  const evidence=f.db.prepare("SELECT evidence_json FROM test_executions WHERE conversation_id=? AND command='npm test'").get(f.cid)
+  assert.ok(evidence,'npm must record the real runner invocation')
+  assert.equal(JSON.parse(evidence.evidence_json).classification,'red')
+  assert.equal(await createTestsGate(f.db,f.rt,yesIo),true)
+  assert.equal(await planGate(f.db,f.rt,yesIo,validPlan),true)
+  assert.equal((await executeBuiltinTool(f.db,f.rt,'Write',{file_path:'src/boundary.mjs',content:'export const allowed = (n,limit) => n <= limit\n'},yesIo)).is_error,false)
+  f.event('implement',{accepted:true});assert.equal(setPhase(f.db,f.cid,'verify'),true)
+  assert.equal((await executeBuiltinTool(f.db,f.rt,'Bash',{command:'npm test'},yesIo)).is_error,false)
+  assert.equal(await verifyGate(f.db,f.rt,yesIo),true)
+  assert.equal(getPhase(f.db,f.cid),'safety')
+ }finally{f.close()}
+})
+
+test('GREEN-7: altered execution provenance cannot authorize verification',async()=>{
+ const f=await verifiedFixture('altered-ledger-proof')
+ try{
+  assert.equal((await executeBuiltinTool(f.db,f.rt,'Bash',{command:redCommand},yesIo)).is_error,false)
+  const row=f.db.prepare("SELECT detail FROM events WHERE conversation_id=? AND event_type='test_result' ORDER BY id DESC LIMIT 1").get(f.cid)
+  const result=JSON.parse(row.detail)
+  f.event('test_result',{...result,execution:{...result.execution,startedAt:result.execution.startedAt-1}})
+  assert.equal(await verifyGate(f.db,f.rt,yesIo),false,'matching source/test hashes do not authorize altered ledger provenance')
+  assert.equal(getPhase(f.db,f.cid),'verify')
+  f.event('test_result',result)
+  assert.equal(await verifyGate(f.db,f.rt,yesIo),true,'the original authentic execution still verifies')
+ }finally{f.close()}
+})
+
+test('GREEN-8: missing project context cannot turn a successful process into verification evidence',async()=>{
+ const f=await verifiedFixture('missing-project-context')
+ try{
+  f.db.prepare('UPDATE conversations SET project_dir=? WHERE id=?').run('',f.cid)
+  assert.equal((await executeBuiltinTool(f.db,f.rt,'Bash',{command:redCommand},yesIo)).is_error,false)
+  assert.equal(await verifyGate(f.db,f.rt,yesIo),false)
+  assert.equal(getPhase(f.db,f.cid),'verify')
+  f.db.prepare('UPDATE conversations SET project_dir=? WHERE id=?').run(f.cwd,f.cid)
+  assert.equal((await executeBuiltinTool(f.db,f.rt,'Bash',{command:redCommand},yesIo)).is_error,false)
+  assert.equal(await verifyGate(f.db,f.rt,yesIo),true)
+ }finally{f.close()}
+})

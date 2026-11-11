@@ -34,7 +34,9 @@ try {
 
   db.prepare(`UPDATE conversations SET phase = 'create_tests' WHERE id = ?`).run(convId)
 
-  const redTestPath = path.join(tmpDir, 'red-behavioral.mjs')
+  db.prepare('UPDATE conversations SET project_dir=? WHERE id=?').run(cwd,convId)
+  fs.mkdirSync(path.join(tmpDir,'tests'),{recursive:true})
+  const redTestPath = path.join(tmpDir, 'tests','red-behavioral.mjs')
   fs.writeFileSync(redTestPath, "import assert from 'node:assert/strict';\nassert.equal(1, 2, 'intentional RED observation');\n")
   const redCmd = `node "${redTestPath}"; rc=$?; printf 'EXIT_CODE=%s\\n' "$rc"; exit "$rc"`
   const redCtx = { conversationId: convId, sessionId: sessId, cwd }

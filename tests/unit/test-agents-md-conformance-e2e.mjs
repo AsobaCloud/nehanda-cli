@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { openStore, closeStore } from '../../lib/store.mjs'
-import { setPhase, getPhase } from '../../lib/workflow.mjs'
+import { setPhase, getPhase, recordRedTestEvidence } from '../../lib/workflow.mjs'
 import {
   planGate,
   buildExploreUserMessage,
@@ -46,7 +46,10 @@ function ioOk() {
   return { lines, println: s => lines.push(String(s)), write: s => lines.push(String(s)), ask: async () => 'y', spinner: null }
 }
 
-const PLAN_GWT = `## Objective
+const PLAN_GWT = `## Issue Reference
+#42
+
+## Objective
 Fix thing (#42)
 
 ## Plan
@@ -79,7 +82,8 @@ await (async () => {
     const intro = seed(db, 'planning')
     const rt = makeRt(intro.sessionId, intro.conversationId)
     const io = ioOk()
-    const noMatrix = `## Objective\nFix thing (#42)\n\n## Plan\n1. Edit foo.\n\n## Behavioral Specification\nGiven foo When run Then returns 42.\n\n## Proof of Success\nfoo`
+    recordRedTestEvidence(db, intro.conversationId, {command:'node tests/foo.mjs',exit_code:1,output_digest:'isolated schema-boundary fixture'})
+    const noMatrix = `## Issue Reference\n#42\n\n## Objective\nFix thing (#42)\n\n## Plan\n1. Edit foo.\n\n## Behavioral Specification\nGiven foo When run Then returns 42.\n\n## Proof of Success\nfoo`
     const approved = await planGate(db, rt, io, noMatrix)
     assert.equal(approved, false)
     closeStore(dbPath); fs.rmSync(dir, { recursive: true, force: true })
@@ -104,7 +108,7 @@ await (async () => {
     const dbh = openStore(path.join(tmp, 'db.sqlite'))
     const sid = 'sx'
     const cid = 'cx'
-    dbh.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'idle')`).run(cid, absTmp)
+    dbh.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES (?, ?, 'implement')`).run(cid, absTmp)
     dbh.prepare(`INSERT INTO sessions(session_id, conversation_id) VALUES (?, ?)`).run(sid, cid)
     const res = await executeBuiltinTool(dbh, { conversationId: cid, cwd: absTmp, sessionId: sid, settings: {} }, 'Write', { file_path: 'root-script.mjs', content: 'x' }, io)
     assert.ok(res.is_error === true, 'root write should be rejected')
@@ -123,7 +127,7 @@ await (async () => {
 
   await test('SDLC-CONFORM-5: validation threshold rejects sub-70% coverage', async () => {
     const { db, dbPath, dir } = tmpDb()
-    const intro = seed(db, 'test')
+    const intro = seed(db, 'safety')
     const { sessionId, conversationId } = intro
     // approved plan with 5 scenarios
     const matrixPlan = PLAN_GWT.replace('| T-1 | tests/test_foo.mjs |', '| T-1 | tests/test_foo.mjs |\n| T-2 | tests/test_foo.mjs |\n| T-3 | tests/test_foo.mjs |\n| T-4 | tests/test_foo.mjs |\n| T-5 | tests/test_foo.mjs |')
@@ -133,8 +137,8 @@ await (async () => {
     // only 1 passing test result out of 5
     db.prepare(`INSERT INTO events(conversation_id, event_type, detail) VALUES (?, 'test_result', json_object('passed',1))`).run(conversationId)
     const { canTransition } = await import('../../lib/workflow.mjs')
-    const tr = canTransition(db, conversationId, 'verify')
-    assert.equal(tr.ok, false)
+    const tr = canTransition(db, conversationId, 'confirm_fix')
+    assert.equal(tr, false)
     closeStore(dbPath); fs.rmSync(dir, { recursive: true, force: true })
   })
 })()

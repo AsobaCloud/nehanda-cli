@@ -229,6 +229,48 @@ await (async () => {
     }
   })
 
+  await test('AGENTS-PERM-5: Edit preserves phase ownership and rejects ambiguous replacements without mutation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-edit-'))
+    const dbPath = path.join(root, 'state.db'), db = openStore(dbPath)
+    const cid = 'edit-ownership', sid = 'edit-session'
+    fs.mkdirSync(path.join(root, 'tests'))
+    fs.mkdirSync(path.join(root, 'src'))
+    const regression = path.join(root, 'tests', 'regression.mjs')
+    const source = path.join(root, 'src', 'module.mjs')
+    fs.writeFileSync(regression, 'RED RED')
+    fs.writeFileSync(source, 'export const value = 1\n')
+    try {
+      db.prepare("INSERT INTO conversations(id,project_dir,phase) VALUES (?,?,'create_tests')").run(cid,root)
+      db.prepare('INSERT INTO sessions(session_id,conversation_id) VALUES (?,?)').run(sid,cid)
+      const ctx = {cwd:root,conversationId:cid,sessionId:sid}
+      const edit = input => executeBuiltinTool(db,ctx,'Edit',input,{})
+      const ambiguous = await edit({file_path:'tests/regression.mjs',old_string:'RED',new_string:'GREEN'})
+      assert.equal(ambiguous.is_error,true)
+      assert.match(ambiguous.content,/matches 2 locations/)
+      assert.equal(fs.readFileSync(regression,'utf8'),'RED RED')
+      const replaceAll = await edit({file_path:'tests/regression.mjs',old_string:'RED',new_string:'GREEN',replace_all:true})
+      assert.equal(replaceAll.is_error,false)
+      assert.equal(fs.readFileSync(regression,'utf8'),'GREEN GREEN')
+      const absent = await edit({file_path:'tests/regression.mjs',old_string:'MISSING',new_string:'GREEN',replace_all:true})
+      assert.equal(absent.is_error,true)
+      assert.equal(fs.readFileSync(regression,'utf8'),'GREEN GREEN')
+      const forbidden = await edit({file_path:'src/module.mjs',old_string:'1',new_string:'2'})
+      assert.equal(forbidden.is_error,true)
+      assert.equal(fs.readFileSync(source,'utf8'),'export const value = 1\n')
+      db.prepare("UPDATE conversations SET phase='implement' WHERE id=?").run(cid)
+      const allowed = await edit({file_path:'src/module.mjs',old_string:'1',new_string:'2'})
+      assert.equal(allowed.is_error,false)
+      assert.equal(fs.readFileSync(source,'utf8'),'export const value = 2\n')
+      for (const input of [{},{file_path:'src/module.mjs'},{file_path:'src/module.mjs',old_string:'2'},
+        {file_path:'../outside.mjs',old_string:'x',new_string:'y'},
+        {file_path:'src/missing.mjs',old_string:'x',new_string:'y'},
+        {file_path:'src/module.mjs',old_string:'MISSING',new_string:'y'}]) {
+        assert.equal((await edit(input)).is_error,true)
+        assert.equal(fs.readFileSync(source,'utf8'),'export const value = 2\n')
+      }
+    } finally {closeStore(dbPath);fs.rmSync(root,{recursive:true,force:true})}
+  })
+
   console.log(`\n${passed} passed, ${failed} failed`)
 })().catch((err) => {
   console.error(err)

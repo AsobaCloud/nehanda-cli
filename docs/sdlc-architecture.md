@@ -1,89 +1,47 @@
-# **Deterministic SDLC Architecture & Implementation Guide**
+# Deterministic SDLC architecture
 
-**Version 1.0**
+The database phase and execution evidence govern each turn. `lib/workflow.mjs` owns phase legality; `lib/orchestrate.mjs` owns model turns and protected gates. Model prose or legacy terminal-tool calls cannot authorize transitions.
 
-This specification defines the operational requirements for **ona-code**, a state-governed autonomous agentic REPL. The architecture moves the system from a "chatbot" model to a "governed engine" model by enforcing strict lifecycle gates through the orchestrator.
+## Canonical states and evidence
 
-## **1\. Core Architectural Invariants**
+| Edge | Required evidence |
+| --- | --- |
+| idle → explore | Project context. |
+| explore → diagnose | Completed exploration, including harness-owned stagnation/budget exits and preserved evidence. |
+| diagnose → create_issue | Recorded diagnosis. |
+| create_issue → create_tests | Recorded issue identity and existing regular artifact under `.issues`. |
+| create_tests → planning | Executed behavioral RED, durably associated with this test-creation cycle. |
+| planning → implement | Substantive approved plan triad and qualifying prior RED. |
+| implement → verify | Implementation acceptance evidence. |
+| verify → safety | Original unchanged regression passes against current source. |
+| safety → confirm_fix | Current latest named JS/Shell/Python successes and measured production branch coverage ≥70%. |
+| confirm_fix → done | Affirmative operator confirmation. |
+| done → idle | Reset acknowledgment; transient cache cleanup preserves durable memory. |
 
-The following mechanical invariants are mandatory to prevent conversational drift and ensure protocol adherence.
+Retry edges are explore→idle, diagnose→explore, create_issue→diagnose, create_tests→create_issue, planning→create_tests/planning, implement→planning, verify→implement, safety→verify, and confirm_fix→safety. Failed evidence does not advance state. Rejection at a plan/confirmation prompt remains in that phase.
 
-### **1.1 Heartbeat State Synchronization**
+## Execution provenance
 
-The orchestrator must treat the system prompt as a dynamic variable. At the start of every iteration within the turn loop (the for(;;) block), the system must:
+Schema v4 adds `test_executions`. Runtime Bash execution records command identity, status, input hashes, timing and outcome classification. A failing assertion from an actual supported test runner qualifies as RED; arbitrary nonzero commands, fabricated runner text, missing files/runners, syntax/import errors, timeout and cancellation do not. The original regression identity survives GREEN execution.
 
-* Query the current phase from the database.  
-* Re-synthesize the PHASE\_DIRECTIVES based on the real-time state.  
-* Update the prompt context before the next API call.
+GREEN must match the original test and current production snapshot. Tests/source modified during execution invalidate the result. A passing result preceding a source change cannot authorize safety. Coverage is associated with a real coverage-producing execution and its report/test/source identities; rerunning ordinary tests cannot relabel an old report as a new measurement.
 
-### **1.2 Late Injection Pattern**
+Checker events identify one execution group and its source snapshot. The latest outcome for each exact mandatory checker controls completion; historical successes and unrelated names cannot fill the set. The JavaScript checker examines standalone JS/MJS/CJS syntax and static HTML markup; text inside JavaScript strings is not HTML structure.
 
-To defeat model recency bias and RLHF-based conversational filters, strict phase-specific rules and "Anti-Chat" warnings must be appended to the final user message in the context window. This ensures the mechanical obligations are the last tokens processed by the model's attention mechanism.
+Stored overloaded `test` phases normalize to test creation before implementation, otherwise verification. Historical records remain available, but missing execution provenance requires rerunning tests.
 
-### **1.3 Universal Markdown Safety Net**
+## Exploration and context
 
-The orchestrator must universally scan all assistant text output for tool blocks wrapped in markdown JSON backticks. This parser must be decoupled from "manual tool" configurations to act as a fail-safe for any model that ignores native API protocols.
+Jev retrieval can avoid disk exploration when existing evidence is sufficient. Otherwise the model navigates MAP then targeted territory. The schema exposes only Read/Glob/Grep. Actual successful tool results and negative searches become bounded observations with provenance. Repeated canonical reads and equivalent zero-hit queries are cached before disk access/re-ingestion.
 
-## **2\. The SDLC State Machine**
+Stagnation forces an early diagnose handoff; the independent hard ceiling permits twenty productive upstream exploration requests and blocks twenty-one. Both routes preserve summaries and a pinned candidate digest. The next model instruction requests diagnosis. Planning instructions appear after RED, with the recorded issue and failure digest.
 
-The SDLC is comprised of four distinct phases. Transition is unidirectional and requires the execution of a **Terminal Tool**.
+`lib/explore.mjs` owns transient conversation caches. Legal reentry and terminal reset clear them without deleting Jev observations. Native and manual tool instructions use phase filtering. Both provider loops reread phase state between calls.
 
-### **2.1 IDLE Phase (Triage)**
+## Approval and commit
 
-* **Goal**: Intent classification and informational discovery.  
-* **Capability Mask**: Only "Context Tools" (Read, LS, Glob) are enabled. Modification tools are mechanically blocked.  
-* **Terminal Tool**: EnterPlanMode  
-* **Enforcement**: If the model attempts an engineering task (e.g., proposed code changes) without calling the tool, the orchestrator rejects the response and forces a transition to PLANNING.
+Plan approval and final fix confirmation require affirmative operator input. Missing input capability denies authorization. The pipe CLI also denies implicit approval in noninteractive mode. `/done` checks its protected transition before Git staging; its commit includes the approved issue reference. Transition, staging and commit errors are reported as actual failures.
 
-### **2.2 PLANNING Phase (Strategy)**
+## Behavioral verification
 
-* **Goal**: Technical design and success criteria formulation.  
-* **Constraint**: Forbidden from performing code modifications.  
-* **Terminal Tool**: ExitPlanMode(content)  
-* **The Approval Gate**: Execution of ExitPlanMode is atomically bound to a Human-in-the-Loop (HITL) prompt.  
-  * **Approve (Y)**: Commit plan and transition to IMPLEMENT.  
-  * **Reject (N)**: Return feedback to the model; state remains in PLANNING.
-
-### **2.3 IMPLEMENT Phase (Execution)**
-
-* **Goal**: Physical implementation of the approved plan.  
-* **Capability Mask**: All modification tools (Write, Edit, Bash) are active.  
-* **Terminal Tool**: SubmitImplementation  
-* **Transition**: Automatic shift to TEST upon tool success.
-
-### **2.4 TEST Phase (Validation)**
-
-* **Goal**: Verification against "Given/When/Then" criteria.  
-* **Constraint**: Model must provide evidence of passing tests (e.g., shell output).  
-* **Terminal Tool**: SubmitTest  
-* **Exit**: Returns to IDLE only upon successful validation.
-
-## **3\. Enforcement Mechanisms**
-
-### **3.1 The Instruction Interceptor (Gatekeeper)**
-
-The orchestrator evaluates response blocks against the current phase's requirements.
-
-* **Violation Detection**: If the state is PLANNING or TEST and the model provides text-only output without the required Terminal Tool, the orchestrator intercepts the response.  
-* **Automated Recovery**: The response is hidden from the user, a **Protocol Violation** message is appended to the context, and the model is re-triggered until compliance is achieved.
-
-### **3.2 Dynamic Directive Matrix**
-
-| Phase | Mechanical Directive | Terminal Tool |
-| :---- | :---- | :---- |
-| **IDLE** | "You MUST call EnterPlanMode to start a task." | EnterPlanMode |
-| **PLANNING** | "You MUST call ExitPlanMode to submit your plan." | ExitPlanMode |
-| **IMPLEMENT** | "Call SubmitImplementation to trigger tests." | SubmitImplementation |
-| **TEST** | "Call SubmitTest once criteria are met." | SubmitTest |
-
-### **3.3 Universal Regex Extraction**
-
-The system utilizes a deterministic regex to extract tool intent from any model response:
-
-/ \+ String.fromCharCode(96, 96, 96\) \+ (?:json)?\\s\*(\\{\[\\s\\S\]\*?\\})\\s\* \+ String.fromCharCode(96, 96, 96\) \+ /g
-
-## **4\. Operational Invariants**
-
-1. **Stealth Modification Prevention**: Modification tools are physically removed from the JSON schema provided to the model when in IDLE or PLANNING.  
-2. **Atomic Approval**: No plan can be "accepted" through chat; it must be submitted via the ExitPlanMode tool to trigger the UI approval prompt.  
-3. **Evidence-Based Validation**: The SubmitTest tool requires a check for recent Bash command output to prevent "hallucinated passing" results.
+The acceptance specification and complete executable mapping are in [`../tests/acceptance-36-37.md`](../tests/acceptance-36-37.md). Tests mock external providers/controllers while retaining production orchestration, tools, database, memory, subprocess tests and checkers. The optional fetch fixture verifies provider Request/Response parsing, not localhost socket behavior or live model quality.

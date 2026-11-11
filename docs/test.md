@@ -1,56 +1,48 @@
 # Testing ona-code
 
-## Philosophy
+## Behavioral testing
 
-ona-code tests itself the way a user would use it: from the outside. No test frameworks. No module imports. No mocking internal functions. Every test invokes the `ona` binary or `sqlite3` as an external process and checks observable outcomes.
+Tests must exercise production entry points and observable outcomes. External model/controller replies may be mocked; copying production filters, fabricating execution results or assigning a database phase as proof of a transition does not establish behavior. Fixtures may seed the starting state. Assertions must verify real gate, tool, filesystem, database and subprocess effects.
 
-This exists because LLM-generated tests that import internal modules produce false confidence. Our previous acceptance tests all passed while the product couldn't respond to user input. The current approach makes that impossible.
+## Acceptance and task tests
 
-## Two testing systems
+| System | Purpose | Entry point |
+| --- | --- | --- |
+| Issue #36/#37 acceptance | Canonical lifecycle, execution provenance, exploration/Jev integration and CLI completion | `node tests/integration/run-acceptance.mjs --issues 36,37` |
+| Unit/regression suites | Existing module/provider/UI contracts; runner continues after RED | `npm run test:unit` |
+| Legacy black-box checks | Original clean-room CLI surface | `npm run acceptance` |
+| Task test creation | Write and execute a diagnosed behavioral regression to RED before plan approval | `create_tests` |
+| Task verification | Original unchanged regression must pass against current source | `verify` |
+| Task safety | Actual named checkers and current measured branch coverage ≥70% | `safety` |
 
-ona-code has two completely separate testing concepts:
+The legacy black-box script includes older clean-room expectations; the canonical issue acceptance manifest is authoritative for the new lifecycle. Legacy failures must be reported separately rather than used to restore obsolete phase semantics.
 
-| System | Purpose | What it tests | How |
-|--------|---------|--------------|-----|
-| **Acceptance tests** (`npm run acceptance`) | Tests ona-code itself | The product's tools, workflow, hooks, permissions, UI | Black-box bash script with mock LLM server |
-| **`/test` phase** (SDLC workflow) | Tests the user's implementation | Whatever the user built during the `implement` phase | Given/When/Then from the approved plan, translated to bash |
+## Running the scoped contract
 
-This document covers the **acceptance tests**. The `/test` phase is part of the SDLC workflow and is documented in the clean room spec (section 8).
-
-## Running
+Use Node 22 matching the installed native SQLite module:
 
 ```bash
-npm run acceptance
+node tests/integration/run-acceptance.mjs --issues 36,37 --syntax
+node tests/integration/run-acceptance.mjs --issues 36,37 --json /tmp/acceptance.json
 ```
 
-Requires: `node` (22+), `sqlite3`, `python3`. No LM Studio or API keys needed. The test suite runs a mock LLM server internally.
+Use `--transport fetch` when localhost sockets are restricted. This mocks only the external provider Request/Response boundary. It retains real stream parsing, tools, SQLite/Jev, gates, tests, coverage and checkers. Socket mode remains the default and must be tested separately on a permitted host. Real Ollama D1/D2/D3 require `OLLAMA_E2E_TEST=1`; access failures do not count as passes.
 
-Exit code 0 = all pass. Non-zero = first failing row printed to stderr.
+The scoped runner continues after failures, preserves source hashes and raw logs, and distinguishes PASS, assertion RED, HARNESS_ERROR, BLOCKED and optional NOT_RUN. A blocked case cannot satisfy acceptance. The complete Given/When/Then matrix is in [`../tests/acceptance-36-37.md`](../tests/acceptance-36-37.md).
 
-## Architecture
+## Safety checks
 
-```
-                    ┌─────────────┐
-                    │  Mock LLM   │
-                    │  (Python)   │
-                    │  port 187xx │
-                    └──────┬──────┘
-                           │ HTTP (SSE streaming)
-                           │
-┌──────────────┐    ┌──────▼──────┐    ┌──────────────┐
-│ Test script  │───>│    ona      │───>│  SQLite DB   │
-│ (bash)       │    │  (node)     │    │  (temp file) │
-│              │<───│             │<───│              │
-└──────────────┘    └─────────────┘    └──────────────┘
-      │                                       │
-      │              sqlite3                  │
-      └───────────────────────────────────────┘
-            Direct DB assertions
+```bash
+node lib/scripts/js-safety-checker.cjs .
+bash lib/scripts/shell-safety-checker.sh .
+python3 lib/scripts/python-safety-checker.py .
 ```
 
-1. **Mock LLM server** — Python HTTP server that mimics OpenAI's `/v1/chat/completions` endpoint with SSE streaming. Responds to special directives in messages.
-2. **ona CLI** — The product under test. Receives piped input, connects to mock server, executes tools, persists to SQLite.
-3. **SQLite assertions** — Tests query the database directly to verify tool results, hook invocations, phase transitions, and transcript entries.
+Inspect examined-file counts and diagnostics. Test/source/report identities must match the actual executions; a numeric exit code or hand-authored coverage percentage alone cannot authorize completion.
+
+## Legacy black-box architecture
+
+The Bash test driver launches the CLI against a Python HTTP server emitting SSE, then inspects the temporary SQLite database. The driver verifies persisted tool results, hooks, phase transitions and transcript entries through direct database assertions. The following helpers and row inventory describe that legacy harness.
 
 ## Mock server protocol
 

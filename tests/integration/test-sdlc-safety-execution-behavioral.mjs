@@ -143,3 +143,56 @@ test('equal boundary is allowed', () => assert.equal(allowEqual(7, 7), true))
   if (db) closeStore(dbPath)
   fs.rmSync(root, { recursive: true, force: true })
 }
+
+// A checker pass must cover actual JavaScript source, not just HTML script tags.
+// These calibrated syntax failures live only in disposable fixture directories.
+const {default:test}=await import('node:test')
+for(const extension of ['js','mjs']){
+ test(`SAFETY-JS-${extension}: Given malformed ${extension} source, When checker executes, Then it reports failure`,()=>{
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'js-checker-scope-'))
+  try{
+   const source=path.join(temp,'broken.'+extension)
+   fs.writeFileSync(source,'function broken( {\n')
+   const calibration=cp.spawnSync(process.execPath,['--check',source],{encoding:'utf8',timeout:5000})
+   assert.notEqual(calibration.status,0,'fixture must be a real syntax error')
+   assert.match(calibration.stderr,/SyntaxError/)
+   const checker=fileURLToPath(new URL('../../lib/scripts/js-safety-checker.cjs',import.meta.url))
+   const result=cp.spawnSync(process.execPath,[checker,temp],{cwd:temp,encoding:'utf8',timeout:5000})
+   assert.equal(result.error,undefined)
+   assert.notEqual(result.status,0,'mandatory JavaScript checker must reject malformed source in its target workspace')
+  }finally{fs.rmSync(temp,{recursive:true,force:true})}
+ })
+}
+test('SAFETY-JS-cjs: malformed CommonJS cannot pass the checker',()=>{
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'cjs-scope-'))
+ try{
+  fs.writeFileSync(path.join(temp,'broken.cjs'),'function broken( {\n')
+  const result=cp.spawnSync(process.execPath,[fileURLToPath(new URL('../../lib/scripts/js-safety-checker.cjs',import.meta.url)),temp],{encoding:'utf8',timeout:5000})
+  assert.notEqual(result.status,0)
+ }finally{fs.rmSync(temp,{recursive:true,force:true})}
+})
+test('SAFETY-JS-valid: valid modules are examined even when ancestor name contains tests',()=>{
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'tests-in-parent-'))
+ try{
+  fs.mkdirSync(path.join(temp,'src'))
+  fs.writeFileSync(path.join(temp,'src','valid.mjs'),'export const valid = true\n')
+  const result=cp.spawnSync(process.execPath,[fileURLToPath(new URL('../../lib/scripts/js-safety-checker.cjs',import.meta.url)),temp],{encoding:'utf8',timeout:5000})
+  assert.equal(result.status,0,result.stderr)
+  assert.match(result.stdout,/All 1 files checked/,'valid JavaScript must actually be examined')
+ }finally{fs.rmSync(temp,{recursive:true,force:true})}
+})
+for(const [label,file,content,shouldPass] of [
+ ['javascript-strings','strings.cjs',`const a='id="same"'; const b='id="same"';\n`,true],
+ ['html-script-strings','page.html',`<script>const a='id="same"'; const b='id="same"';</script><div id="same"></div>`,true],
+ ['real-html-duplicates','page.html','<div id="same"></div><span id="same"></span>',false],
+]){
+ test(`SAFETY-HTML-${label}: IDs are checked in actual static markup`,()=>{
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'html-id-scope-'))
+  try{
+   fs.writeFileSync(path.join(temp,file),content)
+   const result=cp.spawnSync(process.execPath,[fileURLToPath(new URL('../../lib/scripts/js-safety-checker.cjs',import.meta.url)),temp],{encoding:'utf8',timeout:5000})
+   if(shouldPass)assert.equal(result.status,0,result.stderr)
+   else{assert.notEqual(result.status,0);assert.match(result.stderr,/Duplicate IDs/)}
+  }finally{fs.rmSync(temp,{recursive:true,force:true})}
+ })
+}

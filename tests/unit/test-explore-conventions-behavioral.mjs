@@ -169,9 +169,10 @@ await section('TC-5: Explore budget — MAP spam yields ≤2 Read attempts + han
   mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
 
   let readAttempts = 0
+  const handoff=new Error('observed real diagnose handoff')
   const autoIo = {
     ask: async () => 'y',
-    println: () => {},
+    println: message => {if(/Entering diagnose phase/.test(String(message)))throw handoff},
     write: () => {},
     onToolStart: (name, input) => {
       if (name === 'Read' && /MAP\.md/.test(input?.file_path || '')) readAttempts += 1
@@ -194,10 +195,10 @@ await section('TC-5: Explore budget — MAP spam yields ≤2 Read attempts + han
     },
   }
   try {
-    await runUserTurn(db, rt, 'deep codebase analysis (#37)', autoIo)
+    try{await runUserTurn(db, rt, 'deep codebase analysis (#37)', autoIo)}catch(error){if(error!==handoff)throw error}
     assert.ok(readAttempts <= 2, `TC-5: expected ≤2 MAP Read attempts, got ${readAttempts}`)
     const phase = getPhase(db, cid)
-    assert.ok(phase !== 'explore', `TC-5: must leave explore after budget/saturation, got ${phase}`)
+    assert.equal(phase,'diagnose',`TC-5: real handoff must land in diagnose, got ${phase}`)
     const pinned = getPinnedContextBlocks(db, sid)
     assert.ok(
       pinned.some((p) => /explore/i.test(p.key)),

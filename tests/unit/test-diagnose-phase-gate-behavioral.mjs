@@ -47,7 +47,7 @@ await test('DG-1: explore with observation allows diagnose transition', async ()
   ).run(cid, dir)
   db.prepare(
     `INSERT INTO events (conversation_id, session_id, event_type, detail) VALUES (?, ?, ?, ?)`
-  ).run(cid, sid, 'file_read', JSON.stringify({ file: 'MAP.md' }))
+  ).run(cid, sid, 'exploration_complete', JSON.stringify({ file: 'MAP.md' }))
 
   try {
     const ok = setPhase(db, cid, 'diagnose')

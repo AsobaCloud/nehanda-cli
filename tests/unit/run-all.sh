@@ -1,99 +1,54 @@
-#!/bin/bash
-# Run all unit tests
-
+#!/usr/bin/env bash
+# #36/#37: do not hide later suites behind the first RED.
 set -euo pipefail
-
-echo "Running Unit Tests..."
-echo "===================="
-echo ""
-
-# Run bootstrap settings edge cases tests
-echo "Running: bootstrap-settings-edge-cases.mjs"
-node tests/unit/bootstrap-settings-edge-cases.mjs
-
-echo "Running: test-mcp-help-discoverability.mjs"
-node tests/unit/test-mcp-help-discoverability.mjs
-
-echo "Running: jev_write_behavioral.mjs"
-node tests/unit/jev_write_behavioral.mjs
-
-echo "Running: jev_read_behavioral.mjs"
-node tests/unit/jev_read_behavioral.mjs
-
-echo "Running: compact_jev_behavioral.mjs"
-node tests/unit/compact_jev_behavioral.mjs
-
-echo "Running: orchestrate_jev_hotpath_behavioral.mjs"
-node tests/unit/orchestrate_jev_hotpath_behavioral.mjs
-
-echo "Running: ui_legibility_behavioral.mjs"
-node tests/unit/ui_legibility_behavioral.mjs
-
-echo "Running: laya_sidecar_exit_behavioral.mjs"
-node tests/unit/laya_sidecar_exit_behavioral.mjs
-
-echo "Running: laya_warm_load_behavioral.mjs"
-node tests/unit/laya_warm_load_behavioral.mjs
-
-echo "Running: abort_signal_behavioral.mjs"
-node tests/unit/abort_signal_behavioral.mjs
-
-echo "Running: configure_provider_behavioral.mjs"
-node tests/unit/configure_provider_behavioral.mjs
-
-echo "Running: help_commands_behavioral.mjs"
-node tests/unit/help_commands_behavioral.mjs
-
-echo "Running: provider_key_resolution_behavioral.mjs"
-node tests/unit/provider_key_resolution_behavioral.mjs
-
-echo "Running: model_wizard_input_behavioral.mjs"
-node tests/unit/model_wizard_input_behavioral.mjs
-
-echo "Running: test-ollama-llm-call-behavioral.mjs"
-node tests/unit/test-ollama-llm-call-behavioral.mjs
-
-echo ""
-echo "===================="
-node tests/unit/model-config-from-agent_behavioral.mjs
-node tests/unit/gap2_output_formatting_behavioral.mjs
-
-echo "Running: tool_call_rescue_behavioral.mjs"
-node tests/unit/tool_call_rescue_behavioral.mjs
-
-echo "Running: anthropic_streaming_behavioral.mjs"
-node tests/unit/anthropic_streaming_behavioral.mjs
-
-echo "Running: store_migration_behavioral.mjs"
-node tests/unit/store_migration_behavioral.mjs
-
-echo "Running: odse_normalization_behavioral.mjs"
-node tests/unit/odse_normalization_behavioral.mjs
-
-echo "Running: jev_anchor_retrieval_behavioral.mjs"
-node tests/unit/jev_anchor_retrieval_behavioral.mjs
-
-echo "Running: color_contrast_behavioral.mjs"
-node tests/unit/color_contrast_behavioral.mjs
-
-python3 tests/unit/tui_usability_behavioral.py --without-sandbox
-
-echo "Running: test-explore-convergence-guardrails_behavioral.mjs"
-node tests/unit/test-explore-convergence-guardrails_behavioral.mjs
-
-echo "Running: test-explore-tool-guardrails_behavioral.mjs"
-node tests/unit/test-explore-tool-guardrails_behavioral.mjs
-
-echo "Running: test-explore-read-cache-continuity_behavioral.mjs"
-node tests/unit/test-explore-read-cache-continuity_behavioral.mjs
-
-echo "Running: test-permission-reuse-behavioral.mjs"
-node tests/unit/test-permission-reuse-behavioral.mjs
-
-echo "Running: test-jev-state-durability-behavioral.mjs"
-node tests/unit/test-jev-state-durability-behavioral.mjs
-
-echo "Running: test-jev-negative-observation-behavioral.mjs"
-node tests/unit/test-jev-negative-observation-behavioral.mjs
-
-echo "✓ All unit tests passed!"
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+cd "$ROOT"
+failed=0
+run() { if "$@"; then :; else failed=$((failed+1)); fi; }
+run node tests/unit/bootstrap-settings-edge-cases.mjs
+run node tests/unit/test-mcp-help-discoverability.mjs
+run node tests/unit/jev_write_behavioral.mjs
+run node tests/unit/jev_read_behavioral.mjs
+run node tests/unit/compact_jev_behavioral.mjs
+run node tests/unit/orchestrate_jev_hotpath_behavioral.mjs
+run node tests/unit/ui_legibility_behavioral.mjs
+run node tests/unit/laya_sidecar_exit_behavioral.mjs
+run node tests/unit/laya_warm_load_behavioral.mjs
+run node tests/unit/abort_signal_behavioral.mjs
+run node tests/unit/configure_provider_behavioral.mjs
+run node tests/unit/help_commands_behavioral.mjs
+run node tests/unit/provider_key_resolution_behavioral.mjs
+run node tests/unit/model_wizard_input_behavioral.mjs
+run node tests/unit/test-ollama-llm-call-behavioral.mjs
+run node tests/unit/model-config-from-agent_behavioral.mjs
+run node tests/unit/gap2_output_formatting_behavioral.mjs
+run node tests/unit/tool_call_rescue_behavioral.mjs
+run node tests/unit/anthropic_streaming_behavioral.mjs
+run node tests/unit/store_migration_behavioral.mjs
+run node tests/unit/odse_normalization_behavioral.mjs
+run node tests/unit/jev_anchor_retrieval_behavioral.mjs
+run node tests/unit/color_contrast_behavioral.mjs
+run node tests/unit/test-explore-convergence-guardrails_behavioral.mjs
+run node tests/unit/test-explore-tool-guardrails_behavioral.mjs
+run node tests/unit/test-explore-read-cache-continuity_behavioral.mjs
+run node tests/unit/test-permission-reuse-behavioral.mjs
+run node tests/unit/test-jev-state-durability-behavioral.mjs
+run node tests/unit/test-jev-negative-observation-behavioral.mjs
+run node tests/unit/test-diagnose-phase-gate-behavioral.mjs
+run node tests/unit/test-create-issue-phase-gate-behavioral.mjs
+run node tests/unit/test-red-before-plan-hitl-behavioral.mjs
+run node tests/unit/test-plan-gate-empty-retry.mjs
+run node tests/unit/test-agents-md-conformance-e2e.mjs
+run node tests/unit/test-transition-mandate-messages-behavioral.mjs
+run node tests/unit/test-verify-completion-evidence-behavioral.mjs
+run node tests/unit/test-verify-safety-confirm-commit-behavioral.mjs
+run node tests/unit/test-explore-conventions-behavioral.mjs
+run node tests/unit/test-explore-tool-mask-behavioral.mjs
+run node tests/unit/test-phase-tool-filtering-openai.mjs
+run node tests/unit/test-issue34-acceptance-behavioral.mjs
+run node tests/unit/test-setphase-validation.mjs
+run node tests/unit/test-acceptance-runner-behavioral.mjs
+run node tests/unit/test-mock-llm-server-behavioral.mjs
+run python3 tests/unit/tui_usability_behavioral.py --without-sandbox
+printf 'Unit suites failed: %s\n' "$failed"
+[[ "$failed" -eq 0 ]]

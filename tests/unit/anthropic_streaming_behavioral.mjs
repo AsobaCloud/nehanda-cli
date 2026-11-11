@@ -22,14 +22,16 @@
  */
 
 import assert from 'node:assert'
-import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { openStore, closeStore } from '../../lib/store.mjs'
-import { runUserTurn } from '../../lib/orchestrate.mjs'
+// Select the SDK's documented Fetch shim before importing the engine.
+if (process.env.NEHANDA_TEST_TRANSPORT === 'fetch') await import('../fixtures/anthropicFetchShim.mjs')
+const { runUserTurn } = await import('../../lib/orchestrate.mjs')
 import { setLayaPredictOverride, clearLayaPredictOverride } from '../../lib/laya.mjs'
 import {
+  startMockLlmServer,
   makeAnthropicTextEvents,
   makeAnthropicToolCallEvents,
 } from '../fixtures/mockLlmServer.mjs'
@@ -90,7 +92,7 @@ function makeRt(origin, overrides = {}) {
   }
 }
 
-setLayaPredictOverride(async () => ({
+const layaResponse = {
   answers: {
     task_status: { choice: 'investigating', confidence: 0.5 },
     escalation_risk: { noul: 0.1 },
@@ -101,7 +103,8 @@ setLayaPredictOverride(async () => ({
     relevance: { noul: 0.5 }, relation_useful: { noul: 0.5 }, novelty: { noul: 0.5 }, supports_evidence: { noul: 0.5 },
     semantic_related: { noul: 0.5 }, causal_influence: { noul: 0.4 }, same_episode: { noul: 0.5 }, entity_equivalent: { noul: 0.5 },
   },
-}))
+}
+setLayaPredictOverride(async () => layaResponse)
 
 process.env.SDLC_DISABLE_ALL_HOOKS = '1'
 
@@ -112,22 +115,9 @@ console.log('Running Anthropic streaming behavioral tests (#26)...\n')
 await test('AN-1: Anthropic text response produces assistant entry with correct text in transcript', async () => {
   const responseQueue = [makeAnthropicTextEvents('Hello from Claude')]
 
-  const server = http.createServer((req, res) => {
-    let raw = ''
-    req.on('data', c => { raw += c })
-    req.on('end', () => {
-      if (req.url?.includes('/messages')) {
-        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
-        res.write(responseQueue.shift() ?? makeAnthropicTextEvents('ok'))
-        res.end()
-        return
-      }
-      res.writeHead(404); res.end()
-    })
-  })
-  await new Promise(r => server.listen(0, '127.0.0.1', r))
-  const { port } = server.address()
-  const origin = `http://127.0.0.1:${port}`
+  const server = await startMockLlmServer()
+  for (const response of responseQueue) server.queueResponse(response)
+  const origin = server.origin
 
   const prevBase = process.env.ANTHROPIC_BASE_URL
   const prevKey = process.env.ANTHROPIC_API_KEY
@@ -155,7 +145,7 @@ await test('AN-1: Anthropic text response produces assistant entry with correct 
     else process.env.ANTHROPIC_BASE_URL = prevBase
     if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
     else process.env.ANTHROPIC_API_KEY = prevKey
-    await new Promise(r => server.close(r))
+    await server.close()
     cleanup(dbPath, dir)
   }
 })
@@ -171,22 +161,9 @@ await test('AN-2: Anthropic tool_use response produces tool_use assistantBlock w
 
   fs.writeFileSync('/tmp/an2-probe.txt', 'an2 probe content')
 
-  const server = http.createServer((req, res) => {
-    let raw = ''
-    req.on('data', c => { raw += c })
-    req.on('end', () => {
-      if (req.url?.includes('/messages')) {
-        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
-        res.write(responseQueue.shift() ?? makeAnthropicTextEvents('ok'))
-        res.end()
-        return
-      }
-      res.writeHead(404); res.end()
-    })
-  })
-  await new Promise(r => server.listen(0, '127.0.0.1', r))
-  const { port } = server.address()
-  const origin = `http://127.0.0.1:${port}`
+  const server = await startMockLlmServer()
+  for (const response of responseQueue) server.queueResponse(response)
+  const origin = server.origin
 
   const prevBase = process.env.ANTHROPIC_BASE_URL
   const prevKey = process.env.ANTHROPIC_API_KEY
@@ -222,7 +199,7 @@ await test('AN-2: Anthropic tool_use response produces tool_use assistantBlock w
     else process.env.ANTHROPIC_BASE_URL = prevBase
     if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
     else process.env.ANTHROPIC_API_KEY = prevKey
-    await new Promise(r => server.close(r))
+    await server.close()
     cleanup(dbPath, dir)
     try { fs.unlinkSync('/tmp/an2-probe.txt') } catch {}
   }
@@ -238,24 +215,9 @@ await test('AN-3: end_turn after tool_use causes loop to exit — no infinite lo
 
   fs.writeFileSync('/tmp/an3-probe.txt', 'an3 content')
 
-  let requestCount = 0
-  const server = http.createServer((req, res) => {
-    let raw = ''
-    req.on('data', c => { raw += c })
-    req.on('end', () => {
-      if (req.url?.includes('/messages')) {
-        requestCount++
-        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
-        res.write(responseQueue.shift() ?? makeAnthropicTextEvents('extra'))
-        res.end()
-        return
-      }
-      res.writeHead(404); res.end()
-    })
-  })
-  await new Promise(r => server.listen(0, '127.0.0.1', r))
-  const { port } = server.address()
-  const origin = `http://127.0.0.1:${port}`
+  const server = await startMockLlmServer()
+  for (const response of responseQueue) server.queueResponse(response)
+  const origin = server.origin
 
   const prevBase = process.env.ANTHROPIC_BASE_URL
   const prevKey = process.env.ANTHROPIC_API_KEY
@@ -273,15 +235,179 @@ await test('AN-3: end_turn after tool_use causes loop to exit — no infinite lo
     ])
 
     // Exactly 2 requests: 1 tool call + 1 end_turn
-    assert.ok(requestCount <= 3, `expected ≤3 Anthropic requests, got ${requestCount} — possible loop`)
+    assert.ok(server.requestCount <= 3, `expected ≤3 Anthropic requests, got ${server.requestCount} — possible loop`)
   } finally {
     if (prevBase === undefined) delete process.env.ANTHROPIC_BASE_URL
     else process.env.ANTHROPIC_BASE_URL = prevBase
     if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
     else process.env.ANTHROPIC_API_KEY = prevKey
-    await new Promise(r => server.close(r))
+    await server.close()
     cleanup(dbPath, dir)
     try { fs.unlinkSync('/tmp/an3-probe.txt') } catch {}
+  }
+})
+
+await test('AN-4: repeated MAP reads hand off to diagnosis with strict tool mask and durable evidence', async () => {
+  const server = await startMockLlmServer()
+  const previousSufficiency=layaResponse.answers.sufficient.noul
+  layaResponse.answers.sufficient.noul=0.05
+  const {db,dbPath,dir} = tmpDb()
+  const previousBase = process.env.ANTHROPIC_BASE_URL, previousKey = process.env.ANTHROPIC_API_KEY
+  process.env.ANTHROPIC_BASE_URL = server.origin
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  fs.writeFileSync(path.join(dir,'MAP.md'),'# MAP\nTarget: src/router.mjs\n')
+  db.prepare("UPDATE conversations SET phase='explore',project_dir=? WHERE id='c1'").run(dir)
+  server.queueResponse(makeAnthropicToolCallEvents('Read',{file_path:'MAP.md'}))
+  server.queueResponse(makeAnthropicToolCallEvents('Read',{file_path:'./MAP.md'}))
+  server.queueResponse({id:'summary',type:'message',role:'assistant',content:[{type:'text',text:'MAP points to src/router.mjs.'}],usage:{input_tokens:1,output_tokens:1}})
+  server.queueResponse(makeAnthropicTextEvents('Further diagnosis requires operator evidence.'))
+  try {
+    const handoff=new Error('observed real Anthropic diagnose handoff')
+    const io={...quietIo,println(message){if(/Entering diagnose phase/.test(String(message)))throw handoff}}
+    try {await runUserTurn(db,makeRt(server.origin,{cwd:dir,runtimeDbPath:dbPath}),'Investigate the router failure',io)}
+    catch(error){if(error!==handoff)throw error}
+    assert.equal(db.prepare("SELECT phase FROM conversations WHERE id='c1'").get().phase,'diagnose')
+    assert.ok(server.requests.length<=4,'duplicate Read must hand off within four provider requests')
+    const explorationRequests=server.requests.filter(request=>request.body?.tools)
+    assert.equal(explorationRequests.length,2,'both original and repeated Read requests must execute')
+    for (const request of explorationRequests) {
+      assert.deepEqual(request.body.tools.map(t=>t.name).sort(),['Glob','Grep','Read'])
+    }
+    assert.ok(db.prepare("SELECT COUNT(*) AS n FROM memories WHERE session_id='s1'").get().n>0)
+    assert.ok(db.prepare("SELECT COUNT(*) AS n FROM pinned_context WHERE session_id='s1'").get().n>0)
+    const transcript=db.prepare("SELECT payload_json FROM transcript_entries WHERE session_id='s1' AND entry_type='user'").all().map(r=>r.payload_json).join('\n')
+    assert.match(transcript,/DIAGNOSE the observed behavior/)
+  } finally {
+    if(previousBase===undefined)delete process.env.ANTHROPIC_BASE_URL;else process.env.ANTHROPIC_BASE_URL=previousBase
+    if(previousKey===undefined)delete process.env.ANTHROPIC_API_KEY;else process.env.ANTHROPIC_API_KEY=previousKey
+    layaResponse.answers.sufficient.noul=previousSufficiency
+    await server.close();cleanup(dbPath,dir)
+  }
+})
+
+for (const [label,answer,expected] of [['yes','y','idle'],['no','n','confirm_fix'],['missing',null,'confirm_fix']]) {
+  await test(`AN-5-${label}: real Anthropic completion dispatch requires affirmative operator input`, async () => {
+    const server=await startMockLlmServer(), {db,dbPath,dir}=tmpDb()
+    const previousBase=process.env.ANTHROPIC_BASE_URL,previousKey=process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_BASE_URL=server.origin;process.env.ANTHROPIC_API_KEY='test-key'
+    db.prepare("UPDATE conversations SET phase='confirm_fix',project_dir=? WHERE id='c1'").run(dir)
+    server.queueResponse(makeAnthropicTextEvents('Ready for final confirmation.'))
+    let asks=0
+    const io=answer===null?quietIo:{...quietIo,async ask(){asks++;return answer}}
+    try {
+      await runUserTurn(db,makeRt(server.origin,{cwd:dir,runtimeDbPath:dbPath}),'Review the completed fix',io)
+      assert.equal(db.prepare("SELECT phase FROM conversations WHERE id='c1'").get().phase,expected)
+      assert.equal(asks,answer===null?0:1)
+      const events=db.prepare("SELECT event_type FROM events WHERE conversation_id='c1'").all().map(r=>r.event_type)
+      assert.equal(events.includes('fix_confirmed'),answer==='y')
+      assert.equal(events.includes('reset_ack'),answer==='y')
+      assert.equal(events.includes('fix_rejected'),answer!=='y')
+    } finally {
+      if(previousBase===undefined)delete process.env.ANTHROPIC_BASE_URL;else process.env.ANTHROPIC_BASE_URL=previousBase
+      if(previousKey===undefined)delete process.env.ANTHROPIC_API_KEY;else process.env.ANTHROPIC_API_KEY=previousKey
+      await server.close();cleanup(dbPath,dir)
+    }
+  })
+}
+
+await test('AN-6: diagnosis records a real issue and stops test creation without executed RED', async () => {
+  const server=await startMockLlmServer(),{db,dbPath,dir}=tmpDb()
+  const previousBase=process.env.ANTHROPIC_BASE_URL,previousKey=process.env.ANTHROPIC_API_KEY
+  process.env.ANTHROPIC_BASE_URL=server.origin;process.env.ANTHROPIC_API_KEY='test-key'
+  db.prepare("UPDATE conversations SET phase='diagnose',project_dir=? WHERE id='c1'").run(dir)
+  server.queueResponse(makeAnthropicTextEvents('Observed equality rejection. Expected equality acceptance. Cause: strict comparison.'))
+  server.queueResponse(makeAnthropicTextEvents('Correct equality boundary (#36)'))
+  server.queueResponse(makeAnthropicTextEvents('Tests have not executed yet.'))
+  try {
+    await runUserTurn(db,makeRt(server.origin,{cwd:dir,runtimeDbPath:dbPath}),'Diagnose the equality boundary',quietIo)
+    assert.equal(db.prepare("SELECT phase FROM conversations WHERE id='c1'").get().phase,'create_tests')
+    const issue=JSON.parse(db.prepare("SELECT detail FROM events WHERE conversation_id='c1' AND event_type='issue_created'").get().detail)
+    assert.ok(fs.statSync(issue.file).isFile())
+    assert.ok(issue.issueNumber>0)
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM plans WHERE conversation_id='c1' AND status='approved'").get().n,0)
+  } finally {
+    if(previousBase===undefined)delete process.env.ANTHROPIC_BASE_URL;else process.env.ANTHROPIC_BASE_URL=previousBase
+    if(previousKey===undefined)delete process.env.ANTHROPIC_API_KEY;else process.env.ANTHROPIC_API_KEY=previousKey
+    await server.close();cleanup(dbPath,dir)
+  }
+})
+
+for(const approve of [false,true,'implementation']) {
+  await test(`AN-7-${approve}: plan dispatch preserves RED and operator approval before implementation`, async () => {
+    const {fixture,actualRed,validPlan}=await import('../fixtures/sdlcAcceptance.mjs')
+    const f=fixture('anthropic-plan-'+approve,'create_tests'),server=await startMockLlmServer()
+    const previousBase=process.env.ANTHROPIC_BASE_URL,previousKey=process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_BASE_URL=server.origin;process.env.ANTHROPIC_API_KEY='test-key'
+    let asks=0
+    try {
+      await actualRed(f)
+      server.queueResponse(makeAnthropicTextEvents(validPlan))
+      if(approve){
+        server.queueResponse(makeAnthropicTextEvents('Implementation ready for review.'))
+        server.queueResponse({id:'summary',type:'message',role:'assistant',content:[{type:'text',text:'Review the implementation before verification.'}],usage:{input_tokens:1,output_tokens:1}})
+      }
+      const rt=makeRt(server.origin,{cwd:f.cwd,conversationId:f.cid,sessionId:f.sid,runtimeDbPath:f.dbPath})
+      if(approve==='implementation')server.queueResponse(makeAnthropicTextEvents('Verification still requires running the original regression.'))
+      const io={...quietIo,async ask(){asks++;return approve&&(asks===1||approve==='implementation')?'y':'n'}}
+      await runUserTurn(f.db,rt,'Plan the equality fix (#36)',io)
+      assert.equal(f.db.prepare('SELECT phase FROM conversations WHERE id=?').get(f.cid).phase,approve==='implementation'?'verify':approve?'implement':'planning')
+      assert.equal(asks,approve?2:1)
+      assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM plans WHERE conversation_id=? AND status='approved'").get(f.cid).n,approve?1:0)
+    } finally {
+      if(previousBase===undefined)delete process.env.ANTHROPIC_BASE_URL;else process.env.ANTHROPIC_BASE_URL=previousBase
+      if(previousKey===undefined)delete process.env.ANTHROPIC_API_KEY;else process.env.ANTHROPIC_API_KEY=previousKey
+      await server.close();f.close()
+    }
+  })
+}
+
+for(const green of [false,true]) {
+  await test(`AN-8-${green}: verification dispatch requires real GREEN and safety requires measured coverage`, async () => {
+    const {fixture,actualRed,redCommand,yesIo}=await import('../fixtures/sdlcAcceptance.mjs')
+    const {executeBuiltinTool}=await import('../../lib/tools.mjs')
+    const f=fixture('anthropic-verify-'+green,'create_tests'),server=await startMockLlmServer()
+    const previousBase=process.env.ANTHROPIC_BASE_URL,previousKey=process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_BASE_URL=server.origin;process.env.ANTHROPIC_API_KEY='test-key'
+    try {
+      await actualRed(f);f.phase('verify')
+      if(green){
+        fs.writeFileSync(path.join(f.cwd,'src/boundary.mjs'),'export const allowed = (n, limit) => n <= limit\n')
+        assert.equal((await executeBuiltinTool(f.db,f.rt,'Bash',{command:redCommand},yesIo)).is_error,false)
+      }
+      server.queueResponse(makeAnthropicTextEvents('Review test execution evidence.'))
+      if(green)server.queueResponse(makeAnthropicTextEvents('Run safety checks; no coverage report has been produced.'))
+      await runUserTurn(f.db,makeRt(server.origin,{cwd:f.cwd,conversationId:f.cid,sessionId:f.sid,runtimeDbPath:f.dbPath}),'Verify the equality boundary',quietIo)
+      assert.equal(f.db.prepare('SELECT phase FROM conversations WHERE id=?').get(f.cid).phase,green?'safety':'verify')
+      assert.equal(f.rows('safety_checker').length,green?3:0)
+      assert.equal(f.rows('fix_confirmed').length,0)
+      if(green)assert.ok(f.rows('coverage_evidence_missing').length>0)
+    } finally {
+      if(previousBase===undefined)delete process.env.ANTHROPIC_BASE_URL;else process.env.ANTHROPIC_BASE_URL=previousBase
+      if(previousKey===undefined)delete process.env.ANTHROPIC_API_KEY;else process.env.ANTHROPIC_API_KEY=previousKey
+      await server.close();f.close()
+    }
+  })
+}
+
+await test('AN-9: two empty planning responses terminate without approval or implementation', async () => {
+  const {fixture,actualRed}=await import('../fixtures/sdlcAcceptance.mjs')
+  const f=fixture('anthropic-empty-plan','create_tests'),server=await startMockLlmServer()
+  const previousBase=process.env.ANTHROPIC_BASE_URL,previousKey=process.env.ANTHROPIC_API_KEY
+  process.env.ANTHROPIC_BASE_URL=server.origin;process.env.ANTHROPIC_API_KEY='test-key'
+  let asks=0
+  try {
+    await actualRed(f)
+    server.queueResponse(makeAnthropicTextEvents(''))
+    server.queueResponse(makeAnthropicTextEvents(''))
+    await runUserTurn(f.db,makeRt(server.origin,{cwd:f.cwd,conversationId:f.cid,sessionId:f.sid,runtimeDbPath:f.dbPath}),'Plan the equality fix', {...quietIo,async ask(){asks++;return 'y'}})
+    assert.equal(server.requestCount,2)
+    assert.equal(asks,0)
+    assert.equal(f.db.prepare('SELECT phase FROM conversations WHERE id=?').get(f.cid).phase,'planning')
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM plans WHERE conversation_id=? AND status='approved'").get(f.cid).n,0)
+  } finally {
+    if(previousBase===undefined)delete process.env.ANTHROPIC_BASE_URL;else process.env.ANTHROPIC_BASE_URL=previousBase
+    if(previousKey===undefined)delete process.env.ANTHROPIC_API_KEY;else process.env.ANTHROPIC_API_KEY=previousKey
+    await server.close();f.close()
   }
 })
 

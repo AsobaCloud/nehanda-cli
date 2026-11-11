@@ -14,7 +14,7 @@ import crypto from 'node:crypto'
 import { openStore, closeStore, withTransaction } from '../../lib/store.mjs'
 import { createTestsGate, planGate, verifyGate, safetyGate } from '../../lib/orchestrate.mjs'
 import { executeBuiltinTool } from '../../lib/tools.mjs'
-import { recordRedTestEvidence, setPhase, getPhase } from '../../lib/workflow.mjs'
+import { recordRedTestEvidence, captureTestExecution, setPhase, getPhase } from '../../lib/workflow.mjs'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'coverage-identity-'))
 const cwd = path.join(tmp, 'project')
@@ -39,6 +39,7 @@ function nativeCoverage(testName, target = lcov) {
     `--test-reporter-destination=${target}`, testName,
   ], { cwd, encoding: 'utf8', timeout: 30000 })
   assert.equal(p.status, 0, `native coverage command failed: ${p.stderr}`)
+  captureTestExecution(db,cid,{command:'node --test --experimental-test-coverage --test-reporter=lcov '+testName,exit_code:p.status,output_digest:p.stdout+p.stderr,phase:'verify'})
   const text = fs.readFileSync(target, 'utf8')
   assert.match(text, /SF:src\/subject\.mjs/, 'LCOV must identify production file')
   assert.match(text, /^BRF:[1-9]\d*$/m, 'LCOV must contain real branch instrumentation')

@@ -1,4 +1,5 @@
 import http from 'node:http'
+import crypto from 'node:crypto'
 
 /**
  * Mock LLM API Server for behavioral testing without external API spend.
@@ -37,7 +38,7 @@ export function makeOpenAiTextChunks(text, { id = 'gen-test', model = 'test-mode
 /**
  * Create an OpenAI-compatible SSE tool call payload (streaming delta).
  */
-export function makeOpenAiToolCallChunks(toolName, argsObj, { id = 'call_test_1', model = 'test-model' } = {}) {
+export function makeOpenAiToolCallChunks(toolName, argsObj, { id = 'call_'+crypto.randomUUID(), model = 'test-model' } = {}) {
   const argsJson = typeof argsObj === 'string' ? argsObj : JSON.stringify(argsObj)
   const chunks = [
     `data: ${JSON.stringify({
@@ -103,6 +104,45 @@ export function startMockLlmServer() {
   const requests = []
   const responseQueue = []
 
+  // #36/#37: selectable external-provider transport for restricted runners.
+  // Production parsing, orchestration, tools, SQLite and gates remain untouched.
+  // Socket mode remains the default; fetch mode makes no network requests.
+  if (process.env.NEHANDA_TEST_TRANSPORT === 'fetch') {
+    const origin = `http://fixture-${crypto.randomUUID()}.invalid`
+    const originalFetch = globalThis.fetch
+    const fixtureFetch = async (input, init) => {
+      const request = new Request(input, init)
+      if (new URL(request.url).origin !== origin) return originalFetch(input, init)
+      request.signal.throwIfAborted()
+      const raw = await request.text()
+      let body
+      try { body = raw ? JSON.parse(raw) : null } catch { body = raw }
+      const url = new URL(request.url).pathname
+      requests.push({ url, method: request.method, headers: Object.fromEntries(request.headers), body })
+      if(url.endsWith('/api/show'))return Response.json({capabilities:['tools']})
+      const next = responseQueue.shift()
+      if (typeof next === 'function') throw new Error('Fetch fixture does not support socket responders; use socket transport')
+      const content = next ?? (url.includes('/messages')
+        ? makeAnthropicTextEvents('Acknowledged from mock Anthropic.')
+        : makeOpenAiTextChunks('Acknowledged from mock OpenAI/OpenRouter.'))
+      const isJson = typeof content === 'object'
+      // Real Response body exercises the production SSE reader/decoder.
+      return new Response(isJson ? JSON.stringify(content) : content, {
+        status: 200, headers: { 'Content-Type': isJson ? 'application/json' : 'text/event-stream' },
+      })
+    }
+    globalThis.fetch = fixtureFetch
+    return Promise.resolve({
+      baseUrl: `${origin}/v1`, origin, requests,
+      get requestCount() { return requests.length },
+      queueResponse(responder) { responseQueue.push(responder) },
+      async close() {
+        if (globalThis.fetch !== fixtureFetch) throw new Error('Fetch fixtures must close in reverse creation order')
+        globalThis.fetch = originalFetch
+      },
+    })
+  }
+
   const server = http.createServer((req, res) => {
     let raw = ''
     req.on('data', chunk => { raw += chunk })
@@ -113,6 +153,7 @@ export function startMockLlmServer() {
       const record = { url: req.url, method: req.method, headers: req.headers, body }
       requests.push(record)
 
+      if(req.url?.endsWith('/api/show')){res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({capabilities:['tools']}));return}
       // If a queued responder exists, use it
       if (responseQueue.length > 0) {
         const nextResponder = responseQueue.shift()
@@ -152,7 +193,8 @@ export function startMockLlmServer() {
     })
   })
 
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address()
       resolve({

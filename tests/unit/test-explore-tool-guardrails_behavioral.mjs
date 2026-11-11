@@ -76,6 +76,35 @@ await (async () => {
     }
   })
 
+  await test('EXP-GUARD-5: zero-hit repeat is cached before disk and creates no duplicate observation', async () => {
+    const env=tempEnv()
+    try {
+      const ctx={cwd:env.dir,conversationId:env.conversationId,sessionId:env.sessionId,settings:{}}
+      const first=await executeBuiltinTool(env.db,ctx,'Grep',{pattern:'notPresentToken',path:'MAP.md'}, {})
+      assert.equal(first.is_error,false); assert.match(first.content,/no matches/i)
+      const before=env.db.prepare('SELECT id,content FROM memories').all()
+      assert.ok(before.length>0,'zero-hit outcome must be persisted as negative memory')
+      fs.appendFileSync(path.join(env.dir,'MAP.md'),'\nnotPresentToken')
+      const again=await executeBuiltinTool(env.db,ctx,'Grep',{pattern:'notPresentToken',path:'./MAP.md'}, {})
+      assert.match(again.content,/already|cached|no matches/i,'repeat must not read changed disk')
+      assert.doesNotMatch(again.content,/^MAP\.md$/m)
+      assert.deepEqual(env.db.prepare('SELECT id,content FROM memories').all(),before,'no duplicate negative observation')
+      const independent=await executeBuiltinTool(env.db,ctx,'Grep',{pattern:'router',path:'MAP.md'}, {})
+      assert.match(independent.content,/MAP\.md/,'different search must execute normally')
+    } finally {env.cleanup()}
+  })
+  for (const [name,input] of [['Grep',{pattern:'router',path:'MAP.md'}],['Glob',{pattern:'*.md',path:'.'}]]) {
+    await test(`EXP-GUARD-6-${name}: successful explore tool automatically persists its outcome`,async()=>{
+      const env=tempEnv()
+      try{
+        const result=await executeBuiltinTool(env.db,{cwd:env.dir,conversationId:env.conversationId,sessionId:env.sessionId,settings:{}},name,input,{})
+        assert.equal(result.is_error,false)
+        const nodes=env.db.prepare('SELECT title,content FROM memories WHERE conversation_id=?').all(env.conversationId)
+        assert.ok(nodes.some(row=>(row.title+' '+row.content).includes('MAP.md')),'actual outcome must be observable in Jev')
+      }finally{env.cleanup()}
+    })
+  }
+
   console.log(`\nSummary: ${passed} Passed, ${failed} Failed (RED)`)
 })().catch(err => { console.error(err); process.exit(1) })
 if (failed > 0) process.exitCode = 1

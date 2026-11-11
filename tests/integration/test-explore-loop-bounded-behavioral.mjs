@@ -108,7 +108,7 @@ async function runScenario({ tmpRoot, convId, sessId, queueCount = 10, strictAss
 
     if (strictAssertions) {
       assert.equal(successfulReads, 1, `HP-1: expected exactly one successful MAP.md read, got ${successfulReads}: ${JSON.stringify(toolResults)}`)
-      assert.ok(readAttempts <= 10, `HP-1: expected at most 10 Read(MAP.md) attempts, got ${readAttempts}: ${JSON.stringify(toolCalls)}`)
+      assert.ok(readAttempts <= 2, `HP-1: expected at most 2 Read(MAP.md) attempts, got ${readAttempts}: ${JSON.stringify(toolCalls)}`)
     }
 
     const phaseScopedExploreRequests = exploreRequestCount(mock)
@@ -118,7 +118,7 @@ async function runScenario({ tmpRoot, convId, sessId, queueCount = 10, strictAss
         /already read|Exploration complete|No matching context/i.test(allOutput + '\n' + allToolResults),
         `HP-2: expected convergence output, got: ${JSON.stringify(allOutput)}`
       )
-      assert.ok(phaseScopedExploreRequests <= 20, `HP-2: expected at most 20 explore-phase upstream requests, got ${phaseScopedExploreRequests}`)
+      assert.ok(phaseScopedExploreRequests <= 4, `HP-2: expected at most 4 explore-phase upstream requests, got ${phaseScopedExploreRequests}`)
       assert.ok(handoffSeen, `HP-2: expected canonical explore -> diagnose handoff; observed phases: ${printed.join(' | ')}`)
       assert.equal(getPhase(db, convId), 'diagnose', `HP-2: explore must hand off to diagnose, got ${getPhase(db, convId)}`)
     }
@@ -151,47 +151,20 @@ function exploreRequestCount(mockServer) {
   }).length
 }
 
-const tmpRoot = path.join(os.tmpdir(), `explore-loop-bounded-${Date.now()}`)
-fs.mkdirSync(tmpRoot, { recursive: true })
-
-// HP-1 / HP-2: One canonical sweep + no downstream resweep
-const m1 = await runScenario({ tmpRoot, convId: 'c-loop-bounded-1', sessId: 's-loop-bounded-1', queueCount: 10 })
-console.log('  EXPLORE-LOOP-BOUNDED (HP-1/HP-2):')
-console.log(`  successfulReads: ${m1.successfulReads}`)
-console.log(`  Read(MAP.md) attempts: ${m1.readAttempts}`)
-console.log(`  Model requests: ${m1.requestCount}`)
-console.log(`  Phase: ${m1.phaseAtRunEnd}`)
-console.log(`  MAP memories: ${m1.mapMemories}`)
-
-// HP-3: Another conversation has independent read tracking; no test-side
-// reset is permitted to manufacture a successful new exploration read.
-
-const m2 = await runScenario({ tmpRoot, convId: 'c-loop-bounded-2', sessId: 's-loop-bounded-2', queueCount: 10 })
-assert.equal(m2.successfulReads, 1, 'HP-3: clean reset must allow exactly one successful canonical read again')
-assert.ok(m2.readAttempts <= 20, 'HP-3: bounded attempts after reset')
-console.log('  HP-3 CLEAN RESET:')
-console.log(`  successfulReads: ${m2.successfulReads}`)
-console.log(`  Read(MAP.md) attempts: ${m2.readAttempts}`)
-console.log(`  Model requests: ${m2.requestCount}`)
-
-// HP-4: Failure transparency (resetting unknown conversation retains state without throwing)
-assert.doesNotThrow(() => resetExploreReadCache('does-not-exist'), 'HP-4: reset missing convId must be failure-transparent')
-
-// Adversarial HP-2 E3: production has no explicit request-budget enforcement. We queue
-// more Read calls than the explore cap, but saturation normally stops forwarding at 12.
-const adv = await runScenario({ tmpRoot, convId: 'c-adv-20', sessId: 's-adv-20', queueCount: 21, strictAssertions: false })
-console.log('  HP-2 adversarial:')
-console.log(`  Upstream requests: ${adv.requestCount}`)
-console.log(`  Explore requests: ${adv.exploreRequests}`)
-assert.ok(adv.exploreRequests <= 20, `HP-2 adversarial: expected at most 20 explore-phase upstream requests, got ${adv.exploreRequests}`)
-if (adv.exploreRequests < 21) {
-  console.log('  20-request cap: UNTESTED (saturation stopped before request 21)')
+// Each case has independent setup/cleanup; one RED must not hide another.
+const {default:test}=await import('node:test')
+for(const [id,count] of [['HP-1',10],['HP-3',10],['HP-ADV',21]]){
+ test(`${id}: repeated canonical reads converge within <=2 attempts and <=4 requests`,async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'bounded-'))
+  try{
+   const result=await runScenario({tmpRoot:root,convId:'conv-'+id,sessId:'sess-'+id,queueCount:count,strictAssertions:false})
+   assert.equal(result.successfulReads,1)
+   assert.ok(result.readAttempts<=2,`MAP attempts: ${result.readAttempts}; limit 2`)
+   assert.ok(result.exploreRequests<=4,`explore requests: ${result.exploreRequests}; limit 4`)
+   assert.equal(result.phaseAtRunEnd,'diagnose')
+   assert.equal(result.handoffSeen,true)
+   assert.ok(result.mapMemories>=1)
+  }finally{fs.rmSync(root,{recursive:true,force:true})}
+ })
 }
-console.log('  HP-4 FAILURE TRANSPARENCY (no auto-advance)')
-
-fs.rmSync(tmpRoot, { recursive: true, force: true })
-clearLayaPredictOverride()
-
-// Real-provider coverage is exercised independently by the D1/D2/D3 optional suites.
-
-console.log('\nAll HP-1..HP-4 bounded exploration assertions passed.')
+process.on('exit',clearLayaPredictOverride)

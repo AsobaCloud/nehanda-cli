@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import {actualRed} from '../fixtures/sdlcAcceptance.mjs'
 import { streamOpenAIChatCompletion } from '../../lib/openaiCompat.mjs'
 import { openStore, closeStore, upsertSummary } from '../../lib/store.mjs'
 import {
@@ -27,7 +28,7 @@ import {
   runOpenAICompatPhase,
 } from '../../lib/orchestrate.mjs'
 import { appendEntry, makeUserPayload, makeAssistantPayload } from '../../lib/transcript.mjs'
-import { setPhase, getPhase } from '../../lib/workflow.mjs'
+import { setPhase, getPhase, recordRedTestEvidence } from '../../lib/workflow.mjs'
 
 let passed = 0
 let failed = 0
@@ -102,7 +103,10 @@ function mockFetch(content, { finishReason = 'stop', usage = null } = {}) {
   return () => { globalThis.fetch = original }
 }
 
-const VALID_PLAN = `## Objective
+const VALID_PLAN = `## Issue Reference
+#42
+
+## Objective
 Fix the thing (#42).
 
 ## Plan
@@ -114,7 +118,7 @@ Given a widget When running Then returns 42.
 
 ## Coverage Matrix
 | Scenario | Test File |
-| FL-1 | tests/test_example.mjs |
+| FL-1 | tests/boundary.test.mjs |
 
 ## Proof of Success
 \`node tests/unit/example.mjs\` exits 0.`
@@ -129,14 +133,17 @@ tests.push(['BG-5: planGate approves a valid plan (happy path unchanged)', async
     const { sessionId, conversationId } = seedConversation(db, 'planning')
     const rt = makeRt(sessionId, conversationId)
     const io = makeIo()
+    db.prepare("UPDATE conversations SET project_dir=?,phase='create_tests' WHERE id=?").run(dir,conversationId)
+    rt.cwd=dir
+    await actualRed({db,cid:conversationId,cwd:dir,rt})
     const ok = await planGate(db, rt, io, VALID_PLAN)
     assert.strictEqual(ok, true)
     const plan = db.prepare(`SELECT * FROM plans WHERE conversation_id = ?`).get(conversationId)
     assert.ok(plan, 'plan row persisted')
     assert.strictEqual(plan.status, 'approved')
-    assert.strictEqual(getPhase(db, conversationId), 'test')
+    assert.strictEqual(getPhase(db, conversationId), 'implement')
     // No retry nudge entry should have been appended
-    const nudges = db.prepare(`SELECT COUNT(*) AS n FROM transcript_entries WHERE session_id = ? AND payload_json LIKE '%Do NOT use any tools%'`).get(sessionId)
+    const nudges = db.prepare(`SELECT COUNT(*) AS n FROM transcript_entries WHERE session_id = ? AND payload_json LIKE '%Your previous response contained no plan text%'`).get(sessionId)
     assert.strictEqual(nudges.n, 0)
   } finally {
     closeStore(dbPath)
@@ -192,6 +199,9 @@ tests.push(['BG-3: retryEmptyPlanningTurn retries exactly once with a nudge mess
     const rt = makeRt(sessionId, conversationId)
     const io = makeIo()
     let calls = 0
+    db.prepare("UPDATE conversations SET project_dir=?,phase='create_tests' WHERE id=?").run(dir,conversationId)
+    rt.cwd=dir
+    await actualRed({db,cid:conversationId,cwd:dir,rt})
     const runPlanPhase = async () => { calls++; return VALID_PLAN }
     const ok = await retryEmptyPlanningTurn(db, rt, io, runPlanPhase)
     assert.strictEqual(ok, true)
@@ -251,9 +261,9 @@ tests.push(['BG-1: exploreGateOpenAICompat persists combined summaries to the su
     assert.ok(row.content.includes('lib/example.mjs'), 'summary content includes file path')
     assert.ok(row.word_count > 0, 'word_count populated')
     const planningMsg = db.prepare(
-      `SELECT payload_json FROM transcript_entries WHERE session_id = ? AND payload_json LIKE '%Write your plan using ONLY the content above%'`
+      `SELECT payload_json FROM transcript_entries WHERE session_id = ? AND payload_json LIKE '%DIAGNOSE%'`
     ).get(sessionId)
-    assert.ok(planningMsg, 'planning user message appended as before')
+    assert.ok(planningMsg, 'diagnose handoff message appended')
   } finally {
     restore()
     closeStore(dbPath)

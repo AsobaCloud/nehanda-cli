@@ -11,7 +11,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { openStore, closeStore } from '../../lib/store.mjs'
 import { safetyGate } from '../../lib/orchestrate.mjs'
-import { getPhase, recordRedTestEvidence } from '../../lib/workflow.mjs'
+import { getPhase, recordRedTestEvidence, captureTestExecution } from '../../lib/workflow.mjs'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'exact-70-'))
 const project = path.join(tmp, 'project')
@@ -71,7 +71,8 @@ try {
       found += brf; hit += brh
     }
     assert.equal(found, 10, 'fixture must be exactly 10 measured native branch leaves')
-    recordRedTestEvidence(db, cid, { command, exit_code: 0, output_digest: result.stdout + result.stderr })
+    const execution=captureTestExecution(db,cid,{command:'node --test --experimental-test-coverage --test-reporter=lcov tests/branches.test.mjs',exit_code:result.status,output_digest:result.stdout+result.stderr,phase:'verify'})
+    recordRedTestEvidence(db, cid, { command, exit_code: 0, output_digest: result.stdout + result.stderr,execution })
     return { hit, found, fraction: hit / found }
   }
 

@@ -1,120 +1,36 @@
-#!/usr/bin/env node
-/**
- * #36 — Phase-gate behavioral coverage for diagnose -> create_issue -> create_tests.
- */
-
+/** #36 C-2: invoke the real gate, not createIssue plus test-authored success events. */
+import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-import { openStore, closeStore } from '../../lib/store.mjs'
-import { setPhase, getPhase } from '../../lib/workflow.mjs'
-import { createIssue } from '../../lib/issues.mjs'
+import {fixture,yesIo} from '../fixtures/sdlcAcceptance.mjs'
+import {createIssueGate} from '../../lib/orchestrate.mjs'
+import {setPhase,getPhase} from '../../lib/workflow.mjs'
 
-let passed = 0
-let failed = 0
-
-async function test(label, fn) {
-  process.stdout.write(`\n${label}: `)
-  try {
-    await fn()
-    passed += 1
-    console.log('PASS')
-  } catch (err) {
-    failed += 1
-    process.exitCode = 1
-    console.error('FAIL')
-    console.error(err?.stack || err?.message || err)
-  }
+test('CI-1: Given diagnosis, When issue gate runs, Then actual artifact/event and create_tests',async()=>{
+ const f=fixture('issue','diagnose')
+ try {
+  f.event('diagnosis_recorded',{diagnosis:'Strict comparator rejects the documented equality boundary'})
+  assert.equal(setPhase(f.db,f.cid,'create_issue'),true)
+  assert.equal(await createIssueGate(f.db,f.rt,yesIo,'Equality admission regression (#36)'),true)
+  const events=f.rows('issue_created');assert.equal(events.length,1)
+  const issue=JSON.parse(events[0].detail)
+  assert.ok(Number.isInteger(issue.issueNumber)&&issue.issueNumber>0)
+  assert.match(issue.file,/[\/]\.issues[\/]\d{4}-.*\.md$/)
+  assert.match(fs.readFileSync(issue.file,'utf8'),/Strict comparator rejects/)
+  assert.equal(getPhase(f.db,f.cid),'create_tests')
+ } finally {f.close()}
+})
+for(const [id,phase,next] of [['CI-2','diagnose','create_issue'],['CI-3','create_issue','create_tests']]){
+ test(`${id}: Given missing evidence, When advancing, Then blocked`,()=>{
+  const f=fixture(id,phase)
+  try{assert.equal(setPhase(f.db,f.cid,next),false);assert.equal(getPhase(f.db,f.cid),phase)}finally{f.close()}
+ })
 }
-
-function tmpWorkspace(prefix) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
-  const cwd = path.join(dir, 'repo')
-  fs.mkdirSync(cwd, { recursive: true })
-  const dbPath = path.join(dir, 'phase.db')
-  return { root: dir, cwd, dbPath }
-}
-
-await test('CI-1: createIssue and evidence unlock create_tests from create_issue', async () => {
-  const { root, cwd, dbPath } = tmpWorkspace('ci1-')
-  const db = openStore(dbPath)
-  const cid = 'conv-ci1'
-  db.prepare(
-    `INSERT INTO conversations (id, project_dir, phase) VALUES (?, ?, 'diagnose')`
-  ).run(cid, cwd)
-  db.prepare(
-    `INSERT INTO events (conversation_id, event_type, detail) VALUES (?, 'diagnosis_recorded', ?)`
-  ).run(cid, JSON.stringify({ finding: 'Root transport drop before inbound helper' }))
-
-  try {
-    const issue = createIssue(cwd, {
-      title: 'Refresh upstream transport connection after interruption',
-      observed: 'Explore/read evidence shows the transport pin changes before the recovery path is exercised.',
-      expected: 'The conversation records a diagnosable issue and the workflow can reach create_tests.',
-      diagnosis: 'Missing diagnose-to-create_issue gate and issue capture step.',
-      acceptanceCriteria: [
-        'Issue file is created under .issues',
-        'issue_created event is persisted for the conversation',
-        'create_tests becomes the accepted next phase',
-      ],
-    })
-
-    assert.ok(fs.existsSync(issue.file), 'CI-1: createIssue must write the issue file')
-    assert.match(issue.file, /(^|[\\/])\.issues[\\/]\d{4}-[^\\/]+\.md$/)
-
-    db.prepare(
-      `INSERT INTO events (conversation_id, event_type, detail) VALUES (?, 'issue_created', ?)`
-    ).run(cid, JSON.stringify({ issueNumber: issue.number, file: issue.file }))
-
-    const event = db
-      .prepare(`SELECT event_type FROM events WHERE conversation_id = ? AND event_type = 'issue_created'`)
-      .get(cid)
-    assert.ok(event, 'CI-1: issue_created event must be recorded in DB')
-
-    const ok = setPhase(db, cid, 'create_tests')
-    assert.equal(ok, true, 'CI-1: setPhase should allow diagnose -> create_tests after issue creation')
-  } finally {
-    try { closeStore(dbPath) } catch {}
-    try { fs.rmSync(root, { recursive: true, force: true }) } catch {}
-  }
+test('CI-4: Given an issue event referencing a missing artifact, When advancing, Then blocked',()=>{
+ const f=fixture('missing-issue','create_issue')
+ try{f.event('issue_created',{issueNumber:36,file:f.cwd+'/.issues/missing.md'});assert.equal(setPhase(f.db,f.cid,'create_tests'),false)}finally{f.close()}
 })
-
-await test('CI-2: missing diagnosis blocks create_issue transition', async () => {
-  const { root, cwd, dbPath } = tmpWorkspace('ci2-')
-  const db = openStore(dbPath)
-  const cid = 'conv-ci2'
-  db.prepare(
-    `INSERT INTO conversations (id, project_dir, phase) VALUES (?, ?, 'diagnose')`
-  ).run(cid, cwd)
-
-  try {
-    const ok = setPhase(db, cid, 'create_issue')
-    assert.equal(ok, false, 'CI-2: setPhase should reject create_issue without diagnosis')
-    assert.equal(getPhase(db, cid), 'diagnose', 'CI-2: phase should remain diagnose')
-  } finally {
-    try { closeStore(dbPath) } catch {}
-    try { fs.rmSync(root, { recursive: true, force: true }) } catch {}
-  }
+test('CI-5: Given diagnosis and prior issue evidence, When skipping create_issue, Then canonical edge remains blocked',()=>{
+ const f=fixture('skip-issue','diagnose')
+ try{f.event('issue_created',{issueNumber:36,file:f.cwd+'/.issues/missing.md'});assert.equal(setPhase(f.db,f.cid,'create_tests'),false)}finally{f.close()}
 })
-
-await test('CI-3: missing issue_created evidence blocks create_tests transition', async () => {
-  const { root, cwd, dbPath } = tmpWorkspace('ci3-')
-  const db = openStore(dbPath)
-  const cid = 'conv-ci3'
-  db.prepare(
-    `INSERT INTO conversations (id, project_dir, phase) VALUES (?, ?, 'create_issue')`
-  ).run(cid, cwd)
-
-  try {
-    const ok = setPhase(db, cid, 'create_tests')
-    assert.equal(ok, false, 'CI-3: setPhase should reject create_tests without issue_created')
-    assert.equal(getPhase(db, cid), 'create_issue', 'CI-3: phase should remain create_issue')
-  } finally {
-    try { closeStore(dbPath) } catch {}
-    try { fs.rmSync(root, { recursive: true, force: true }) } catch {}
-  }
-})
-
-console.log(`\n${passed} passed, ${failed} failed`)
-if (failed > 0) process.exitCode = 1

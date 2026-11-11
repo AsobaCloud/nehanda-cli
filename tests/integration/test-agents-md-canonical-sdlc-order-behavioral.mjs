@@ -39,6 +39,7 @@ async function check(label, fn) {
 }
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-md-e2e-'))
+let dbPath
 let db = null
 let mock = null
 
@@ -134,7 +135,7 @@ try {
   assert.equal(fs.existsSync(path.join(repoDir, testPath)), false,
     'Regression must not exist before the agent enters create_tests')
 
-  const dbPath = path.join(root, 'agents-e2e.db')
+  dbPath = path.join(root, 'agents-e2e.db')
   db = openStore(dbPath)
   db.prepare(
     `INSERT INTO conversations (id, project_dir, phase) VALUES (?, ?, 'idle')`
@@ -144,17 +145,11 @@ try {
   ).run(sid, cid)
 
   mock = await startMockLlmServer()
-  // Exploration still exercises the real duplicate-read interception and handoff.
-  for (let i = 0; i < 10; i += 1) {
-    mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: 'MAP.md' }))
-  }
+  mock.queueResponse(makeOpenAiToolCallChunks('Read', {file_path:'MAP.md'}))
+  mock.queueResponse(makeOpenAiToolCallChunks('Read', {file_path:productionPath}))
   mock.queueResponse(makeOpenAiTextChunks('Exploration complete.'))
-  // exploreGateOpenAICompat makes a separate real model request for each
-  // successfully explored file's summary BEFORE entering diagnose. Without
-  // this response all subsequent phase-specific fixture messages misalign.
-  mock.queueResponse(makeOpenAiTextChunks(
-    'MAP.md identifies src/memory.mjs as the boundary implementation and tests/memory.behavior.test.mjs as its regression.'
-  ))
+  mock.queueResponse(makeOpenAiTextChunks('MAP.md identifies src/memory.mjs and its behavioral regression.'))
+  mock.queueResponse(makeOpenAiTextChunks('src/memory.mjs uses a strict comparator at the equality boundary.'))
 
   // Subsequent model turns supply actions, never fabricated tool results.
   // Canonical order: diagnose, create_issue, create_tests, planning,
@@ -207,11 +202,13 @@ Then the usage is permitted
   } }))
 
   const asked = []
+  const approvalSnapshots = []
   const toolCalls = []
   const toolResults = []
   const autoIo = {
     ask: async (prompt) => {
       asked.push(prompt)
+      approvalSnapshots.push({prompt, red:readEvents(db,cid,'test_result'), safety:readEvents(db,cid,'safety_checker')})
       return 'y'
     },
     println: () => {},
@@ -252,6 +249,10 @@ Then the usage is permitted
   const safetyEvents = readEvents(db, cid, 'safety_checker')
   const coverageEvents = readEvents(db, cid, 'branch_coverage')
 
+  await check('CANON-E2E-5: entry prompt describes the canonical workflow', async () => {
+    assert.ok(asked.some(prompt => /Use SDLC workflow \(explore → diagnose → issue → tests → plan → code → verify → safety\)/.test(prompt)))
+  })
+
   await check('CANON-E2E-2: tests precede planning and implementation', async () => {
     assert.ok(phasesSeen.indexOf('create_tests') < phasesSeen.indexOf('planning'))
     assert.ok(phasesSeen.indexOf('planning') < phasesSeen.indexOf('implement'))
@@ -281,7 +282,9 @@ Then the usage is permitted
   }
 
   await check('CANON-E2E-3: genuine RED and approved plan', async () => {
-    assert.ok(asked.some((prompt) => /Approve this plan\?/i.test(String(prompt))), 'missing plan HITL')
+    const approval=approvalSnapshots.find(row=>/Approve this plan\?/i.test(row.prompt))
+    assert.ok(approval,'missing plan HITL')
+    assert.ok(approval.red.some(row=>row.command===redGreenCommand&&row.passed===false),'RED must already exist when approval is requested')
     assert.ok(toolCalls.some(({ name, input }) => name === 'Write' && input?.file_path === testPath),
       'regression must be written through the production tool during create_tests')
     assert.ok(redRows.some((r) => r.command === redGreenCommand && Number(r.exit_code) !== 0),
@@ -294,7 +297,6 @@ Then the usage is permitted
       'fabricated RED evidence must never be accepted')
   })
 
-  if (reachedRealRedBoundary) {
   await check('CANON-E2E-1: canonical phase order', async () => {
     assert.deepStrictEqual(phasesSeen, [
       'explore', 'diagnose', 'create_issue', 'create_tests', 'planning',
@@ -311,6 +313,8 @@ Then the usage is permitted
       'original RED command must pass after implementation')
     assert.ok(asked.some((prompt) => /Confirm fix and allow commit\?/i.test(String(prompt))),
       'missing final confirmation HITL')
+    const final=approvalSnapshots.find(row=>/Confirm fix and allow commit\?/i.test(row.prompt))
+    assert.ok(final&&new Set(final.safety.filter(row=>row.passed===true).map(row=>row.checkerName||row.checker)).size===3,'all three real checker successes must precede final prompt')
     const passingCheckers = new Set(safetyEvents.filter((event) => event.passed === true)
       .map((event) => event.checkerName || event.checker || event.checker_id))
     assert.ok(passingCheckers.size >= 3, `expected 3 passing safety checkers, got ${passingCheckers.size}`)
@@ -333,13 +337,11 @@ Then the usage is permitted
     const phase = db.prepare('SELECT phase FROM conversations WHERE id = ?').get(cid).phase
     assert.equal(phase, 'idle', 'completed SDLC must return conversation to idle')
   })
-  } else {
-    console.log('BLOCKED CANON-E2E-1 (full phase order), CANON-E2E-4 (GREEN, coverage, safety, final HITL), CANON-E2E-6 (return to idle): upstream executed RED prerequisite absent')
-  }
+
 } finally {
   clearLayaPredictOverride()
   try { if (mock) await mock.close() } catch {}
-  try { if (db) closeStore(db) } catch {}
+  try { if (db) closeStore(dbPath) } catch {}
   try { fs.rmSync(root, { recursive: true, force: true }) } catch {}
 }
 

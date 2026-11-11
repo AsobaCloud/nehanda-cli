@@ -781,7 +781,7 @@ async function mainPipe(opts) {
   const io = {
     write: s => { spinner.stop(); output.write(s) },
     println: s => { spinner.stop(); console.log(s) },
-    ask: async (q) => { spinner.stop(); if (!process.stdin.isTTY) return 'y'; return rl.question(q) },
+    ask: async (q) => { spinner.stop(); if (!process.stdin.isTTY) return ''; return rl.question(q) },
     spinner: { start: (label) => spinner.start(label), stop: () => spinner.stop() },
   }
 
@@ -936,17 +936,11 @@ async function mainPipe(opts) {
       continue
     }
     if (line === '/test') {
-      const phase = getPhase(db, conversationId)
-      if (phase !== 'implement' && phase !== 'create_tests' && phase !== 'verify') { io.println(`  Cannot test in phase: ${phase}`); continue }
-      const plan = db.prepare(`SELECT content FROM plans WHERE conversation_id = ? AND status = 'approved' ORDER BY id DESC LIMIT 1`).get(conversationId)
-      if (!plan) { io.println('  No approved plan.'); continue }
-      const { generateAndRunTests } = await import('../lib/testgen.mjs')
-      settings = getEffectiveSettings(db)
-      const trt = { sessionId, conversationId, runtimeDbPath: dbPath, cwd, bareMode: opts.bare, settings }
-      const results = await generateAndRunTests(db, trt, plan.content, s => io.println(`  ${s}`))
-      if (phase === 'implement' || phase === 'create_tests') setPhase(db, conversationId, 'verify', 'cli_admin')
-      const passed = results.filter(r => r.passed).length
-      io.println(`  Tests: ${passed}/${results.length} passed`)
+      const phase=getPhase(db,conversationId)
+      if(!['create_tests','implement','verify'].includes(phase)){io.println(`  Cannot test in phase: ${phase}`);continue}
+      settings=getEffectiveSettings(db)
+      await runUserTurn(db,{sessionId,conversationId,runtimeDbPath:dbPath,cwd,bareMode:opts.bare,settings,onaInstructions:onaInstructions?.content},
+        phase==='create_tests'?'Create and execute the behavioral regression for the recorded issue. Confirm genuine RED before planning.':'Verify the approved implementation by running the original unchanged regression.',io)
       continue
     }
     if (line === '/verify') {
@@ -961,16 +955,24 @@ async function mainPipe(opts) {
       io.println('  /issue requires interactive mode (run ona in TTY).'); continue
     }
     if (line === '/done') {
-      const phase = getPhase(db, conversationId)
-      if (phase !== 'safety' && phase !== 'confirm_fix' && phase !== 'verify') { io.println('  Must be in verify, safety, or confirm_fix phase.'); continue }
-      setPhase(db, conversationId, 'done', 'cli_admin')
-      const { spawnSync: sp } = await import('node:child_process')
-      const plan = db.prepare(`SELECT content FROM plans WHERE conversation_id = ? AND status = 'approved' ORDER BY id DESC LIMIT 1`).get(conversationId)
-      const planTitle = plan?.content?.split('\n').find(l => l.startsWith('#'))?.replace(/^#+\s*/, '') || 'SDLC workflow complete'
-      sp('git', ['add', '-A'], { cwd, encoding: 'utf8' })
-      const commit = sp('git', ['commit', '-m', `${planTitle}\n\nPlan approved and verified via ona SDLC workflow.`], { cwd, encoding: 'utf8', timeout: 30_000 })
-      const hash = commit.status === 0 ? sp('git', ['rev-parse', '--short', 'HEAD'], { cwd, encoding: 'utf8' }).stdout?.trim() : null
-      io.println(hash ? `  Phase: done ✓ Committed: ${hash}` : `  Phase: done ✓ (commit failed)`); continue
+      const phase=getPhase(db,conversationId),context={}
+      if(phase!=='confirm_fix'||!canTransition(db,conversationId,'done',context)){
+        io.println('  Cannot commit: explicit fix confirmation and the protected completion transition are required.');continue
+      }
+      const plan=db.prepare("SELECT content FROM plans WHERE conversation_id=? AND status='approved' ORDER BY id DESC LIMIT 1").get(conversationId)
+      const issueSection=plan?.content?.match(/##\s*Issue Reference\b([\s\S]*?)(?=\n##\s|$)/i)?.[1]
+      const reference=issueSection?.match(/#(\d+)/)?.[1]
+      if(!reference){io.println('  Cannot commit: approved plan has no issue reference.');continue}
+      if(!setPhase(db,conversationId,'done','cli_admin')){io.println('  Completion transition rejected.');continue}
+      const {spawnSync:sp}=await import('node:child_process')
+      const staged=sp('git',['add','-A'],{cwd,encoding:'utf8',timeout:30000})
+      if(staged.status!==0){io.println('  Git staging failed: '+(staged.stderr||staged.error?.message||'unknown error'));continue}
+      const objective=plan.content.match(/##\s*Objective\s*\n([^\n]+)/i)?.[1]?.trim()||'complete approved SDLC work'
+      const commit=sp('git',['commit','-m',`fix: ${objective.replace(/\s*\(#\d+\)\s*$/, '')} (#${reference})`],{cwd,encoding:'utf8',timeout:30000})
+      if(commit.status!==0){io.println('  Git commit failed: '+(commit.stderr||commit.stdout||commit.error?.message||'unknown error'));continue}
+      const revision=sp('git',['rev-parse','--short','HEAD'],{cwd,encoding:'utf8'})
+      if(revision.status!==0){io.println('  Commit succeeded but revision lookup failed.');continue}
+      io.println('  Phase: done ✓ Committed: '+revision.stdout.trim());continue
     }
     if (line === '/compact') {
       settings = getEffectiveSettings(db)
@@ -1223,8 +1225,9 @@ function runTransition(opts) {
   const ctx = bootstrap(opts)
   const convId = opts.conversation || ctx.conversationId
   const toPhase = opts.transition
-  const check = canTransition(ctx.db, convId, toPhase)
-  if (!check.ok) { console.error(check.reason); process.exit(1) }
+  const context={}
+  const check = canTransition(ctx.db, convId, toPhase,context)
+  if (!check) { console.error(context.lastRejectionReason||'Transition rejected'); process.exit(1) }
   setPhase(ctx.db, convId, toPhase, 'cli_admin')
   console.log(`Phase: \${toPhase}`)
   process.exit(0)

@@ -9,6 +9,8 @@ import test from 'node:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import {spawnSync} from 'node:child_process'
+import {fileURLToPath} from 'node:url'
 import { openStore, closeStore } from '../../lib/store.mjs'
 import { confirmFixGate, runUserTurn } from '../../lib/orchestrate.mjs'
 import { executeBuiltinTool } from '../../lib/tools.mjs'
@@ -110,3 +112,76 @@ test('FINAL-CLEANUP-1: completed real turn returns to idle and clears transient 
     f.close()
   }
 })
+
+// #36 C-5: no input callback cannot stand in for affirmative operator input.
+test('FINAL-HITL-3: missing approval capability cannot authorize completion',async()=>{
+ const f=fixture('missing-ask')
+ try{
+  assert.equal(await confirmFixGate(f.db,f.rt,{println(){}}),false)
+  assert.equal(getPhase(f.db,f.cid),'confirm_fix')
+  assert.equal(eventRows(f,'fix_confirmed').length,0)
+ }finally{f.close()}
+})
+
+for(const phase of ['verify','safety','confirm_fix']){
+ test(`CLI-DONE-${phase}: missing prerequisites cannot stage or commit work`,()=>{
+  const f=fixture('cli-'+phase,phase)
+  try{
+   const git=(args)=>spawnSync('git',args,{cwd:f.cwd,encoding:'utf8',timeout:5000})
+   assert.equal(git(['init']).status,0)
+   git(['config','user.name','Acceptance Fixture']);git(['config','user.email','acceptance@example.invalid'])
+   fs.writeFileSync(path.join(f.cwd,'initial.txt'),'initial')
+   git(['add','.']);assert.equal(git(['commit','-m','fixture baseline']).status,0)
+   const before=git(['rev-parse','HEAD']).stdout.trim()
+   fs.writeFileSync(path.join(f.cwd,'pending.txt'),'must remain uncommitted')
+   // Bootstrap legitimately creates its own conversation. A database fixture
+   // trigger supplies the tested starting state to that newly created row.
+   f.db.exec(`CREATE TRIGGER fixture_start AFTER INSERT ON conversations BEGIN UPDATE conversations SET phase='${phase}' WHERE id=NEW.id; END;`)
+   const entry=fileURLToPath(new URL('../../bin/agent.mjs',import.meta.url))
+   const child=spawnSync(process.execPath,['--no-warnings','--experimental-loader',fileURLToPath(new URL('../fixtures/layaSidecarLoader.mjs',import.meta.url)),entry,'--bare','--cwd',f.cwd],{
+    cwd:f.cwd,encoding:'utf8',timeout:15000,input:'/done\n',
+    env:{...process.env,HOME:f.root,NEHANDA_HOME:path.join(f.root,'nehanda'),AGENT_SDLC_DB:f.dbPath,SDLC_DISABLE_ALL_HOOKS:'1',LM_STUDIO_MODEL:'fixture',LAYA_TIMEOUT_MS:'10'},
+   })
+   assert.equal(child.error,undefined,child.error?.message)
+   assert.equal(child.status,0,child.stderr)
+   assert.doesNotMatch(child.stdout,/Phase: done.*[✓]/,'must not falsely report completion')
+   assert.equal(git(['rev-parse','HEAD']).stdout.trim(),before,'no commit without gate clearance')
+   assert.equal(git(['diff','--cached','--name-only']).stdout,'','must not stage pending work')
+   assert.match(git(['status','--short']).stdout,/pending\.txt/)
+  }finally{f.close()}
+ })
+}
+for (const failure of [null,'staging','commit']) {
+test(failure ? `CLI-DONE-${failure}-failure: Git failure cannot report a successful commit` : 'CLI-DONE-authorized: recorded authorization permits an issue-referenced commit',()=>{
+ const f=fixture('cli-authorized','confirm_fix')
+ try{
+  const git=(args)=>spawnSync('git',args,{cwd:f.cwd,encoding:'utf8',timeout:5000})
+  git(['init']);git(['config','user.name','Acceptance Fixture']);git(['config','user.email','acceptance@example.invalid'])
+  fs.writeFileSync(path.join(f.cwd,'initial.txt'),'initial');git(['add','.']);assert.equal(git(['commit','-m','baseline']).status,0)
+  const before=git(['rev-parse','HEAD']).stdout.trim()
+  fs.writeFileSync(path.join(f.cwd,'pending.txt'),'authorized work')
+  if(failure==='staging')fs.writeFileSync(path.join(f.cwd,'.git','index.lock'),'fixture lock')
+  if(failure==='commit'){
+   const hook=path.join(f.cwd,'.git','hooks','pre-commit')
+   fs.writeFileSync(hook,'#!/bin/sh\nexit 1\n');fs.chmodSync(hook,0o755)
+  }
+  const plan='## Issue Reference\n#36\n## Objective\nFix equality boundary (#36)'
+  f.db.exec(`CREATE TRIGGER fixture_authorized AFTER INSERT ON conversations BEGIN
+   UPDATE conversations SET phase='confirm_fix' WHERE id=NEW.id;
+   INSERT INTO events(conversation_id,event_type,detail) VALUES(NEW.id,'fix_confirmed','{"approved":true}');
+   INSERT INTO plans(conversation_id,content,hash,status) VALUES(NEW.id,'${plan}','fixture','approved');
+  END;`)
+  const child=spawnSync(process.execPath,['--no-warnings','--experimental-loader',fileURLToPath(new URL('../fixtures/layaSidecarLoader.mjs',import.meta.url)),fileURLToPath(new URL('../../bin/agent.mjs',import.meta.url)),'--bare','--cwd',f.cwd],{
+   cwd:f.cwd,encoding:'utf8',timeout:15000,input:'/done\n',env:{...process.env,HOME:f.root,NEHANDA_HOME:path.join(f.root,'nehanda'),AGENT_SDLC_DB:f.dbPath,SDLC_DISABLE_ALL_HOOKS:'1',LM_STUDIO_MODEL:'fixture',LAYA_TIMEOUT_MS:'10'},
+  })
+  assert.equal(child.error,undefined,child.error?.message);assert.equal(child.status,0,child.stderr)
+  if(failure){
+   assert.equal(git(['rev-parse','HEAD']).stdout.trim(),before,'failed Git command cannot create a commit')
+   assert.match(child.stdout,failure==='staging'?/Git staging failed/:/Git commit failed/)
+   assert.doesNotMatch(child.stdout,/Phase: done.*✓.*Committed:/)
+  }else assert.match(git(['log','-1','--format=%B']).stdout,/#36/,'commit must preserve the actual issue reference')
+  assert.equal(getPhase(f.db,f.db.prepare('SELECT id FROM conversations WHERE id<>? ORDER BY rowid DESC LIMIT 1').get(f.cid).id),'done')
+ }finally{f.close()}
+})
+
+}

@@ -1,181 +1,54 @@
-#!/usr/bin/env node
-/**
- * #36 — Hard invariant: RED evidence precedes Plan HITL approval.
- * Phase sequence exercised: create_tests -> planning -> implement.
- */
-
+/** #36 C-3/C-4: real behavioral RED before any approval; no fabricated evidence. */
+import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
-import { openStore, closeStore } from '../../lib/store.mjs'
-import { setPhase, getPhase, canTransition, recordRedTestEvidence } from '../../lib/workflow.mjs'
-import { planGate } from '../../lib/orchestrate.mjs'
+import { fixture, actualRed, validPlan, yesIo } from '../fixtures/sdlcAcceptance.mjs'
+import { canTransition, getPhase } from '../../lib/workflow.mjs'
+import { planGate, createTestsGate } from '../../lib/orchestrate.mjs'
+import { executeBuiltinTool } from '../../lib/tools.mjs'
 
-let passed = 0
-let failed = 0
-
-async function test(label, fn) {
-  process.stdout.write(`\n${label}: `)
+test('RB-1: Given valid plan without RED, When approving, Then no HITL or transition', async () => {
+  const f=fixture('no-red','create_tests'); let asks=0
   try {
-    await fn()
-    passed += 1
-    console.log('PASS')
-  } catch (err) {
-    failed += 1
-    process.exitCode = 1
-    console.error('FAIL')
-    console.error(err?.stack || err?.message || err)
-  }
+    assert.equal(canTransition(f.db,f.cid,'planning'),false)
+    assert.equal(await planGate(f.db,f.rt,{println(){},async ask(){asks++;return 'y'}},validPlan),false)
+    assert.equal(asks,0); assert.equal(getPhase(f.db,f.cid),'create_tests')
+  } finally { f.close() }
+})
+test('RB-2: Given executed behavioral failure, When RED gate runs, Then planning is unlocked', async () => {
+  const f=fixture('real-red','create_tests')
+  try { await actualRed(f); assert.equal(getPhase(f.db,f.cid),'planning') } finally { f.close() }
+})
+for (const [label,answer,expected] of [['yes','y',true],['no','n',false],['empty','',false],['missing',null,false]]) {
+  test(`RB-3-${label}: Given real RED and valid plan, When approval is ${label}, Then implementation authorization is ${expected}`,async()=>{
+    const f=fixture(`approval-${label}`,'create_tests')
+    try {
+      await actualRed(f)
+      const io=answer===null?{println(){}}:{println(){},async ask(){return answer}}
+      assert.equal(await planGate(f.db,f.rt,io,validPlan),expected)
+      assert.equal(getPhase(f.db,f.cid),expected?'implement':'planning')
+      assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM plans WHERE conversation_id=? AND status='approved'").get(f.cid).n,expected?1:0)
+    } finally { f.close() }
+  })
 }
-
-function workspace(prefix) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
-  const cwd = path.join(root, 'repo')
-  fs.mkdirSync(cwd, { recursive: true })
-  const dbPath = path.join(root, 'red-before-plan.db')
-  return { root, cwd, dbPath }
+for (const [name,command,prepare] of [
+  ['arbitrary-failure','false'],
+  ['missing-executable','nehanda_definitely_missing_command_3637'],
+  ['missing-test','node --test tests/missing.test.mjs'],
+  ['syntax-error','node --test tests/syntax.test.mjs',"this is not javascript !!!"],
+  ['fabricated-output',"printf 'AssertionError\\n' node tests/syntax.test.mjs; false",'// this file is never executed'],
+  ['timeout','exec node tests/hang.mjs','setInterval(() => {},1000)'],
+]) {
+  test(`RB-NEG-${name}: Given ${name}, When command fails, Then it cannot count as behavioral RED`,async()=>{
+    const f=fixture(`red-${name}`,'create_tests')
+    try {
+      fs.mkdirSync(path.join(f.cwd,'tests'))
+      if(prepare) fs.writeFileSync(path.join(f.cwd,'tests',name==='timeout'?'hang.mjs':'syntax.test.mjs'),prepare)
+      const result=await executeBuiltinTool(f.db,f.rt,'Bash',{command,timeout:name==='timeout'?100:5000},yesIo)
+      assert.equal(result.is_error,true,'negative control really must fail')
+      assert.equal(await createTestsGate(f.db,f.rt,yesIo),false)
+      assert.equal(getPhase(f.db,f.cid),'create_tests')
+    } finally { f.close() }
+  })
 }
-
-const invalidPlanText = 'Draft plan with no AGENTS.md required sections.'
-
-const validPlanText = `## Issue Reference
-#42
-## Behavioral Specification
-Given a bounded conversation phase and recorded RED evidence,
-When planGate receives operator approval,
-Then the plan is stored as approved and the workflow advances to implementation.
-## Coverage Matrix
-| Scenario | Test | Status |
-|---|---|---|
-| approval | RB-3 | PASS |
-`
-
-await test('RB-1: no RED evidence blocks planning and planGate avoids approval prompt', async () => {
-  const { root, cwd, dbPath } = workspace('rb1-')
-  const db = openStore(dbPath)
-  const cid = 'conv-rb1'
-  db.prepare(
-    `INSERT INTO conversations (id, project_dir, phase) VALUES (?, ?, 'create_tests')`
-  ).run(cid, cwd)
-  const rt = { conversationId: cid, cwd }
-  const asked = []
-  const io = {
-    println() {},
-    async ask(question) {
-      asked.push(question)
-      return 'n'
-    },
-  }
-
-  try {
-    assert.equal(
-      canTransition(db, cid, 'planning'),
-      false,
-      'RB-1: planning must require RED evidence'
-    )
-
-    const accepted = await planGate(db, rt, io, invalidPlanText)
-    assert.equal(accepted, false, 'RB-1: structurally rejected plan must not be approved')
-    assert.equal(
-      asked.length,
-      0,
-      `RB-1: planGate must not reach the approval prompt, saw ${asked.join(' | ')}`
-    )
-  } finally {
-    try {
-      closeStore(dbPath)
-    } catch {}
-    try {
-      fs.rmSync(root, { recursive: true, force: true })
-    } catch {}
-  }
-})
-
-await test('RB-2: recorded RED evidence allows create_tests -> planning', async () => {
-  const { root, cwd, dbPath } = workspace('rb2-')
-  const db = openStore(dbPath)
-  const cid = 'conv-rb2'
-  db.prepare(
-    `INSERT INTO conversations (id, project_dir, phase) VALUES (?, ?, 'create_tests')`
-  ).run(cid, cwd)
-
-  try {
-    recordRedTestEvidence(db, cid, {
-      command: 'node tests/unit/test-red-before-plan-hitl-behavioral.mjs',
-      exit_code: 1,
-      output_digest: 'intentional RED evidence',
-    })
-
-    const ok = setPhase(db, cid, 'planning')
-    assert.equal(ok, true, 'RB-2: RED evidence should allow the planning transition')
-    assert.equal(getPhase(db, cid), 'planning', 'RB-2: phase should become planning')
-  } finally {
-    try {
-      closeStore(dbPath)
-    } catch {}
-    try {
-      fs.rmSync(root, { recursive: true, force: true })
-    } catch {}
-  }
-})
-
-await test('RB-3: HITL approval persists an approved plan after RED evidence', async () => {
-  const { root, cwd, dbPath } = workspace('rb3-')
-  const db = openStore(dbPath)
-  const cid = 'conv-rb3'
-  db.prepare(
-    `INSERT INTO conversations (id, project_dir, phase) VALUES (?, ?, 'planning')`
-  ).run(cid, cwd)
-
-  try {
-    recordRedTestEvidence(db, cid, {
-      command: 'node tests/unit/test-red-before-plan-hitl-behavioral.mjs',
-      exit_code: 1,
-      output_digest: 'intentional RED evidence',
-    })
-
-    const rt = { conversationId: cid, cwd }
-    const asked = []
-    const io = {
-      println() {},
-      async ask(question) {
-        asked.push(question)
-        return 'y'
-      },
-    }
-
-    const accepted = await planGate(db, rt, io, validPlanText)
-    assert.equal(accepted, true, 'RB-3: approved plan should make planGate succeed')
-
-    const phase = getPhase(db, cid)
-    assert.equal(
-      phase,
-      'implement',
-      `RB-3: approved planning must hand off to implement, got ${phase}`
-    )
-
-    const plan = db
-      .prepare(
-        `SELECT status FROM plans WHERE conversation_id = ? ORDER BY id DESC LIMIT 1`
-      )
-      .get(cid)
-    assert.ok(plan, 'RB-3: approved plan must be persisted')
-    assert.equal(plan.status, 'approved', 'RB-3: persisted plan must be approved')
-
-    assert.ok(
-      asked.some((question) => /Approve this plan\?/i.test(question)),
-      'RB-3: planGate must record the operator approval prompt'
-    )
-  } finally {
-    try {
-      closeStore(dbPath)
-    } catch {}
-    try {
-      fs.rmSync(root, { recursive: true, force: true })
-    } catch {}
-  }
-})
-
-console.log(`\n${passed} passed, ${failed} failed`)
-if (failed > 0) process.exitCode = 1

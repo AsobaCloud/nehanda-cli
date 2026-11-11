@@ -37,7 +37,7 @@ function makeTestDb() {
       tool_use_id TEXT, created_at TEXT DEFAULT (datetime('now'))
     );
   `)
-  db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES ('test-conv','.',  'idle')`).run()
+  db.prepare(`INSERT INTO conversations(id, project_dir, phase) VALUES ('test-conv','.',  'implement')`).run()
   return db
 }
 
@@ -59,7 +59,7 @@ function makeStubs({ confirmBlockResult = 'cancel' } = {}) {
     println: () => {},
     write: () => {},
   }
-  const ctx = { sessionId: `test-session-${++_stubSeq}`, conversationId: 'test-conv', phase: 'idle' }
+  const ctx = { sessionId: `test-session-${++_stubSeq}`, conversationId: 'test-conv', phase: 'implement' }
   return { io, ctx, calls }
 }
 

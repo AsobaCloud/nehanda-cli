@@ -188,6 +188,8 @@ CREATE TABLE IF NOT EXISTS red_evidence (
   command TEXT NOT NULL,
   exit_code INTEGER NOT NULL,
   output_digest TEXT NOT NULL,
+  source TEXT DEFAULT 'manual',
+  execution_json TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -201,3 +203,17 @@ CREATE TABLE IF NOT EXISTS safety_evidence (
   path_coverage REAL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- #36: provenance of executed behavioral tests, distinct from compatibility RED rows.
+CREATE TABLE IF NOT EXISTS test_executions (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  command TEXT NOT NULL,
+  exit_code INTEGER NOT NULL,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER NOT NULL,
+  classification TEXT NOT NULL,
+  evidence_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_test_executions_conversation ON test_executions(conversation_id, finished_at);

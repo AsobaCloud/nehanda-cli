@@ -61,10 +61,10 @@ await (async () => {
       const ctx = { cwd: env.dir, conversationId: env.cid, sessionId: env.sid, settings: {} }
       const first = await executeBuiltinTool(env.db, ctx, 'Read', { file_path: 'MAP.md' }, io)
       assert.equal(first.is_error, false)
-      // explore→planning requires an events row (workflow canTransition prerequisite)
-      env.db.prepare(`INSERT INTO events(conversation_id, event_type, detail) VALUES (?, 'phase', ?)`).run(env.cid, 'explore')
-      const advanced = setPhase(env.db, env.cid, 'planning', 'test')
-      assert.equal(advanced, true, 'READCACHE-3: setPhase explore→planning must succeed with explore event present')
+      // explore→diagnose requires an events row (workflow canTransition prerequisite)
+      env.db.prepare(`INSERT INTO events(conversation_id, event_type, detail) VALUES (?, 'exploration_complete', ?)`).run(env.cid, 'explore')
+      const advanced = setPhase(env.db, env.cid, 'diagnose', 'test')
+      assert.equal(advanced, true, 'READCACHE-3: setPhase explore→diagnose must succeed with explore event present')
       const second = await executeBuiltinTool(env.db, ctx, 'Read', { file_path: 'MAP.md' }, io)
       assert.equal(second.is_error, false)
     } finally { env.cleanup() }
@@ -77,10 +77,10 @@ await (async () => {
       await executeBuiltinTool(env.db, ctx, 'Read', { file_path: 'MAP.md' }, io)
       const n1 = env.db.prepare(`SELECT COUNT(*) AS n FROM memories`).get().n
       assert.ok(n1 >= 1, 'READCACHE-5: first explore Read must ingest')
-      env.db.prepare(`INSERT INTO events(conversation_id, event_type, detail) VALUES (?, 'phase', ?)`).run(env.cid, 'explore')
-      assert.equal(setPhase(env.db, env.cid, 'planning', 'test'), true)
-      // Return to explore for a new sweep (direct UPDATE simulates harness re-entry)
-      env.db.prepare(`UPDATE conversations SET phase = 'explore' WHERE id = ?`).run(env.cid)
+      env.db.prepare(`INSERT INTO events(conversation_id, event_type, detail) VALUES (?, 'exploration_complete', ?)`).run(env.cid, 'explore')
+      assert.equal(setPhase(env.db, env.cid, 'diagnose', 'test'), true)
+      // Return through the legal diagnose -> explore edge; no test-side cache reset.
+      assert.equal(setPhase(env.db,env.cid,'explore'),true)
       const again = await executeBuiltinTool(env.db, ctx, 'Read', { file_path: 'MAP.md' }, io)
       assert.equal(again.is_error, false, 'READCACHE-5: after re-entry, MAP Read must be allowed again')
       const n2 = env.db.prepare(`SELECT COUNT(*) AS n FROM memories`).get().n

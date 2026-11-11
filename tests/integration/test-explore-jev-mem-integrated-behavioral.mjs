@@ -363,6 +363,14 @@ await test('IJ-3-NEG: insufficient graph allows the real exploration Read throug
 })
 
 await test('IJ-4: request 21 is blocked; forced saturation persists evidence and hands off to diagnose', async () => {
+  // This case isolates the hard budget, so the external controller must keep
+  // requesting more evidence rather than taking the separate sufficiency exit.
+  setLayaPredictOverride(async () => ({ answers: {
+    ...layaOverride.answers,
+    sufficient: { noul: 0.05 },
+    further_utility: { noul: 0.95 },
+    missing_required: { noul: 0.95 },
+  } }))
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ij4-'))
   const repo = path.join(dir, 'repo')
   fs.mkdirSync(repo, { recursive: true })
@@ -387,21 +395,31 @@ await test('IJ-4: request 21 is blocked; forced saturation persists evidence and
       'IJ-4 precondition: no saturation event before the run'
     )
 
-    // No model reply says "Exploration complete." during exploration. Each
-    // response asks for another Read, so request 21 would be necessary to
-    // continue normally. The production request budget must stop it instead.
+    // Productive distinct reads isolate the hard ceiling from the independent
+    // <=2-attempt duplicate-MAP convergence contract. No model reply concedes
+    // completion: the harness must still block explore request 21.
     const EXPLORE_LIMIT = 20
-    for (let i = 0; i < EXPLORE_LIMIT; i++) {
-      mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: 'MAP.md' }))
+    fs.mkdirSync(path.join(repo, 'src'))
+    const paths = ['MAP.md']
+    for (let i = 1; i < EXPLORE_LIMIT; i++) {
+      const file = `src/endpoint-${i}.mjs`
+      fs.writeFileSync(path.join(repo, file), `export const endpoint${i} = ${i}\n`)
+      paths.push(file)
     }
-    // The explore gate may request a file summary AFTER saturation; this reply
-    // is for that downstream summarization, not a 21st explore-phase request.
-    mock.queueResponse(makeOpenAiTextChunks('MAP.md identifies src/index.mjs as the router.'))
+    fs.writeFileSync(path.join(repo, 'MAP.md'), '# MAP\n' + paths.slice(1).join('\n'))
+    for (const file of paths) {
+      mock.queueResponse(makeOpenAiToolCallChunks('Read', { file_path: file }))
+    }
+    // File summaries occur only after saturation and do not consume the
+    // exploration request budget.
+    for (const file of paths) mock.queueResponse(makeOpenAiTextChunks(`Evidence from ${file} retained.`))
 
     let saturationModelRequests = null
     let saturationPhase = null
     let saturationNotice = null
     let diagnoseEntered = false
+    const dispatchedPaths = []
+    let successfulReads = 0
     const reachedHandoff = new Error('IJ-4: observed completed explore -> diagnose handoff')
     const autoIo = {
       ask: async () => 'y',
@@ -420,8 +438,8 @@ await test('IJ-4: request 21 is blocked; forced saturation persists evidence and
         }
       },
       write: () => {},
-      onToolStart: () => {},
-      onToolResult: () => {},
+      onToolStart: (name, input) => { if (name === 'Read') dispatchedPaths.push(input.file_path) },
+      onToolResult: (name, content, error) => { if (name === 'Read' && !error) successfulReads++ },
     }
     const rt = {
       sessionId: sid,
@@ -446,6 +464,8 @@ await test('IJ-4: request 21 is blocked; forced saturation persists evidence and
     )
 
     assert.equal(saturationPhase, 'explore', 'saturation must occur while still in explore')
+    assert.deepEqual(dispatchedPaths, paths, `hard cap must be reached through distinct productive reads; dispatched ${JSON.stringify(dispatchedPaths)}`)
+    assert.equal(successfulReads, EXPLORE_LIMIT, 'every budgeted request must produce new file evidence')
     assert.equal(
       saturationModelRequests,
       EXPLORE_LIMIT,
@@ -480,6 +500,7 @@ await test('IJ-4: request 21 is blocked; forced saturation persists evidence and
     assert.match(String(digestText), /MAP\.md/, 'pinned digest must identify the file actually explored')
     assert.equal(digestEntry.session_id, sid, 'pinned digest must belong to the test session')
   } finally {
+    setLayaPredictOverride(async () => layaOverride)
     try { await mock.close() } finally {
       closeStore(dbPath)
       fs.rmSync(dir, { recursive: true, force: true })
@@ -499,6 +520,44 @@ await test('IJ-CTRL: upsertPinnedContext round-trip (module contract)', async ()
   assert.equal(blocks[0].key, 'explore_candidates_snapshot')
   closeStore(dbPath)
   fs.rmSync(dir, { recursive: true, force: true })
+})
+
+await test('IJ-5: empty graph -> MAP -> targeted code -> Jev -> forced handoff in one production turn',async()=>{
+  const {fixture,providerRt,layaAnswers}=await import('../fixtures/sdlcAcceptance.mjs')
+  const f=fixture('map-territory','idle');let mock
+  setLayaPredictOverride(async()=>layaAnswers(0.05))
+  try{
+    fs.mkdirSync(path.join(f.cwd,'docs'));fs.mkdirSync(path.join(f.cwd,'src'))
+    fs.writeFileSync(path.join(f.cwd,'docs/MAP.md'),'# MAP\nAdmission implementation: src/admission.mjs\n')
+    fs.writeFileSync(path.join(f.cwd,'src/admission.mjs'),'export const admitsEquality = (used,limit) => used < limit\n')
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM memories').get().n,0)
+    mock=await startMockLlmServer()
+    mock.queueResponse(makeOpenAiToolCallChunks('Read',{file_path:'docs/MAP.md'}))
+    mock.queueResponse(makeOpenAiToolCallChunks('Read',{file_path:'src/admission.mjs'}))
+    for(let n=0;n<25;n++)mock.queueResponse(makeOpenAiToolCallChunks('Read',{file_path:'src/admission.mjs'}))
+    const reads=[],nextRequests=[];const handoff=new Error('observed-real-handoff')
+    try{
+      await runUserTurn(f.db,providerRt(f,mock),'Review the admission equality rule (#37)',{
+        ...io,
+        onToolStart(name,input){if(name==='Read')reads.push(input.file_path)},
+        println(message){if(/Entering diagnose phase/.test(message))throw handoff},
+      })
+    }catch(error){if(error!==handoff)throw error}
+    assert.deepEqual(reads.slice(0,2),['docs/MAP.md','src/admission.mjs'])
+    const nodes=f.db.prepare('SELECT id,content,entities_json,title FROM memories WHERE conversation_id=?').all(f.cid)
+    assert.ok(nodes.some(n=>n.content.includes('admitsEquality')),'source must be automatically ingested')
+    // All actual Read calls enter production, which owns duplicate rejection.
+    const sourceNodes=nodes.filter(n=>n.title==='Tool Execution: Read'&&n.content.includes('admitsEquality'))
+    assert.equal(sourceNodes.length,1,'duplicates must not ingest the source again')
+    const retrieved=await retrieveEvidence(f.db,'admitsEquality src/admission.mjs',{sessionId:f.sid,conversationId:f.cid,layaOpts:{timeoutMs:50}})
+    assert.ok(retrieved.evidence.some(n=>n.content.includes('admitsEquality')),'real retrieval must return the ingested territory')
+    const later=mock.requests.filter(q=>q.url.includes('/chat/completions')).slice(2)
+    assert.ok(later.some(q=>JSON.stringify(q.body.messages).includes('admitsEquality')),'next production System-2 request must contain retained evidence')
+    assert.ok(later.some(q=>/CANONICAL/i.test(JSON.stringify(q.body.messages))),'next request must use canonical System-2 context')
+    assert.equal(getPhase(f.db,f.cid),'diagnose','model never conceded exploration completion')
+    const pinned=getPinnedContextBlocks(f.db,f.sid)
+    assert.ok(pinned.some(p=>p.key==='explore_candidates_snapshot'&&p.content.includes('src/admission.mjs')),'production must pin the targeted evidence digest')
+  }finally{if(mock)await mock.close();f.close();setLayaPredictOverride(async()=>layaOverride)}
 })
 
 clearLayaPredictOverride()
