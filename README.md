@@ -82,29 +82,23 @@ Local Ollama / LM Studio: pick that provider in `/model`, accept or edit the hos
 
 ---
 
-## Docker sandbox setup
+## Sandbox setup
 
-The safety menu's **S** option executes the command in a local Docker container against a disposable project copy. Networking is disabled, host credentials are not forwarded, and file changes are discarded. Execution uses a nonroot user, a read-only container root, dropped capabilities, and CPU/memory/process limits. **A** continues to mean approval for execution on the host; **C** cancels.
+The safety menu's **S** option executes the command in an OS-primitives sandbox against a disposable project copy. On macOS it uses the built-in seatbelt framework (`/usr/bin/sandbox-exec`) with a deny-default profile; on Linux it uses `bubblewrap` (`bwrap` — `apt install bubblewrap` / `dnf install bubblewrap` / `pacman -S bubblewrap`). Writes are confined to the disposable copy, network egress is denied by default, host credentials are not forwarded, and changes are discarded. **A** continues to mean approval for execution on the host; **C** cancels. No container daemon, images, or image builds are required or used.
 
-Build the development image once from this repository root (Docker must be running):
+Isolation model: reads are not confined (the same trade-off as upstream OS-sandbox implementations); writes and network are. The filtered project copy (256 MiB / 10,000 entries / depth 64, credential and dependency paths skipped, symlink traversal refused) is made writable, used as the command's working directory and `HOME`, and discarded afterward; no changes persist. Host Python 3 is required for the project snapshot.
 
-```bash
-docker build -t nehanda-sandbox:node22 -f lib/sandbox/Dockerfile lib/sandbox
-```
+Optional egress allowlist: set `NEHANDA_SANDBOX_ALLOWLIST` (comma-separated hostnames, e.g. `registry.npmjs.org,github.com`) in the environment before launching nehanda. Sandboxed processes can then send HTTP/HTTPS through a unix-domain-socket forward proxy — `NEHANDA_SANDBOX_PROXY_SOCKET` is set automatically inside the sandbox — which permits exactly the configured hosts and refuses everything else. Unset or empty ⇒ no egress at all. Note that no mainstream HTTP client honors a unix-socket proxy variable automatically; commands must target the socket path (node clients do this natively). The allowlist is held by the host process; sandboxed commands cannot read or change it.
 
-The image provides Node 22, Python 3, Git, and Bash. Image construction downloads its base/packages; sandbox commands themselves have no network. Runtime execution never pulls an image automatically. `NEHANDA_SANDBOX_IMAGE` can select an already-built local development image. The backend accepts only a local Docker Unix socket, not a remote Docker endpoint. Host Python 3 is required for the project snapshot.
+The sandbox inspects the actual exit code and returns stdout/stderr with bounded output. Esc, timeout, missing `sandbox-exec`/`bwrap`, an unsupported platform, snapshot failure, or runtime failure returns an error and never falls back to host execution. Temporary copies and proxy sockets are removed; cleanup failures are reported as errors. The TUI does not change the host working directory for a sandbox command. `NEHANDA_SANDBOX_BACKEND=darwin|linux` overrides platform detection (used by tests and CI).
 
-The snapshot skips symlinks and special files, Git metadata, common credential/configuration paths (`.env`/`.env.*`, `.ssh`, `.aws`, `.azure`, `.config`, `.ona`, `.nehanda`, `.gnupg`, `.kube`, `.docker`, `.npmrc`, `.pypirc`, `.netrc`, `.pem` and `.key` files), and dependency/cache directories (`node_modules`, `.venv`, `venv`, `.cache`, `.pytest_cache`, `__pycache__`). It is limited to 256 MiB, 10,000 entries, and depth 64. Project-specific dependencies must be available in a prepared image or the copied source; the sandbox does not install them or include Git history.
-
-The sandbox inspects the actual exit code and returns stdout/stderr with bounded output. Esc, timeout, missing Docker/image, copy failure, or runtime failure returns an error and never falls back to host execution. Owned containers and project copies are removed; cleanup failures are reported as errors. The TUI does not change the host working directory for a sandbox command.
-
-Run the required real-container acceptance gate after building the image:
+Run the required acceptance gate:
 
 ```bash
 npm run test:sandbox
 ```
 
-`npm run test:unit` runs the core TUI suite without Docker cases. `npm run test:sandbox` runs 14 real-tool scenarios and both actual-terminal sandbox menu/cancellation scenarios; Docker absence is a failure in that gate, not a skipped or passing isolation result.
+`npm run test:unit` runs the core TUI suite without sandbox cases. `npm run test:sandbox` runs the OS-primitives behavioral suite plus the 14 retargeted real-tool scenarios; a missing or broken sandbox primitive is a failure in that gate, not a skipped result. A fresh macOS/Linux machine gate is tracked by issue #40.
 
 ---
 
@@ -124,7 +118,7 @@ npm run test:sandbox
 
 * **Deterministic SDLC Workflow:** Enforces an 11-phase state machine (`idle` → `explore` → `diagnose` → `create_issue` → `create_tests` → `planning` → `implement` → `verify` → `safety` → `confirm_fix` → `done`) following the AGENTS.md TDD mandate. Transitions are gated: `create_tests → planning` requires RED behavioral test evidence; `planning → implement` is blocked until an approved plan exists and the prior RED test is recorded; `verify → safety` requires a GREEN test result; `safety → confirm_fix` requires all three safety checkers to pass and at least 70% measured production branch coverage.
 
-* **Interactive Safety Interventions:** When execution checkers flag a command — opening local sockets, inspecting HIL testbed hardware paths, or writing outside the working directory — the engine raises a structured `{ status, reason, risk_score, proposed_remediation }` payload rather than crashing. In the TUI, blocked operations surface a `BlockConfirmMenu` (`[A] Approve for Session | [S] Run in Docker Sandbox | [C] Cancel`) wired directly into the Ink event loop. Session approvals are cached so the same operation is not re-prompted within a session. Headless pipe mode auto-denies without prompting.
+* **Interactive Safety Interventions:** When execution checkers flag a command — opening local sockets, inspecting HIL testbed hardware paths, or writing outside the working directory — the engine raises a structured `{ status, reason, risk_score, proposed_remediation }` payload rather than crashing. In the TUI, blocked operations surface a `BlockConfirmMenu` (`[A] Approve for Session | [S] Run in OS Sandbox | [C] Cancel`) wired directly into the Ink event loop. Session approvals are cached so the same operation is not re-prompted within a session. Headless pipe mode auto-denies without prompting.
 
   **Laya second-stage gate (Gap A, #4):** For `medium-risk` blocked commands, a Laya `noul` question (`is_safe_to_auto_approve`) runs before raising `BlockConfirmMenu`. If Laya returns `≥ 0.85` confidence the command is benign, it is auto-approved and cached without operator prompt. `high-risk` commands always bypass Laya and go directly to `BlockConfirmMenu`. Degraded Laya falls through to existing behavior — no regression. Implementation uses a flag variable (`layaAutoApproved`) rather than extracting the bash execution path into a named helper; see `docs/MAP.md §Gap A` for rationale.
 
