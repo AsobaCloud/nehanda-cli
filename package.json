@@ -57,7 +57,7 @@
     "test:bugs": "bash tests/bugs/run-all.sh",
     "test:property": "bash tests/property/run-settings-persistence-tests.sh",
     "test:unit": "bash tests/unit/run-all.sh",
-    "test:sandbox": "node tests/unit/sandbox_execution_behavioral.mjs && python3 tests/unit/tui_usability_behavioral.py TuiUsabilityBehavioral.test_sandbox_1_menu_executes_in_a_disposable_copy TuiUsabilityBehavioral.test_sandbox_2_escape_removes_the_running_container"
+    "test:sandbox": "node tests/unit/sandbox_os_behavioral.mjs && node tests/unit/sandbox_execution_behavioral.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

@@ -534,7 +534,7 @@ function BlockConfirmMenu({ payload, onDecide }) {
       e(Text, { bold: true, color: BRAND.accent }, '[A]'),
       e(Text, {}, ' Approve for Session  '),
       e(Text, { bold: true, color: BRAND.lavender }, '[S]'),
-      e(Text, {}, ' Run in Docker Sandbox  '),
+      e(Text, {}, ' Run in OS Sandbox  '),
       e(Text, { bold: true, color: BRAND.dim }, '[C]'),
       e(Text, {}, ' Cancel')))
 }
@@ -621,7 +621,7 @@ function App({ bridge }) {
   const handleSelectCancel = React.useCallback(() => { selectState?.resolve(null); setSelectState(null) }, [selectState])
   const handleBlock = React.useCallback(decision => {
     if (blockState?.resolve) {
-      const label = decision === 'approve' ? '✓ Approved for session' : decision === 'sandbox' ? '⚙ Preparing Docker sandbox' : '✗ Cancelled'
+      const label = decision === 'approve' ? '✓ Approved for session' : decision === 'sandbox' ? '⚙ Preparing sandbox' : '✗ Cancelled'
       setFinalized(p => [...p, { role: 'system', text: `  ${label}` }])
       blockState.resolve(decision)
     }
