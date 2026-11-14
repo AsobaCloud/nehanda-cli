@@ -1,5 +1,6 @@
 # Issue #0045: feat: generate and verify SHA256 checksums for build artifacts (#13 follow-up)
-Status: open
+Status: closed
+Closed: 2026-11-14T16:08:48Z (31068fc8)
 Created: 2026-11-14T14:57:00Z
 GitHub Issue: https://github.com/AsobaCloud/nehanda-cli/issues/45
 Project: #4 (Ona Roadmap)
