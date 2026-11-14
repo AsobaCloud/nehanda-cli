@@ -9,11 +9,12 @@ Compress required core runtime files, schemas, and npm manifests into a distribu
   ```bash
   tar -czvf nehanda-cli-latest.tar.gz bin/ lib/ templates/ schema.sql package.json package-lock.json
   ```
-  (Or, since #13: `scripts/build-artifacts.sh` rebuilds all artifacts, including `install.sh` alongside + inside the tarball.)
-* Copy tar.gz **and** `scripts/install.sh` to the /releases folder at the web root of the asoba.co website
-* install.sh in that same location runs the install (`curl -fsSL https://asoba.co/releases/install.sh | sh`)
+  (Or, since #13: `scripts/build-artifacts.sh` rebuilds all artifacts, including `install.sh` alongside + inside the tarball, and generates `SHA256SUMS` (#45).)
+* Copy tar.gz, `SHA256SUMS`, **and** `scripts/install.sh` to the /releases folder at the web root of the asoba.co website
+* install.sh in that same location runs the install (`curl -fsSL https://asoba.co/releases/install.sh | sh`) and verifies the archive against `SHA256SUMS`
 
 **Artifacts also rebuilt by the same script:**
+* `SHA256SUMS` — cryptographic digests for `nehanda-cli-latest.tar.gz`, `nehanda-cli.bin`, and `Nehanda-CLI.dmg` (#45)
 * `nehanda-cli.bin` — makeself (label "Nehanda CLI Installer"), Linux self-extractor: payload + `install.sh`, extraction verified via `diff -rq` against the repo before shipping
 * `Nehanda-CLI.dmg` — macOS UDZO image: `Install.command` (from prior DMG) + payload + `install.sh`
 

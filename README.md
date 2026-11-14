@@ -26,6 +26,14 @@ npm install -g @asobacloud/nehanda
 
 During install, `npm` automatically provisions a dedicated Python venv and downloads the [Laya](https://huggingface.co/convaiinnovations/laya) checkpoint (~808 MB). This happens once — subsequent starts are instant.
 
+**Single-line curl installer:**
+
+```bash
+curl -fsSL https://asoba.co/releases/install.sh | sh
+```
+
+`install.sh` retrieves `nehanda-cli-latest.tar.gz` and automatically validates its SHA-256 digest against `SHA256SUMS` before unpacking into `~/.nehanda`. Prebuilt distribution artifacts (`.tar.gz`, `.bin`, `.dmg`) and authoritative cryptographic checksums are hosted at `https://asoba.co/releases/SHA256SUMS`.
+
 **From source:**
 
 ```bash

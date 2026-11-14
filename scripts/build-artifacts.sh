@@ -1,12 +1,13 @@
 #!/bin/bash
 # build-artifacts.sh — one-command rebuild of all nehanda-cli distribution
-# artifacts (#13): nehanda-cli-latest.tar.gz, nehanda-cli.bin (makeself),
-# Nehanda-CLI.dmg (UDZO). Emits scripts/install.sh alongside.
+# artifacts (#13, #45): nehanda-cli-latest.tar.gz, nehanda-cli.bin (makeself),
+# Nehanda-CLI.dmg (UDZO), SHA256SUMS. Emits scripts/install.sh alongside.
 #
 # Behavioral spec (tests/unit/test-build-artifacts.mjs):
 #   BG-1 clean tree + green suite → builds all 3, payload diff clean vs repo
 #   BG-2 install.sh present in repo + tarball + makeself payload
 #   BG-3 refuses to build on red suite / dirty tree
+#   BG-5 SHA256SUMS emitted with matching hashes for all 3 artifacts (#45)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -77,5 +78,15 @@ test -f "$VERIFY/install.sh" || die "payload missing install.sh"
 rm -rf "$VERIFY"
 green "payload diff clean"
 
-green "All artifacts rebuilt: tar.gz, .bin, .dmg (+ scripts/install.sh alongside)"
-git status --porcelain -- nehanda-cli-latest.tar.gz nehanda-cli.bin Nehanda-CLI.dmg | awk '{print "  rebuilt:", $2}'
+bold "── 5/5 checksums (SHA256SUMS) ──"
+if command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 nehanda-cli-latest.tar.gz nehanda-cli.bin Nehanda-CLI.dmg > SHA256SUMS
+elif command -v sha256sum >/dev/null 2>&1; then
+  sha256sum nehanda-cli-latest.tar.gz nehanda-cli.bin Nehanda-CLI.dmg > SHA256SUMS
+else
+  die "neither shasum nor sha256sum found"
+fi
+green "SHA256SUMS generated"
+
+green "All artifacts rebuilt: tar.gz, .bin, .dmg, SHA256SUMS (+ scripts/install.sh alongside)"
+git status --porcelain -- nehanda-cli-latest.tar.gz nehanda-cli.bin Nehanda-CLI.dmg SHA256SUMS | awk '{print "  rebuilt:", $2}'
