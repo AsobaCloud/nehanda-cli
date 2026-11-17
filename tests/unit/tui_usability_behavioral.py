@@ -22,6 +22,38 @@ ROOT = Path(__file__).resolve().parents[2]
 NODE = shutil.which('node')
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 
+# #48: the sandbox tests need a live Docker daemon. Probe once so an absent or
+# stopped daemon is reported as "skipped", never as a product failure.
+_DOCKER = {'checked': False, 'available': False, 'reason': 'not probed'}
+
+
+def docker_daemon_available():
+    """True when the sandbox tests can run; ``NEHANDA_DOCKER_AVAILABLE`` overrides the probe."""
+    override = os.environ.get('NEHANDA_DOCKER_AVAILABLE')
+    if override is not None:
+        return override.strip() == '1'
+    if _DOCKER['checked']:
+        return _DOCKER['available']
+    _DOCKER['checked'] = True
+    try:
+        probe = subprocess.run(['docker', 'info', '--format', '{{.ServerVersion}}'],
+                               check=False, capture_output=True, text=True, timeout=10)
+        detail = (probe.stderr or probe.stdout or '').strip().splitlines()
+        _DOCKER['available'] = probe.returncode == 0
+        _DOCKER['reason'] = 'running' if _DOCKER['available'] else (detail[-1] if detail else 'daemon not running')
+    except (OSError, subprocess.SubprocessError) as error:
+        _DOCKER['available'] = False
+        _DOCKER['reason'] = str(error)
+    return _DOCKER['available']
+
+
+def requires_docker(test):
+    """Skip a sandbox test when the Docker daemon is unavailable."""
+    if docker_daemon_available():
+        return test
+    return unittest.skip(f'docker daemon not running: {_DOCKER["reason"]}')(test)
+
+
 
 class Provider(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_args):
@@ -327,20 +359,21 @@ class TuiUsabilityBehavioral(unittest.TestCase):
             self.assertNotIn('Cancelling', output)
             self.assertNotIn('Thinking (', output)
 
-    def test_table_1_inverter_rows_render_as_a_bounded_table(self):
-        """Given inverter rows, When the tool returns, Then a capped table appears."""
+    def test_table_1_idle_phase_refuses_bash_with_phase_guidance(self):
+        """Given an idle conversation, When the model calls Bash, Then it is refused with guidance.
+
+        The capped-table contract for JSON tool results is asserted in
+        tests/unit/test-tool-result-table-rendering-behavioral.mjs (#47).
+        """
         with self.session('table') as (ui, _server):
             ui.send('Inspect the inverter readings\r')
             ui.wait_for('Use SDLC workflow')
             ui.send('n\r')
-            ui.wait_for('Allow Bash?')
-            ui.send('y\r')
+            ui.wait_for('Tool Bash is not available in idle phase')
             ui.wait_for('Telemetry review finished.')
             output = ui.pump()
-            self.assertIn('12 rows', output)
-            self.assertIn('2 more rows', output)
-            self.assertIn('power_kw', output)
-            self.assertIn('inverter-9', output)
+            self.assertNotIn('Allow Bash?', output)
+            self.assertIn('Read, Glob, or Grep', output)
 
     def test_input_1_tab_completes_help(self):
         """Given /hel, When Tab and Enter are pressed, Then help executes."""
@@ -510,6 +543,7 @@ class TuiUsabilityBehavioral(unittest.TestCase):
             self.assertEqual(config['mcpServers']['energy-fixture']['command'], NODE)
             self.assertEqual(config['mcpServers']['energy-fixture']['args'], ['--version'])
 
+    @requires_docker
     def test_sandbox_1_menu_executes_in_a_disposable_copy(self):
         """Given a blocked tool, When the user chooses S, Then real output and original files remain."""
         with self.session('sandbox') as (ui, _server):
@@ -526,6 +560,7 @@ class TuiUsabilityBehavioral(unittest.TestCase):
             self.assertRegex(ui.pump(), r'└ ✓ [^\r\n]*sandbox-cli-executed')
             self.assertEqual(original.read_text(), 'original\n')
 
+    @requires_docker
     def test_sandbox_2_escape_removes_the_running_container(self):
         """Given a running sandbox command, When Esc is pressed, Then it cancels and is removed."""
         with self.session('sandbox_slow') as (ui, _server):

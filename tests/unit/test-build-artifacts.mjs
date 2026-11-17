@@ -11,8 +11,11 @@
  *         Then it refuses to build (exit != 0)
  *   BG-4: Given artifacts already exist, When build-artifacts.sh re-runs,
  *         Then output timestamps/sizes change (rebuild actually happens)
+ *   BG-5: Given artifacts are rebuilt, When inspection occurs,
+ *         Then SHA256SUMS manifest is emitted with matching sha256 digests for all 3 artifacts (#45)
  */
 import { readFileSync, statSync, existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -82,6 +85,20 @@ test('rebuild changes mtime', () => {
   execFileSync('bash', [BUILD_SCRIPT], { cwd: ROOT, encoding: 'utf8' })
   const after = statSync(join(ROOT, 'nehanda-cli-latest.tar.gz')).mtimeMs
   assert(after > before, 'tarball not rebuilt')
+})
+
+console.log('\n── Test 6: BG-5 SHA256SUMS generated and matches artifacts (#45) ──')
+test('SHA256SUMS exists and contains valid hashes for all 3 artifacts', () => {
+  const sumFile = join(ROOT, 'SHA256SUMS')
+  assert(existsSync(sumFile), 'SHA256SUMS missing after build')
+  const content = readFileSync(sumFile, 'utf8')
+  for (const art of ['nehanda-cli-latest.tar.gz', 'nehanda-cli.bin', 'Nehanda-CLI.dmg']) {
+    const artPath = join(ROOT, art)
+    assert(existsSync(artPath), `${art} missing`)
+    const expectedHash = createHash('sha256').update(readFileSync(artPath)).digest('hex')
+    const pattern = new RegExp(`^${expectedHash}\\s+\\*?${art}$`, 'm')
+    assert(pattern.test(content), `SHA256SUMS does not contain matching entry for ${art}`)
+  }
 })
 
 console.log(`\n${'='.repeat(50)}\nTests passed: ${passed}\nTests failed: ${failed}\n${'='.repeat(50)}`)

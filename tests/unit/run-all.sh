@@ -45,6 +45,7 @@ run node tests/unit/test-verify-safety-confirm-commit-behavioral.mjs
 run node tests/unit/test-explore-conventions-behavioral.mjs
 run node tests/unit/test-explore-tool-mask-behavioral.mjs
 run node tests/unit/test-phase-tool-filtering-openai.mjs
+run node tests/unit/phase-tool-admission_behavioral.mjs
 run node tests/unit/test-issue34-acceptance-behavioral.mjs
 run node tests/unit/test-setphase-validation.mjs
 run node tests/unit/test-acceptance-runner-behavioral.mjs

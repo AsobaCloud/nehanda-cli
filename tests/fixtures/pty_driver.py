@@ -40,7 +40,7 @@ def main():
         try:
             os.execvpe(sys.argv[1], sys.argv[1:], os.environ)
         except OSError as exc:
-            print('PTY child exec failed: %s' % exc, file=sys.stderr)
+            print(f'PTY child exec failed: {exc}', file=sys.stderr)
             os._exit(127)
 
     # A process launched under Ink must have a real, dimensioned TTY.
