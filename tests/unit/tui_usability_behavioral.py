@@ -327,20 +327,21 @@ class TuiUsabilityBehavioral(unittest.TestCase):
             self.assertNotIn('Cancelling', output)
             self.assertNotIn('Thinking (', output)
 
-    def test_table_1_inverter_rows_render_as_a_bounded_table(self):
-        """Given inverter rows, When the tool returns, Then a capped table appears."""
+    def test_table_1_idle_phase_refuses_bash_with_phase_guidance(self):
+        """Given an idle conversation, When the model calls Bash, Then it is refused with guidance.
+
+        The capped-table contract for JSON tool results is asserted in
+        tests/unit/test-tool-result-table-rendering-behavioral.mjs (#47).
+        """
         with self.session('table') as (ui, _server):
             ui.send('Inspect the inverter readings\r')
             ui.wait_for('Use SDLC workflow')
             ui.send('n\r')
-            ui.wait_for('Allow Bash?')
-            ui.send('y\r')
+            ui.wait_for('Tool Bash is not available in idle phase')
             ui.wait_for('Telemetry review finished.')
             output = ui.pump()
-            self.assertIn('12 rows', output)
-            self.assertIn('2 more rows', output)
-            self.assertIn('power_kw', output)
-            self.assertIn('inverter-9', output)
+            self.assertNotIn('Allow Bash?', output)
+            self.assertIn('Read, Glob, or Grep', output)
 
     def test_input_1_tab_completes_help(self):
         """Given /hel, When Tab and Enter are pressed, Then help executes."""
