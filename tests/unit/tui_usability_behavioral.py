@@ -22,6 +22,38 @@ ROOT = Path(__file__).resolve().parents[2]
 NODE = shutil.which('node')
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
 
+# #48: the sandbox tests need a live Docker daemon. Probe once so an absent or
+# stopped daemon is reported as "skipped", never as a product failure.
+_DOCKER = {'checked': False, 'available': False, 'reason': 'not probed'}
+
+
+def docker_daemon_available():
+    """True when the sandbox tests can run; ``NEHANDA_DOCKER_AVAILABLE`` overrides the probe."""
+    override = os.environ.get('NEHANDA_DOCKER_AVAILABLE')
+    if override is not None:
+        return override.strip() == '1'
+    if _DOCKER['checked']:
+        return _DOCKER['available']
+    _DOCKER['checked'] = True
+    try:
+        probe = subprocess.run(['docker', 'info', '--format', '{{.ServerVersion}}'],
+                               check=False, capture_output=True, text=True, timeout=10)
+        detail = (probe.stderr or probe.stdout or '').strip().splitlines()
+        _DOCKER['available'] = probe.returncode == 0
+        _DOCKER['reason'] = 'running' if _DOCKER['available'] else (detail[-1] if detail else 'daemon not running')
+    except (OSError, subprocess.SubprocessError) as error:
+        _DOCKER['available'] = False
+        _DOCKER['reason'] = str(error)
+    return _DOCKER['available']
+
+
+def requires_docker(test):
+    """Skip a sandbox test when the Docker daemon is unavailable."""
+    if docker_daemon_available():
+        return test
+    return unittest.skip(f'docker daemon not running: {_DOCKER["reason"]}')(test)
+
+
 
 class Provider(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_args):
@@ -511,6 +543,7 @@ class TuiUsabilityBehavioral(unittest.TestCase):
             self.assertEqual(config['mcpServers']['energy-fixture']['command'], NODE)
             self.assertEqual(config['mcpServers']['energy-fixture']['args'], ['--version'])
 
+    @requires_docker
     def test_sandbox_1_menu_executes_in_a_disposable_copy(self):
         """Given a blocked tool, When the user chooses S, Then real output and original files remain."""
         with self.session('sandbox') as (ui, _server):
@@ -527,6 +560,7 @@ class TuiUsabilityBehavioral(unittest.TestCase):
             self.assertRegex(ui.pump(), r'└ ✓ [^\r\n]*sandbox-cli-executed')
             self.assertEqual(original.read_text(), 'original\n')
 
+    @requires_docker
     def test_sandbox_2_escape_removes_the_running_container(self):
         """Given a running sandbox command, When Esc is pressed, Then it cancels and is removed."""
         with self.session('sandbox_slow') as (ui, _server):
