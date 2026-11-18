@@ -32,11 +32,11 @@ Stored overloaded `test` phases normalize to test creation before implementation
 
 ## Exploration and context
 
-Jev retrieval can avoid disk exploration when existing evidence is sufficient. Otherwise the model navigates MAP then targeted territory. The schema exposes only Read/Glob/Grep. Actual successful tool results and negative searches become bounded observations with provenance. Repeated canonical reads and equivalent zero-hit queries are cached before disk access/re-ingestion.
+Jev retrieval can avoid disk exploration when existing evidence is sufficient. Otherwise the model navigates MAP then targeted territory. The schema exposes only Read/Glob/Grep. Actual successful tool results and negative searches become bounded observations with provenance. Repeated canonical reads and equivalent zero-hit queries are cached before disk access/re-ingestion. Duplicate-read caching and Jev-Mem auto-ingestion apply equally to `explore`, `diagnose`, and `create_tests` phases; each phase maintains an isolated cache so phase transitions do not suppress legitimate first reads.
 
-Stagnation forces an early diagnose handoff; the independent hard ceiling permits twenty productive upstream exploration requests and blocks twenty-one. Both routes preserve summaries and a pinned candidate digest. The next model instruction requests diagnosis. Planning instructions appear after RED, with the recorded issue and failure digest.
+Stagnation forces an early diagnose handoff. An independent 20-request hard ceiling is enforced by `checkPhaseRequestBudget()` in `lib/orchestrate.mjs` for `explore`, `diagnose`, and `create_tests`: request twenty-one in any of those phases is blocked and the phase is saturated with evidence retained. Both routes preserve summaries and a pinned candidate digest. The next model instruction requests diagnosis. Planning instructions appear after RED, with the recorded issue and failure digest.
 
-`lib/explore.mjs` owns transient conversation caches. Legal reentry and terminal reset clear them without deleting Jev observations. Native and manual tool instructions use phase filtering. Both provider loops reread phase state between calls.
+`lib/explore.mjs` owns transient conversation caches for the explore phase. `lib/tools.mjs` manages the per-phase duplicate-read caches for diagnose and create_tests. Legal reentry and terminal reset clear them without deleting Jev observations. Native and manual tool instructions use phase filtering. Both provider loops reread phase state between calls.
 
 ## Approval and commit
 
