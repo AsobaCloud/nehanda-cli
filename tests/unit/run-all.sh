@@ -50,6 +50,8 @@ run node tests/unit/test-issue34-acceptance-behavioral.mjs
 run node tests/unit/test-setphase-validation.mjs
 run node tests/unit/test-acceptance-runner-behavioral.mjs
 run node tests/unit/test-mock-llm-server-behavioral.mjs
+run node tests/unit/test-structured-test-evidence-behavioral.mjs
+run node tests/unit/test-block-notice-behavioral.mjs
 run python3 tests/unit/tui_usability_behavioral.py --without-sandbox
 printf 'Unit suites failed: %s\n' "$failed"
 [[ "$failed" -eq 0 ]]

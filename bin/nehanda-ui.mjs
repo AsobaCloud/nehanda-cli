@@ -28,7 +28,7 @@ import { applyMcpConfig, loadMcpConfig, writeGlobalMcpConfig, readGlobalMcpConfi
 import { getMcpServer, closeAllMcpServers, listMcpServers, mcpListResources } from '../lib/mcp.mjs'
 import { invalidateMcpToolCache } from '../lib/tools.mjs'
 import { saveOpenAiCompatKey, resolveOpenAiCompatKey, saveSecureCredentials, resolveZhipuApiKey } from '../lib/auth.mjs'
-import { TOOL_VERBS, verbForTool, summarizeToolArgs, formatToolResultSuffix, formatToolResult, maskSecretAnswer, redactSensitiveCommand } from '../lib/ui.mjs'
+import { TOOL_VERBS, verbForTool, summarizeToolArgs, formatToolResultSuffix, formatToolResult, maskSecretAnswer, redactSensitiveCommand, formatBlockNotice } from '../lib/ui.mjs'
 import {
   PICKER_THRESHOLD,
   createAskIdSequencer,
@@ -512,31 +512,19 @@ function BlockConfirmMenu({ payload, onDecide }) {
     if (ch === 's') { onDecide('sandbox'); return }
   })
 
-  const riskColor = payload.risk_score === 'high' ? BRAND.red : BRAND.coral
-  const remediation = (payload.proposed_remediation || []).join(', ')
+  void BRAND
+  const notice = formatBlockNotice(payload).split('\n')
 
   return e(Box, { flexDirection: 'column', borderStyle: 'single', borderColor: BRAND.red, marginY: 1 },
     e(Box, { paddingX: 1, paddingY: 0 },
       e(Text, { bold: true, color: BRAND.red }, '⛔ Command Blocked')),
-    e(Box, { paddingX: 1 },
-      e(Text, { dimColor: true }, 'Reason:      '),
-      e(Text, { wrap: 'wrap' }, payload.reason || '(unknown)')),
-    e(Box, { paddingX: 1 },
-      e(Text, { dimColor: true }, 'Risk:        '),
-      e(Text, { color: riskColor, bold: true }, (payload.risk_score || 'unknown').toUpperCase())),
-    remediation
-      ? e(Box, { paddingX: 1 },
-          e(Text, { dimColor: true }, 'Remediation: '),
-          e(Text, { dimColor: true }, remediation))
-      : null,
-    e(Box, { paddingX: 1 }, e(Text, { dimColor: true }, 'Disposable copy; no network; file changes are discarded.')),
+    ...notice.map((line, i) => e(Box, { paddingX: 1, key: `notice-${i}` },
+      e(Text, { wrap: 'wrap', color: i === 0 ? undefined : undefined }, line))),
     e(Box, { paddingX: 1, marginTop: 1 },
-      e(Text, { bold: true, color: BRAND.accent }, '[A]'),
-      e(Text, {}, ' Approve for Session  '),
-      e(Text, { bold: true, color: BRAND.lavender }, '[S]'),
-      e(Text, {}, ' Run in OS Sandbox  '),
-      e(Text, { bold: true, color: BRAND.dim }, '[C]'),
-      e(Text, {}, ' Cancel')))
+      e(Text, { bold: true, color: BRAND.accent }, '[A]'), e(Text, {}, ' approve · '),
+      e(Text, { bold: true, color: BRAND.lavender }, '[S]'), e(Text, {}, ' sandbox · '),
+      e(Text, { bold: true, color: BRAND.dim }, '[C]'), e(Text, {}, ' cancel · '),
+      e(Text, { bold: true, color: BRAND.dim }, '[Esc]'), e(Text, {}, ' cancel')))
 }
 
 function TokenFooter({ calls, model, cwd = LAUNCH_CWD }) {
