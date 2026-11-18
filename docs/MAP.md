@@ -338,3 +338,28 @@ Phase vocabulary is owned by `lib/workflow.mjs`: idle → explore → diagnose �
 - **Migration:** a stored legacy `test` phase becomes `create_tests` without prior implementation or `verify` otherwise; resume normalization handles already-open conversations too.
 
 Behavioral proof: `tests/integration/acceptance-36-37-manifest.mjs` and `tests/acceptance-36-37.md`. Store migration regressions additionally prove historical row preservation and idempotent v3→v4 upgrades. Socket and live-provider checks are separate from deterministic provider-boundary fixtures.
+
+---
+
+## Jupyter Notebook MCP SDLC & Jev-Mem Integration (#57)
+
+Datalayer's Jupyter MCP server (`jupyter-mcp-server@latest`) integrates into Nehanda CLI's 11-step SDLC and Jev-Mem cognitive plane:
+
+- **SDLC Tool Admission & Gating (`lib/workflow.mjs`, `lib/tools.mjs`, `lib/orchestrate.mjs`):**
+  - Mutating MCP tools (`insert_cell`, `edit_cell_source`, `overwrite_cell_source`, `move_cell`, `delete_cell`) and execution MCP tools (`execute_cell`, `execute_code`, `insert_execute_code_cell`) are classified via `isMcpMutatingTool` and `isMcpExecutionTool`.
+  - In `explore`: read-only MCP tools (`read_notebook`, `read_cell`, `list_notebooks`, `list_kernels`) are permitted via `isExplorePermittedTool`. Mutating and execution MCP tools are rejected.
+  - In `diagnose`, `create_issue`, `planning`, `confirm_fix`, and `done`: all mutating and execution MCP tools are denied by `planningGateDeniesTool`.
+  - In `create_tests`: cell editing and test execution are permitted.
+  - In `implement`: cell mutation tools are permitted; execution is denied.
+  - In `verify` and `safety`: cell execution tools are permitted for regression verification; cell mutation is denied.
+- **Jev-Mem Ingestion (`lib/tools.mjs`):**
+  - `toolMcpInvoke` automatically calls `ingestObservation` for successful MCP calls in active knowledge-gathering phases (`explore`, `diagnose`, `create_tests`, `verify`) with `provenance: "${phase}_mcp"`, persisting cell structures, error traces, and entities to the memory graph.
+- **Test Evidence Capture (`lib/workflow.mjs`):**
+  - `captureTestExecution` and `testFilesForCommand` recognize notebook test executions (`mcp__jupyter__execute_cell` / `.ipynb` in `tests/`).
+  - Error and traceback outputs record RED evidence; zero-error executions record GREEN evidence in `test_executions` and `events`.
+- **System-1 Task Intent & Guidance (`lib/laya.mjs`, `lib/orchestrate.mjs`):**
+  - Intent questions and heuristics classify notebook tasks into `notebook_research`.
+  - `DOMAIN_CONTEXT_NOTES` injects system prompt instructions guiding the assistant to use `mcp__jupyter__*` tools rather than raw text editing of `.ipynb` files.
+
+Behavioral proof: `tests/unit/issue57_jupyter_mcp_sdlc_behavioral.mjs` (AC-1 through AC-5).
+
